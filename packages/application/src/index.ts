@@ -14,3 +14,10 @@ export type {
   SupporterHistoryReason,
   SupporterHistoryService,
 } from "./supporter-history-service.js";
+export {
+  createSupporterPortalSnapshotService,
+} from "./supporter-portal-snapshot-service.js";
+export type {
+  SupporterPortalSnapshot,
+  SupporterPortalSnapshotService,
+} from "./supporter-portal-snapshot-service.js";
