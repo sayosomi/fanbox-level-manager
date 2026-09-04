@@ -15,6 +15,8 @@ import {
   readUserVersion,
 } from "./migrations.js";
 import type {
+  CreateMigratedSupporterInput,
+  CreateMigratedSupporterResult,
   CreateSupporterInput,
   LevelOperationRecord,
   LevelTransitionOperationInput,
@@ -29,6 +31,7 @@ import type {
 } from "./types.js";
 import {
   assertNonBlankString,
+  assertValidCreateMigratedSupporterInput,
   assertValidCreateSupporterInput,
   assertValidMonthKey,
   assertValidSupporterId,
@@ -72,6 +75,15 @@ type MonthlyStateRow = {
   created_at: string;
   updated_at: string;
 };
+
+type SupporterInsertValues = Readonly<{
+  id: string;
+  fanboxRelationshipId: string;
+  displayName: string;
+  currentLevel: number;
+  supporting: boolean;
+  timestamp: string;
+}>;
 
 function toSupporterRecord(row: SupporterRow): SupporterRecord {
   return Object.freeze({
@@ -172,28 +184,14 @@ class LocalStoreImplementation implements LocalStore {
     const id = randomUUID();
     const timestamp = timestampFromClock(this.clock);
     try {
-      this.database
-        .prepare(
-          `INSERT INTO supporters (
-             id,
-             fanbox_relationship_id,
-             display_name,
-             current_level,
-             supporting,
-             latest_month_key,
-             created_at,
-             updated_at
-           ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
-        )
-        .run(
-          id,
-          input.fanboxRelationshipId,
-          input.displayName,
-          input.initialLevel === undefined ? 0 : input.initialLevel,
-          input.supporting ? 1 : 0,
-          timestamp,
-          timestamp,
-        );
+      this.insertSupporterRow({
+        id,
+        fanboxRelationshipId: input.fanboxRelationshipId,
+        displayName: input.displayName,
+        currentLevel: input.initialLevel === undefined ? 0 : input.initialLevel,
+        supporting: input.supporting,
+        timestamp,
+      });
     } catch (error: unknown) {
       if (
         isUniqueConstraintError(error) &&
@@ -211,6 +209,122 @@ class LocalStoreImplementation implements LocalStore {
     }
 
     return supporter;
+  }
+
+  createMigratedSupporter(
+    input: CreateMigratedSupporterInput,
+  ): CreateMigratedSupporterResult {
+    assertValidCreateMigratedSupporterInput(input);
+
+    if (this.getSupporterByRelationshipId(input.fanboxRelationshipId) !== null) {
+      throw new DuplicateFanboxRelationshipError(input.fanboxRelationshipId);
+    }
+
+    const supporterId = randomUUID();
+    const operationId = randomUUID();
+    const timestamp = timestampFromClock(this.clock);
+
+    const migrate = this.database.transaction((): CreateMigratedSupporterResult => {
+      this.insertSupporterRow({
+        id: supporterId,
+        fanboxRelationshipId: input.fanboxRelationshipId,
+        displayName: input.displayName,
+        currentLevel: input.currentLevel,
+        supporting: input.supporting,
+        timestamp,
+      });
+
+      this.database
+        .prepare(
+          `INSERT INTO level_operations (
+             id,
+             supporter_id,
+             month_key,
+             kind,
+             before_level,
+             after_level,
+             occurred_at,
+             supporting_at_month_end,
+             created_at
+           ) VALUES (?, ?, ?, 'initial_import', ?, ?, NULL, NULL, ?)`,
+        )
+        .run(
+          operationId,
+          supporterId,
+          input.monthKey,
+          input.currentLevel,
+          input.currentLevel,
+          timestamp,
+        );
+
+      const supporter = this.getSupporterById(supporterId);
+      if (supporter === null) {
+        throw new Error("created migrated supporter could not be loaded");
+      }
+
+      const operation = this.database
+        .prepare(
+          `SELECT sequence,
+                  id,
+                  supporter_id,
+                  month_key,
+                  kind,
+                  before_level,
+                  after_level,
+                  occurred_at,
+                  supporting_at_month_end,
+                  created_at
+           FROM level_operations
+           WHERE id = ?`,
+        )
+        .get(operationId) as LevelOperationRow | undefined;
+      if (operation === undefined) {
+        throw new Error("created migrated operation could not be loaded");
+      }
+
+      return Object.freeze({
+        supporter,
+        operation: toLevelOperationRecord(operation),
+      });
+    });
+
+    try {
+      return migrate();
+    } catch (error: unknown) {
+      if (
+        isUniqueConstraintError(error) &&
+        this.getSupporterByRelationshipId(input.fanboxRelationshipId) !== null
+      ) {
+        throw new DuplicateFanboxRelationshipError(input.fanboxRelationshipId);
+      }
+
+      throw error;
+    }
+  }
+
+  private insertSupporterRow(values: SupporterInsertValues): void {
+    this.database
+      .prepare(
+        `INSERT INTO supporters (
+           id,
+           fanbox_relationship_id,
+           display_name,
+           current_level,
+           supporting,
+           latest_month_key,
+           created_at,
+           updated_at
+         ) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)`,
+      )
+      .run(
+        values.id,
+        values.fanboxRelationshipId,
+        values.displayName,
+        values.currentLevel,
+        values.supporting ? 1 : 0,
+        values.timestamp,
+        values.timestamp,
+      );
   }
 
   getSupporterById(id: string): SupporterRecord | null {
