@@ -28,26 +28,40 @@ export function createLotteryLevelService(
   return {
     recordLotteryLoss(supporterId, occurredAt) {
       const monthKey = monthKeyInTokyo(occurredAt);
-      return store.transitionMonthlyState(
+      return store.transitionMonthlyStateWithOperation(
         supporterId,
         monthKey,
+        {
+          kind: "lottery_loss",
+          occurredAt,
+        },
         applyLotteryLoss,
-      );
+      ).state;
     },
 
     recordLotteryWin(supporterId, occurredAt) {
       const monthKey = monthKeyInTokyo(occurredAt);
-      return store.transitionMonthlyState(
+      return store.transitionMonthlyStateWithOperation(
         supporterId,
         monthKey,
+        {
+          kind: "lottery_win",
+          occurredAt,
+        },
         applyLotteryWin,
-      );
+      ).state;
     },
 
     processMonthEnd(supporterId, monthKey, supportingAtMonthEnd) {
-      return store.transitionMonthlyState(supporterId, monthKey, (state) =>
-        applyMonthEnd(state, supportingAtMonthEnd),
-      );
+      return store.transitionMonthlyStateWithOperation(
+        supporterId,
+        monthKey,
+        {
+          kind: "month_end",
+          supportingAtMonthEnd,
+        },
+        (state) => applyMonthEnd(state, supportingAtMonthEnd),
+      ).state;
     },
   };
 }

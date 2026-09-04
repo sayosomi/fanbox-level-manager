@@ -8,6 +8,7 @@ import {
 } from "./errors.js";
 import {
   applyVersionOneMigration,
+  applyVersionTwoMigration,
   configureDatabase,
   configureFileJournalMode,
   CURRENT_SCHEMA_VERSION,
@@ -15,9 +16,12 @@ import {
 } from "./migrations.js";
 import type {
   CreateSupporterInput,
+  LevelOperationRecord,
+  LevelTransitionOperationInput,
   LocalStore,
   MonthlyStateRecord,
   MonthlyStateTransition,
+  MonthlyTransitionWithOperationResult,
   OpenLocalStoreOptions,
   StoreClock,
   SupporterProfilePatch,
@@ -30,6 +34,7 @@ import {
   assertValidSupporterId,
   assertValidSupporterProfilePatch,
   assertValidTransitionCallback,
+  normalizeLevelTransitionOperation,
   timestampFromClock,
   validateTransitionResult,
 } from "./validation.js";
@@ -43,6 +48,19 @@ type SupporterRow = {
   latest_month_key: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type LevelOperationRow = {
+  sequence: number;
+  id: string;
+  supporter_id: string;
+  month_key: string;
+  kind: LevelOperationRecord["kind"];
+  before_level: number;
+  after_level: number;
+  occurred_at: string | null;
+  supporting_at_month_end: number | null;
+  created_at: string;
 };
 
 type MonthlyStateRow = {
@@ -77,6 +95,23 @@ function toMonthlyStateRecord(row: MonthlyStateRow): MonthlyStateRecord {
     lotteryParticipationOccurred: row.lottery_participation_occurred === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  });
+}
+
+function toLevelOperationRecord(row: LevelOperationRow): LevelOperationRecord {
+  return Object.freeze({
+    id: row.id,
+    supporterId: row.supporter_id,
+    monthKey: row.month_key,
+    kind: row.kind,
+    beforeLevel: row.before_level,
+    afterLevel: row.after_level,
+    occurredAt: row.occurred_at,
+    supportingAtMonthEnd:
+      row.supporting_at_month_end === null
+        ? null
+        : row.supporting_at_month_end === 1,
+    createdAt: row.created_at,
   });
 }
 
@@ -261,13 +296,75 @@ class LocalStoreImplementation implements LocalStore {
     monthKey: string,
     transition: MonthlyStateTransition,
   ): MonthlyStateRecord {
+    return this.runMonthlyTransition(supporterId, monthKey, transition, null);
+  }
+
+  transitionMonthlyStateWithOperation(
+    supporterId: string,
+    monthKey: string,
+    operation: LevelTransitionOperationInput,
+    transition: MonthlyStateTransition,
+  ): MonthlyTransitionWithOperationResult {
+    return this.runMonthlyTransition(
+      supporterId,
+      monthKey,
+      transition,
+      operation,
+    );
+  }
+
+  listLevelOperations(supporterId: string): readonly LevelOperationRecord[] {
+    assertValidSupporterId(supporterId);
+    if (this.getSupporterById(supporterId) === null) {
+      throw new SupporterNotFoundError(supporterId);
+    }
+
+    const rows = this.database
+      .prepare(
+        `SELECT sequence,
+                id,
+                supporter_id,
+                month_key,
+                kind,
+                before_level,
+                after_level,
+                occurred_at,
+                supporting_at_month_end,
+                created_at
+         FROM level_operations
+         WHERE supporter_id = ?
+         ORDER BY sequence ASC`,
+      )
+      .all(supporterId) as LevelOperationRow[];
+
+    return Object.freeze(rows.map(toLevelOperationRecord));
+  }
+
+  private runMonthlyTransition(
+    supporterId: string,
+    monthKey: string,
+    transition: MonthlyStateTransition,
+    operation: null,
+  ): MonthlyStateRecord;
+  private runMonthlyTransition(
+    supporterId: string,
+    monthKey: string,
+    transition: MonthlyStateTransition,
+    operation: LevelTransitionOperationInput,
+  ): MonthlyTransitionWithOperationResult;
+  private runMonthlyTransition(
+    supporterId: string,
+    monthKey: string,
+    transition: MonthlyStateTransition,
+    operation: LevelTransitionOperationInput | null,
+  ): MonthlyStateRecord | MonthlyTransitionWithOperationResult {
     assertValidSupporterId(supporterId);
     assertValidMonthKey(monthKey);
     assertValidTransitionCallback(transition);
 
     const timestamp = timestampFromClock(this.clock);
     const runTransition = this.database.transaction(
-      (): MonthlyStateRecord => {
+      (): MonthlyStateRecord | MonthlyTransitionWithOperationResult => {
         const supporterRow = this.database
           .prepare("SELECT * FROM supporters WHERE id = ?")
           .get(supporterId) as SupporterRow | undefined;
@@ -389,6 +486,11 @@ class LocalStoreImplementation implements LocalStore {
           );
         }
 
+        const normalizedOperation =
+          operation === null
+            ? null
+            : normalizeLevelTransitionOperation(operation);
+
         this.database
           .prepare(
             `UPDATE supporter_month_states
@@ -425,7 +527,66 @@ class LocalStoreImplementation implements LocalStore {
           throw new Error("persisted supporter month state could not be loaded");
         }
 
-        return toMonthlyStateRecord(persistedRow);
+        const persistedState = toMonthlyStateRecord(persistedRow);
+        if (normalizedOperation === null) {
+          return persistedState;
+        }
+
+        const operationId = randomUUID();
+        this.database
+          .prepare(
+            `INSERT INTO level_operations (
+               id,
+               supporter_id,
+               month_key,
+               kind,
+               before_level,
+               after_level,
+               occurred_at,
+               supporting_at_month_end,
+               created_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            operationId,
+            supporterId,
+            monthKey,
+            normalizedOperation.kind,
+            snapshot.level,
+            result.level,
+            normalizedOperation.occurredAt,
+            normalizedOperation.supportingAtMonthEnd === null
+              ? null
+              : normalizedOperation.supportingAtMonthEnd
+                ? 1
+                : 0,
+            timestamp,
+          );
+
+        const persistedOperation = this.database
+          .prepare(
+            `SELECT sequence,
+                    id,
+                    supporter_id,
+                    month_key,
+                    kind,
+                    before_level,
+                    after_level,
+                    occurred_at,
+                    supporting_at_month_end,
+                    created_at
+             FROM level_operations
+             WHERE id = ?`,
+          )
+          .get(operationId) as LevelOperationRow | undefined;
+        if (persistedOperation === undefined) {
+          throw new Error("persisted level operation could not be loaded");
+        }
+
+        return Object.freeze({
+          state: persistedState,
+          operation: toLevelOperationRecord(persistedOperation),
+        });
       },
     );
 
@@ -454,6 +615,9 @@ export function openLocalStore(
     configureFileJournalMode(database, databasePath);
     if (userVersion === 0) {
       applyVersionOneMigration(database);
+      applyVersionTwoMigration(database);
+    } else if (userVersion === 1) {
+      applyVersionTwoMigration(database);
     }
 
     return new LocalStoreImplementation(database, clock);
