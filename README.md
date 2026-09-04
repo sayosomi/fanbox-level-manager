@@ -11,3 +11,20 @@ work and implementation contracts are tracked in this repository's
 
 Development authority and shared workflow routing are defined by the fixed
 [fanbox-level-manager project context](https://github.com/sayosomi/dev-context/blob/main/projects/fanbox-level-manager/README.md).
+
+## Development
+
+Use Node.js 24 and install the locked dependencies:
+
+```sh
+npm ci
+```
+
+The repository checks are available from the root:
+
+```sh
+npm run build
+npm run lint
+npm run typecheck
+npm test
+```
