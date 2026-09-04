@@ -8,3 +8,9 @@ export type {
   ExistingSupporterMigrationResult,
   ExistingSupporterMigrationService,
 } from "./existing-supporter-migration-service.js";
+export { createSupporterHistoryService } from "./supporter-history-service.js";
+export type {
+  SupporterHistoryEntry,
+  SupporterHistoryReason,
+  SupporterHistoryService,
+} from "./supporter-history-service.js";
