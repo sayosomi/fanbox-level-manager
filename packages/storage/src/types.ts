@@ -30,6 +30,19 @@ export type CreateSupporterInput = Readonly<{
   initialLevel?: number;
 }>;
 
+export type CreateMigratedSupporterInput = Readonly<{
+  fanboxRelationshipId: string;
+  displayName: string;
+  supporting: boolean;
+  currentLevel: number;
+  monthKey: string;
+}>;
+
+export type CreateMigratedSupporterResult = Readonly<{
+  supporter: SupporterRecord;
+  operation: LevelOperationRecord;
+}>;
+
 export type SupporterProfilePatch = Readonly<{
   displayName?: string;
   supporting?: boolean;
@@ -79,6 +92,9 @@ export type OpenLocalStoreOptions = Readonly<{
 export interface LocalStore {
   close(): void;
   createSupporter(input: CreateSupporterInput): SupporterRecord;
+  createMigratedSupporter(
+    input: CreateMigratedSupporterInput,
+  ): CreateMigratedSupporterResult;
   getSupporterById(id: string): SupporterRecord | null;
   getSupporterByRelationshipId(
     fanboxRelationshipId: string,

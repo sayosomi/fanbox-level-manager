@@ -1,4 +1,5 @@
 import type {
+  CreateMigratedSupporterInput,
   CreateSupporterInput,
   LevelOperationKind,
   MonthlyState,
@@ -65,6 +66,20 @@ export function assertValidCreateSupporterInput(
   if (input.initialLevel !== undefined) {
     assertValidLevel(input.initialLevel);
   }
+}
+
+export function assertValidCreateMigratedSupporterInput(
+  input: unknown,
+): asserts input is CreateMigratedSupporterInput {
+  if (!isRecord(input)) {
+    throw new TypeError("create migrated supporter input must be an object");
+  }
+
+  assertNonBlankString(input.fanboxRelationshipId, "fanboxRelationshipId");
+  assertNonBlankString(input.displayName, "displayName");
+  assertBoolean(input.supporting, "supporting");
+  assertValidLevel(input.currentLevel);
+  assertValidMonthKey(input.monthKey);
 }
 
 export function assertValidSupporterProfilePatch(
