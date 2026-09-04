@@ -1,7 +1,13 @@
 # fanbox-level-manager
 
-Private project for managing FANBOX supporter lottery levels for Sayosomi Lab.
+Tools for managing Sayosomi Lab's FANBOX supporter lottery levels.
 
-Development policy and authority routing are defined by the [fanbox-level-manager project context](https://github.com/sayosomi/dev-context/blob/main/projects/fanbox-level-manager/README.md).
+The product consists of a Mac-local admin web application and a supporter-facing
+Cloudflare page for viewing current levels and level history.
 
-Current work and implementation contracts are tracked in this repository's GitHub Issues.
+Read the [product specification](docs/SPEC.md) for durable requirements. Current
+work and implementation contracts are tracked in this repository's
+[GitHub Issues](https://github.com/sayosomi/fanbox-level-manager/issues).
+
+Development authority and shared workflow routing are defined by the fixed
+[fanbox-level-manager project context](https://github.com/sayosomi/dev-context/blob/main/projects/fanbox-level-manager/README.md).
