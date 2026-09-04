@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace=@sayosomi/domain && npm run build --workspace=@sayosomi/storage",
+    "build": "npm run build --workspace=@sayosomi/domain && npm run build --workspace=@sayosomi/storage && npm run build --workspace=@sayosomi/application",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
