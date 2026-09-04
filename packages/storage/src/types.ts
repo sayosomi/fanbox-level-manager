@@ -39,6 +39,39 @@ export type MonthlyStateTransition = (state: MonthlyState) => MonthlyState;
 
 export type StoreClock = () => Date;
 
+export type LevelOperationKind =
+  | "lottery_loss"
+  | "lottery_win"
+  | "month_end"
+  | "initial_import";
+
+export type LevelOperationRecord = Readonly<{
+  id: string;
+  supporterId: string;
+  monthKey: string;
+  kind: LevelOperationKind;
+  beforeLevel: number;
+  afterLevel: number;
+  occurredAt: string | null;
+  supportingAtMonthEnd: boolean | null;
+  createdAt: string;
+}>;
+
+export type LevelTransitionOperationInput =
+  | Readonly<{
+      kind: "lottery_loss" | "lottery_win";
+      occurredAt: Date;
+    }>
+  | Readonly<{
+      kind: "month_end";
+      supportingAtMonthEnd: boolean;
+    }>;
+
+export type MonthlyTransitionWithOperationResult = Readonly<{
+  state: MonthlyStateRecord;
+  operation: LevelOperationRecord;
+}>;
+
 export type OpenLocalStoreOptions = Readonly<{
   clock?: StoreClock;
 }>;
@@ -63,4 +96,13 @@ export interface LocalStore {
     monthKey: string,
     transition: MonthlyStateTransition,
   ): MonthlyStateRecord;
+  transitionMonthlyStateWithOperation(
+    supporterId: string,
+    monthKey: string,
+    operation: LevelTransitionOperationInput,
+    transition: MonthlyStateTransition,
+  ): MonthlyTransitionWithOperationResult;
+  listLevelOperations(
+    supporterId: string,
+  ): readonly LevelOperationRecord[];
 }

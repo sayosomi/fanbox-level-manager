@@ -1,5 +1,6 @@
 import type {
   CreateSupporterInput,
+  LevelOperationKind,
   MonthlyState,
   SupporterProfilePatch,
   StoreClock,
@@ -118,6 +119,62 @@ export function validateTransitionResult(result: unknown): MonthlyState {
     monthlyPlusOneUsed: result.monthlyPlusOneUsed,
     lotteryParticipationOccurred: result.lotteryParticipationOccurred,
   });
+}
+
+type NormalizedLevelTransitionOperation = Readonly<{
+  kind: Exclude<LevelOperationKind, "initial_import">;
+  occurredAt: string | null;
+  supportingAtMonthEnd: boolean | null;
+}>;
+
+function assertOperationKeys(
+  operation: Record<string, unknown>,
+  allowedKeys: readonly string[],
+): void {
+  for (const key of Object.keys(operation)) {
+    if (!allowedKeys.includes(key)) {
+      throw new TypeError(`unsupported level operation field: ${key}`);
+    }
+  }
+}
+
+function validateOccurredAt(value: unknown): string {
+  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+    throw new RangeError("occurredAt must be a valid Date");
+  }
+
+  return value.toISOString();
+}
+
+export function normalizeLevelTransitionOperation(
+  operation: unknown,
+): NormalizedLevelTransitionOperation {
+  if (!isRecord(operation) || Array.isArray(operation)) {
+    throw new TypeError("level transition operation must be an object");
+  }
+
+  if (operation.kind === "lottery_loss" || operation.kind === "lottery_win") {
+    assertOperationKeys(operation, ["kind", "occurredAt"]);
+    return Object.freeze({
+      kind: operation.kind,
+      occurredAt: validateOccurredAt(operation.occurredAt),
+      supportingAtMonthEnd: null,
+    });
+  }
+
+  if (operation.kind === "month_end") {
+    assertOperationKeys(operation, ["kind", "supportingAtMonthEnd"]);
+    assertBoolean(operation.supportingAtMonthEnd, "supportingAtMonthEnd");
+    return Object.freeze({
+      kind: operation.kind,
+      occurredAt: null,
+      supportingAtMonthEnd: operation.supportingAtMonthEnd,
+    });
+  }
+
+  throw new TypeError(
+    "level transition operation kind must be lottery_loss, lottery_win, or month_end",
+  );
 }
 
 export function timestampFromClock(clock: StoreClock): string {

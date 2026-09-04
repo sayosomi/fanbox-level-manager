@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 const CANONICAL_MONTH_CHECK = `
   length(%COLUMN%) = 7
@@ -44,6 +44,41 @@ CREATE TABLE supporter_month_states (
 ) STRICT;
 `;
 
+const VERSION_TWO_SCHEMA = `
+CREATE TABLE level_operations (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  id TEXT NOT NULL UNIQUE CHECK (length(id) > 0),
+  supporter_id TEXT NOT NULL REFERENCES supporters(id),
+  month_key TEXT NOT NULL CHECK (${MONTH_STATES_MONTH_CHECK}),
+  kind TEXT NOT NULL CHECK (
+    kind IN ('lottery_loss', 'lottery_win', 'month_end', 'initial_import')
+  ),
+  before_level INTEGER NOT NULL CHECK (
+    typeof(before_level) = 'integer' AND before_level >= 0
+  ),
+  after_level INTEGER NOT NULL CHECK (
+    typeof(after_level) = 'integer' AND after_level >= 0
+  ),
+  occurred_at TEXT NULL,
+  supporting_at_month_end INTEGER NULL,
+  created_at TEXT NOT NULL,
+  CHECK (
+    (kind IN ('lottery_loss', 'lottery_win')
+      AND occurred_at IS NOT NULL
+      AND supporting_at_month_end IS NULL)
+    OR (kind = 'month_end'
+      AND occurred_at IS NULL
+      AND supporting_at_month_end IN (0, 1))
+    OR (kind = 'initial_import'
+      AND occurred_at IS NULL
+      AND supporting_at_month_end IS NULL)
+  )
+) STRICT;
+
+CREATE INDEX level_operations_supporter_sequence_idx
+  ON level_operations (supporter_id, sequence);
+`;
+
 type SqliteDatabase = Database.Database;
 
 export function configureDatabase(
@@ -70,7 +105,16 @@ export function readUserVersion(database: SqliteDatabase): number {
 export function applyVersionOneMigration(database: SqliteDatabase): void {
   const migrate = database.transaction((): void => {
     database.exec(VERSION_ONE_SCHEMA);
-    database.pragma(`user_version = ${CURRENT_SCHEMA_VERSION}`);
+    database.pragma("user_version = 1");
+  });
+
+  migrate();
+}
+
+export function applyVersionTwoMigration(database: SqliteDatabase): void {
+  const migrate = database.transaction((): void => {
+    database.exec(VERSION_TWO_SCHEMA);
+    database.pragma("user_version = 2");
   });
 
   migrate();
