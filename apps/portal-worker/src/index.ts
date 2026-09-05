@@ -1,4 +1,6 @@
 const SYNC_ROUTE = "/api/admin/sync-supporter";
+const SET_SUPPORTER_TOKEN_ROUTE = "/api/admin/set-supporter-token";
+const MY_LEVEL_ROUTE = "/api/my-level";
 const MAX_HISTORY_ENTRIES = 400;
 const HISTORY_INSERT_CHUNK_SIZE = 12;
 
@@ -37,13 +39,32 @@ type SyncRequest = Readonly<{
   history: readonly SyncHistoryEntry[];
 }>;
 
+type SetSupporterTokenRequest = Readonly<{
+  supporterId: string;
+  tokenHash: string;
+}>;
+
+type SupporterReadRow = Readonly<{
+  current_level: number;
+  verified_at: string;
+}>;
+
+type HistoryReadRow = Readonly<{
+  entry_id: string;
+  month_key: string;
+  level: number;
+  reason: HistoryReason;
+  occurred_at: string | null;
+  recorded_at: string;
+}>;
+
 type RequestValidation =
   | { kind: "valid"; value: SyncRequest }
   | { kind: "invalid" }
   | { kind: "history_too_large" };
 
 function jsonResponse(
-  body: Readonly<Record<string, string>>,
+  body: Readonly<Record<string, unknown>>,
   status: number,
   additionalHeaders?: Readonly<Record<string, string>>,
 ): Response {
@@ -195,6 +216,38 @@ function validateSyncRequest(value: unknown): RequestValidation {
   };
 }
 
+function validateSetSupporterTokenRequest(
+  value: unknown,
+): SetSupporterTokenRequest | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["supporterId", "tokenHash"]) ||
+    !isNonblankString(value.supporterId) ||
+    typeof value.tokenHash !== "string" ||
+    !/^[0-9a-f]{64}$/.test(value.tokenHash)
+  ) {
+    return null;
+  }
+
+  return {
+    supporterId: value.supporterId,
+    tokenHash: value.tokenHash,
+  };
+}
+
+function validateMyLevelRequest(value: unknown): string | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["token"]) ||
+    typeof value.token !== "string" ||
+    !/^[A-Za-z0-9_-]{43}$/.test(value.token)
+  ) {
+    return null;
+  }
+
+  return value.token;
+}
+
 async function tokensEqual(provided: string, expected: string): Promise<boolean> {
   const encoder = new TextEncoder();
   const [providedDigest, expectedDigest] = await Promise.all([
@@ -223,6 +276,39 @@ function bearerToken(authorization: string | null): string | null {
 
   const match = /^Bearer ([^\s]+)$/.exec(authorization);
   return match?.[1] ?? null;
+}
+
+async function hashToken(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+}
+
+async function authenticateAdminRequest(
+  request: Request,
+  env: PortalEnv,
+): Promise<Response | null> {
+  if (
+    typeof env.SYNC_API_TOKEN !== "string" ||
+    env.SYNC_API_TOKEN.trim().length === 0
+  ) {
+    return errorResponse(500, "internal_error");
+  }
+
+  const providedToken = bearerToken(request.headers.get("Authorization"));
+  if (
+    providedToken === null ||
+    !(await tokensEqual(providedToken, env.SYNC_API_TOKEN))
+  ) {
+    return errorResponse(401, "unauthorized");
+  }
+
+  return null;
 }
 
 function createHistoryInsertStatement(
@@ -318,7 +404,11 @@ async function handleRequest(
   clock: PortalClock,
 ): Promise<Response> {
   const url = new URL(request.url);
-  if (url.pathname !== SYNC_ROUTE) {
+  if (
+    url.pathname !== SYNC_ROUTE &&
+    url.pathname !== SET_SUPPORTER_TOKEN_ROUTE &&
+    url.pathname !== MY_LEVEL_ROUTE
+  ) {
     return errorResponse(404, "not_found");
   }
 
@@ -326,19 +416,25 @@ async function handleRequest(
     return errorResponse(405, "method_not_allowed", { Allow: "POST" });
   }
 
-  if (
-    typeof env.SYNC_API_TOKEN !== "string" ||
-    env.SYNC_API_TOKEN.trim().length === 0
-  ) {
-    return errorResponse(500, "internal_error");
+  if (url.pathname === MY_LEVEL_ROUTE) {
+    return handleMyLevelRequest(request, env);
   }
 
-  const providedToken = bearerToken(request.headers.get("Authorization"));
-  if (
-    providedToken === null ||
-    !(await tokensEqual(providedToken, env.SYNC_API_TOKEN))
-  ) {
-    return errorResponse(401, "unauthorized");
+  if (url.pathname === SET_SUPPORTER_TOKEN_ROUTE) {
+    return handleSetSupporterTokenRequest(request, env);
+  }
+
+  return handleSyncRequest(request, env, clock);
+}
+
+async function handleSyncRequest(
+  request: Request,
+  env: PortalEnv,
+  clock: PortalClock,
+): Promise<Response> {
+  const authenticationError = await authenticateAdminRequest(request, env);
+  if (authenticationError !== null) {
+    return authenticationError;
   }
 
   let requestBody: unknown;
@@ -372,6 +468,146 @@ async function handleRequest(
   }
 
   return jsonResponse({ verifiedAt }, 200);
+}
+
+async function handleSetSupporterTokenRequest(
+  request: Request,
+  env: PortalEnv,
+): Promise<Response> {
+  const authenticationError = await authenticateAdminRequest(request, env);
+  if (authenticationError !== null) {
+    return authenticationError;
+  }
+
+  let requestBody: unknown;
+  try {
+    requestBody = await request.json();
+  } catch {
+    return errorResponse(400, "invalid_request");
+  }
+
+  const requestValue = validateSetSupporterTokenRequest(requestBody);
+  if (requestValue === null) {
+    return errorResponse(400, "invalid_request");
+  }
+
+  try {
+    const supporter = await env.DB
+      .prepare(
+        "SELECT supporter_id FROM portal_supporters WHERE supporter_id = ?",
+      )
+      .bind(requestValue.supporterId)
+      .first<{ supporter_id: string }>();
+    if (supporter === null) {
+      return errorResponse(404, "supporter_not_found");
+    }
+
+    const conflictingSupporter = await env.DB
+      .prepare(
+        `SELECT supporter_id
+         FROM portal_access_tokens
+         WHERE token_hash = ? AND supporter_id <> ?`,
+      )
+      .bind(requestValue.tokenHash, requestValue.supporterId)
+      .first<{ supporter_id: string }>();
+    if (conflictingSupporter !== null) {
+      return errorResponse(409, "token_conflict");
+    }
+
+    await env.DB
+      .prepare(
+        `INSERT INTO portal_access_tokens (supporter_id, token_hash)
+         VALUES (?, ?)
+         ON CONFLICT(supporter_id) DO UPDATE SET
+           token_hash = excluded.token_hash`,
+      )
+      .bind(requestValue.supporterId, requestValue.tokenHash)
+      .run();
+  } catch {
+    return errorResponse(500, "internal_error");
+  }
+
+  return jsonResponse({ status: "ok" }, 200);
+}
+
+async function handleMyLevelRequest(
+  request: Request,
+  env: PortalEnv,
+): Promise<Response> {
+  let requestBody: unknown;
+  try {
+    requestBody = await request.json();
+  } catch {
+    return errorResponse(400, "invalid_request");
+  }
+
+  const token = validateMyLevelRequest(requestBody);
+  if (token === null) {
+    return errorResponse(400, "invalid_request");
+  }
+
+  try {
+    const tokenHash = await hashToken(token);
+    const [supporterResult, historyResult] = await env.DB.batch([
+      env.DB
+        .prepare(
+          `SELECT
+             s.current_level,
+             s.verified_at
+           FROM portal_supporters AS s
+           JOIN portal_access_tokens AS t
+             ON t.supporter_id = s.supporter_id
+           WHERE t.token_hash = ?`,
+        )
+        .bind(tokenHash),
+      env.DB
+        .prepare(
+          `SELECT
+             h.entry_id,
+             h.month_key,
+             h.level,
+             h.reason,
+             h.occurred_at,
+             h.recorded_at
+           FROM portal_history AS h
+           JOIN portal_access_tokens AS t
+             ON t.supporter_id = h.supporter_id
+           WHERE t.token_hash = ?
+           ORDER BY h.position ASC`,
+        )
+        .bind(tokenHash),
+    ]);
+    if (supporterResult === undefined || historyResult === undefined) {
+      return errorResponse(500, "internal_error");
+    }
+
+    const supporter = supporterResult.results[0] as
+      | SupporterReadRow
+      | undefined;
+    if (supporter === undefined) {
+      return errorResponse(401, "unauthorized");
+    }
+
+    const history = historyResult.results as HistoryReadRow[];
+    return jsonResponse(
+      {
+        currentLevel: supporter.current_level,
+        nextLotteryEntryCount: supporter.current_level + 1,
+        verifiedAt: supporter.verified_at,
+        history: history.map((entry) => ({
+          id: entry.entry_id,
+          monthKey: entry.month_key,
+          level: entry.level,
+          reason: entry.reason,
+          occurredAt: entry.occurred_at,
+          recordedAt: entry.recorded_at,
+        })),
+      },
+      200,
+    );
+  } catch {
+    return errorResponse(500, "internal_error");
+  }
 }
 
 export function createPortalWorker(
