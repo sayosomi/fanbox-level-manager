@@ -2,6 +2,11 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  createSupporterListService,
+  type SupporterListService,
+} from "@sayosomi/application";
+import { openLocalStore, type LocalStore } from "@sayosomi/storage";
+import {
   ADMIN_CONTENT_SECURITY_POLICY,
   ADMIN_PAGE,
   ADMIN_SCRIPT,
@@ -17,6 +22,14 @@ const SUCCESS_HEADERS = {
   "Cache-Control": "no-store",
   "X-Content-Type-Options": "nosniff",
 };
+const SUPPORTER_LIST_UNAVAILABLE_BODY = JSON.stringify({
+  error: "supporter_list_unavailable",
+});
+
+type ProductionAdminServerDependencies = Readonly<{
+  openLocalStore?: typeof openLocalStore;
+  createSupporterListService?: typeof createSupporterListService;
+}>;
 
 export function parseAdminPort(value: string | undefined): number {
   if (value === undefined) {
@@ -37,6 +50,16 @@ export function parseAdminPort(value: string | undefined): number {
   }
 
   return port;
+}
+
+export function parseAdminDatabasePath(value: string | undefined): string {
+  if (value === undefined || value.trim().length === 0) {
+    throw new TypeError(
+      "FANBOX_ADMIN_DB_PATH must be a non-blank filesystem path",
+    );
+  }
+
+  return value;
 }
 
 function validateListenPort(port: number): void {
@@ -74,14 +97,43 @@ function sendMethodNotAllowed(
   });
 }
 
-export function createAdminServer(): Server {
+function sendSupporterList(
+  response: ServerResponse,
+  supporterListService: SupporterListService | undefined,
+): void {
+  if (supporterListService === undefined) {
+    sendText(response, 500, SUPPORTER_LIST_UNAVAILABLE_BODY, {
+      ...SUCCESS_HEADERS,
+      "Content-Type": "application/json; charset=UTF-8",
+    });
+    return;
+  }
+
+  try {
+    const supporters = supporterListService.listSupporters();
+    sendText(response, 200, JSON.stringify({ supporters }), {
+      ...SUCCESS_HEADERS,
+      "Content-Type": "application/json; charset=UTF-8",
+    });
+  } catch {
+    sendText(response, 500, SUPPORTER_LIST_UNAVAILABLE_BODY, {
+      ...SUCCESS_HEADERS,
+      "Content-Type": "application/json; charset=UTF-8",
+    });
+  }
+}
+
+export function createAdminServer(
+  supporterListService?: SupporterListService,
+): Server {
   return createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
     const knownRoute =
       requestPath === "/" ||
       requestPath === "/app.js" ||
       requestPath === "/style.css" ||
-      requestPath === "/api/health";
+      requestPath === "/api/health" ||
+      requestPath === "/api/supporters";
 
     if (!knownRoute) {
       sendNotFound(response);
@@ -120,30 +172,68 @@ export function createAdminServer(): Server {
           "Content-Type": "application/json; charset=UTF-8",
         });
         return;
+      case "/api/supporters":
+        sendSupporterList(response, supporterListService);
+        return;
     }
   });
 }
 
-export function startAdminServer(port = DEFAULT_ADMIN_PORT): Server {
+export function startAdminServer(
+  port = DEFAULT_ADMIN_PORT,
+  supporterListService?: SupporterListService,
+): Server {
   validateListenPort(port);
-  const server = createAdminServer();
+  const server = createAdminServer(supporterListService);
   server.listen(port, ADMIN_HOST);
   return server;
 }
 
-export function startProductionAdminServer(): Server {
+export function startProductionAdminServer(
+  dependencies: ProductionAdminServerDependencies = {},
+): Server {
   const port = parseAdminPort(process.env.FANBOX_ADMIN_PORT);
-  const server = startAdminServer(port);
+  const databasePath = parseAdminDatabasePath(process.env.FANBOX_ADMIN_DB_PATH);
+  const openStore = dependencies.openLocalStore ?? openLocalStore;
+  let store: LocalStore;
 
-  server.once("error", (error: Error) => {
-    console.error(`Admin web failed to start: ${error.message}`);
-    process.exitCode = 1;
-  });
-  server.once("listening", () => {
-    console.log(`Admin web: http://${ADMIN_HOST}:${port}/`);
-  });
+  try {
+    store = openStore(databasePath);
+  } catch {
+    throw new Error("FANBOX_ADMIN_DB_PATH could not be opened");
+  }
 
-  return server;
+  const createService =
+    dependencies.createSupporterListService ?? createSupporterListService;
+  let storeClosed = false;
+  const closeStore = (): void => {
+    if (storeClosed) {
+      return;
+    }
+
+    storeClosed = true;
+    store.close();
+  };
+
+  try {
+    const server = createAdminServer(createService(store));
+    server.once("close", closeStore);
+
+    server.once("error", () => {
+      closeStore();
+      console.error("Admin web failed to start");
+      process.exitCode = 1;
+    });
+    server.once("listening", () => {
+      console.log(`Admin web: http://${ADMIN_HOST}:${port}/`);
+    });
+
+    server.listen(port, ADMIN_HOST);
+    return server;
+  } catch (error: unknown) {
+    closeStore();
+    throw error;
+  }
 }
 
 function isCliEntryPoint(): boolean {
@@ -157,7 +247,12 @@ if (isCliEntryPoint()) {
   try {
     startProductionAdminServer();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message =
+      error instanceof Error &&
+      (error.message.includes("FANBOX_ADMIN_DB_PATH") ||
+        error.message.includes("FANBOX_ADMIN_PORT"))
+        ? error.message
+        : "unexpected startup failure";
     console.error(`Admin web failed to start: ${message}`);
     process.exitCode = 1;
   }

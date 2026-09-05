@@ -133,6 +133,117 @@ describe("supporter persistence", () => {
     ).toThrowError(/Supporter not found/);
   });
 
+  it("lists an empty frozen result without creating monthly state", () => {
+    const store = track(openLocalStore(":memory:", { clock: fixedClock }));
+
+    const result = store.listSupporters();
+
+    expect(result).toEqual([]);
+    expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it("does not create monthly state or write supporter data while listing", () => {
+    const store = track(openLocalStore(":memory:", { clock: fixedClock }));
+    const created = store.createSupporter(validInput());
+    const before = store.getSupporterById(created.id);
+
+    store.listSupporters();
+
+    expect(store.getMonthlyState(created.id, "2026-09")).toBeNull();
+    expect(store.getSupporterById(created.id)).toEqual(before);
+  });
+
+  it("maps every supporter field when listing supporters", () => {
+    const store = track(openLocalStore(":memory:", { clock: fixedClock }));
+    const created = store.createSupporter(
+      validInput({
+        fanboxRelationshipId: "relationship-complete",
+        displayName: "Complete supporter",
+        supporting: false,
+        initialLevel: 6,
+      }),
+    );
+    store.transitionMonthlyState(created.id, "2026-09", (state) => state);
+
+    const listed = store.listSupporters();
+
+    expect(listed).toEqual([store.getSupporterById(created.id)]);
+    expect(listed[0]).toEqual({
+      id: created.id,
+      fanboxRelationshipId: "relationship-complete",
+      displayName: "Complete supporter",
+      currentLevel: 6,
+      supporting: false,
+      latestMonthKey: "2026-09",
+      createdAt: "2026-09-04T00:00:00.000Z",
+      updatedAt: "2026-09-04T00:00:00.000Z",
+    });
+  });
+
+  it("uses the exact deterministic supporter list order", () => {
+    const store = track(openLocalStore(":memory:", { clock: fixedClock }));
+    const alpha = store.createSupporter(
+      validInput({
+        fanboxRelationshipId: "relationship-alpha",
+        displayName: "alpha",
+        supporting: true,
+      }),
+    );
+    const uppercaseAlpha = store.createSupporter(
+      validInput({
+        fanboxRelationshipId: "relationship-uppercase-alpha",
+        displayName: "ALPHA",
+        supporting: true,
+      }),
+    );
+    const bravo = store.createSupporter(
+      validInput({
+        fanboxRelationshipId: "relationship-bravo",
+        displayName: "Bravo",
+        supporting: true,
+      }),
+    );
+    const inactive = store.createSupporter(
+      validInput({
+        fanboxRelationshipId: "relationship-inactive",
+        displayName: "Aardvark",
+        supporting: false,
+      }),
+    );
+
+    const tiedAlphas = [alpha, uppercaseAlpha].sort((left, right) =>
+      left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
+    );
+
+    expect(store.listSupporters()).toEqual([
+      ...tiedAlphas,
+      bravo,
+      inactive,
+    ]);
+  });
+
+  it("freezes listed records and the returned array", () => {
+    const store = track(openLocalStore(":memory:", { clock: fixedClock }));
+    const created = store.createSupporter(validInput());
+    const before = store.getSupporterById(created.id);
+    const listed = store.listSupporters();
+    const listedSupporter = listed[0];
+
+    if (listedSupporter === undefined) {
+      throw new Error("expected a listed supporter");
+    }
+
+    expect(Object.isFrozen(listedSupporter)).toBe(true);
+    expect(Object.isFrozen(listed)).toBe(true);
+    expect(() => {
+      (listedSupporter as { displayName: string }).displayName = "Changed";
+    }).toThrow(TypeError);
+    expect(() => {
+      (listed as unknown as unknown[]).push(listedSupporter);
+    }).toThrow(TypeError);
+    expect(store.getSupporterById(created.id)).toEqual(before);
+  });
+
   it("preserves supporter data across a file-backed close and reopen", () => {
     const directory = mkdtempSync(join(tmpdir(), "fanbox-level-manager-"));
     const databasePath = join(directory, "supporters.sqlite");

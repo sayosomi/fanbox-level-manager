@@ -14,6 +14,11 @@ export type {
   SupporterHistoryReason,
   SupporterHistoryService,
 } from "./supporter-history-service.js";
+export { createSupporterListService } from "./supporter-list-service.js";
+export type {
+  SupporterListItem,
+  SupporterListService,
+} from "./supporter-list-service.js";
 export {
   createSupporterPortalSnapshotService,
 } from "./supporter-portal-snapshot-service.js";

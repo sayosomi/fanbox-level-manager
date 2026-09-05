@@ -107,6 +107,7 @@ export interface LocalStore {
   getSupporterByRelationshipId(
     fanboxRelationshipId: string,
   ): SupporterRecord | null;
+  listSupporters(): readonly SupporterRecord[];
   getSupporterPortalAccess(
     supporterId: string,
   ): SupporterPortalAccessRecord | null;
