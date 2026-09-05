@@ -30,3 +30,14 @@ export type {
   SupporterPortalSnapshot,
   SupporterPortalSnapshotService,
 } from "./supporter-portal-snapshot-service.js";
+export {
+  createSupporterPortalSyncService,
+  SupporterPortalRemoteError,
+} from "./supporter-portal-sync-service.js";
+export type {
+  CreateSupporterPortalSyncServiceOptions,
+  PortalAdminFetch,
+  SupporterPortalRemoteOperation,
+  SupporterPortalSyncResult,
+  SupporterPortalSyncService,
+} from "./supporter-portal-sync-service.js";
