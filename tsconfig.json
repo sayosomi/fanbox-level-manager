@@ -4,7 +4,8 @@
     "noEmit": true
   },
   "include": [
-    "packages/**/*.ts"
+    "packages/**/*.ts",
+    "apps/admin-web/**/*.ts"
   ],
   "exclude": [
     "**/dist/**",
