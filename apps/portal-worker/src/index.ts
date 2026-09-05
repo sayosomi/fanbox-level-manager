@@ -1,3 +1,8 @@
+import {
+  handleLevelPageRequest,
+  isLevelPagePath,
+} from "./level-page.js";
+
 const SYNC_ROUTE = "/api/admin/sync-supporter";
 const SET_SUPPORTER_TOKEN_ROUTE = "/api/admin/set-supporter-token";
 const MY_LEVEL_ROUTE = "/api/my-level";
@@ -404,6 +409,10 @@ async function handleRequest(
   clock: PortalClock,
 ): Promise<Response> {
   const url = new URL(request.url);
+  if (isLevelPagePath(url.pathname)) {
+    return handleLevelPageRequest(request);
+  }
+
   if (
     url.pathname !== SYNC_ROUTE &&
     url.pathname !== SET_SUPPORTER_TOKEN_ROUTE &&
