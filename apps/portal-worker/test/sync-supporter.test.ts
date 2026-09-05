@@ -56,7 +56,7 @@ function validPayload(overrides: Partial<SyncPayload> = {}): SyncPayload {
 function requestFor(
   body: unknown,
   options: Readonly<{
-    authorization?: string;
+    authorization?: string | undefined;
     method?: string;
     path?: string;
     rawBody?: string;
@@ -74,9 +74,9 @@ function requestFor(
     {
       method,
       headers,
-      body: canHaveBody
-        ? (options.rawBody ?? JSON.stringify(body))
-        : undefined,
+      ...(canHaveBody
+        ? { body: options.rawBody ?? JSON.stringify(body) }
+        : {}),
     },
   );
 }
@@ -89,7 +89,7 @@ async function dispatch(
   body: unknown,
   timestamp = FIRST_TIMESTAMP,
   options: Parameters<typeof requestFor>[1] & {
-    authorization?: string;
+    authorization?: string | undefined;
   } = {},
 ): Promise<Response> {
   return handlerAt(timestamp).fetch(
