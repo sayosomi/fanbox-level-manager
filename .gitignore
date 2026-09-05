@@ -6,3 +6,6 @@ coverage/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+.wrangler/
+.dev.vars*
+.env*
