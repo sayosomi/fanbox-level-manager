@@ -381,6 +381,18 @@ class LocalStoreImplementation implements LocalStore {
     return row === undefined ? null : toSupporterRecord(row);
   }
 
+  listSupporters(): readonly SupporterRecord[] {
+    const rows = this.database
+      .prepare(
+        `SELECT *
+         FROM supporters
+         ORDER BY supporting DESC, display_name COLLATE NOCASE ASC, id ASC`,
+      )
+      .all() as SupporterRow[];
+
+    return Object.freeze(rows.map(toSupporterRecord));
+  }
+
   getSupporterPortalAccess(
     supporterId: string,
   ): SupporterPortalAccessRecord | null {
