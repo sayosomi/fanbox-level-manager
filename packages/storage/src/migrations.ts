@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 2;
+export const CURRENT_SCHEMA_VERSION = 3;
 
 const CANONICAL_MONTH_CHECK = `
   length(%COLUMN%) = 7
@@ -79,6 +79,22 @@ CREATE INDEX level_operations_supporter_sequence_idx
   ON level_operations (supporter_id, sequence);
 `;
 
+const VERSION_THREE_SCHEMA = `
+CREATE TABLE supporter_portal_access (
+  supporter_id TEXT NOT NULL PRIMARY KEY
+    REFERENCES supporters(id)
+    ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE CHECK (
+    length(token_hash) = 64
+    AND token_hash NOT GLOB '*[^0-9a-f]*'
+  ),
+  issued_at TEXT NOT NULL,
+  provisioned_at TEXT NULL,
+  sent_at TEXT NULL,
+  CHECK (sent_at IS NULL OR provisioned_at IS NOT NULL)
+) STRICT;
+`;
+
 type SqliteDatabase = Database.Database;
 
 export function configureDatabase(
@@ -115,6 +131,15 @@ export function applyVersionTwoMigration(database: SqliteDatabase): void {
   const migrate = database.transaction((): void => {
     database.exec(VERSION_TWO_SCHEMA);
     database.pragma("user_version = 2");
+  });
+
+  migrate();
+}
+
+export function applyVersionThreeMigration(database: SqliteDatabase): void {
+  const migrate = database.transaction((): void => {
+    database.exec(VERSION_THREE_SCHEMA);
+    database.pragma("user_version = 3");
   });
 
   migrate();

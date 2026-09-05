@@ -9,6 +9,14 @@ export type SupporterRecord = Readonly<{
   updatedAt: string;
 }>;
 
+export type SupporterPortalAccessRecord = Readonly<{
+  supporterId: string;
+  tokenHash: string;
+  issuedAt: string;
+  provisionedAt: string | null;
+  sentAt: string | null;
+}>;
+
 export type MonthlyState = Readonly<{
   level: number;
   monthlyPlusOneUsed: boolean;
@@ -99,6 +107,21 @@ export interface LocalStore {
   getSupporterByRelationshipId(
     fanboxRelationshipId: string,
   ): SupporterRecord | null;
+  getSupporterPortalAccess(
+    supporterId: string,
+  ): SupporterPortalAccessRecord | null;
+  replaceSupporterPortalAccessToken(
+    supporterId: string,
+    tokenHash: string,
+  ): SupporterPortalAccessRecord;
+  markSupporterPortalAccessProvisioned(
+    supporterId: string,
+    expectedTokenHash: string,
+  ): SupporterPortalAccessRecord;
+  markSupporterPortalAccessSent(
+    supporterId: string,
+    expectedTokenHash: string,
+  ): SupporterPortalAccessRecord;
   updateSupporterProfile(
     id: string,
     patch: SupporterProfilePatch,

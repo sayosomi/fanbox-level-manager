@@ -14,12 +14,17 @@ export type {
   MonthlyTransitionWithOperationResult,
   OpenLocalStoreOptions,
   StoreClock,
+  SupporterPortalAccessRecord,
   SupporterProfilePatch,
   SupporterRecord,
 } from "./types.js";
 export {
   DuplicateFanboxRelationshipError,
+  PortalAccessNotIssuedError,
+  PortalAccessNotProvisionedError,
+  PortalTokenHashConflictError,
   StaleMonthError,
+  StalePortalAccessError,
   SupporterNotFoundError,
   UnsupportedSchemaVersionError,
 } from "./errors.js";
