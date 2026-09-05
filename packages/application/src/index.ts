@@ -17,6 +17,15 @@ export type {
 export {
   createSupporterPortalSnapshotService,
 } from "./supporter-portal-snapshot-service.js";
+export {
+  createSupporterPortalAccessService,
+} from "./supporter-portal-access-service.js";
+export type {
+  CreateSupporterPortalAccessServiceOptions,
+  IssueSupporterPortalAccessResult,
+  PortalTokenBytesGenerator,
+  SupporterPortalAccessService,
+} from "./supporter-portal-access-service.js";
 export type {
   SupporterPortalSnapshot,
   SupporterPortalSnapshotService,

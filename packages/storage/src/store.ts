@@ -2,13 +2,18 @@ import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import {
   DuplicateFanboxRelationshipError,
+  PortalAccessNotIssuedError,
+  PortalAccessNotProvisionedError,
+  PortalTokenHashConflictError,
   StaleMonthError,
+  StalePortalAccessError,
   SupporterNotFoundError,
   UnsupportedSchemaVersionError,
 } from "./errors.js";
 import {
   applyVersionOneMigration,
   applyVersionTwoMigration,
+  applyVersionThreeMigration,
   configureDatabase,
   configureFileJournalMode,
   CURRENT_SCHEMA_VERSION,
@@ -27,6 +32,7 @@ import type {
   OpenLocalStoreOptions,
   StoreClock,
   SupporterProfilePatch,
+  SupporterPortalAccessRecord,
   SupporterRecord,
 } from "./types.js";
 import {
@@ -74,6 +80,14 @@ type MonthlyStateRow = {
   lottery_participation_occurred: number;
   created_at: string;
   updated_at: string;
+};
+
+type SupporterPortalAccessRow = {
+  supporter_id: string;
+  token_hash: string;
+  issued_at: string;
+  provisioned_at: string | null;
+  sent_at: string | null;
 };
 
 type SupporterInsertValues = Readonly<{
@@ -125,6 +139,26 @@ function toLevelOperationRecord(row: LevelOperationRow): LevelOperationRecord {
         : row.supporting_at_month_end === 1,
     createdAt: row.created_at,
   });
+}
+
+function toSupporterPortalAccessRecord(
+  row: SupporterPortalAccessRow,
+): SupporterPortalAccessRecord {
+  return Object.freeze({
+    supporterId: row.supporter_id,
+    tokenHash: row.token_hash,
+    issuedAt: row.issued_at,
+    provisionedAt: row.provisioned_at,
+    sentAt: row.sent_at,
+  });
+}
+
+const PORTAL_TOKEN_HASH_PATTERN = /^[0-9a-f]{64}$/;
+
+function assertValidPortalTokenHash(value: unknown, fieldName: string): asserts value is string {
+  if (typeof value !== "string" || !PORTAL_TOKEN_HASH_PATTERN.test(value)) {
+    throw new TypeError(`${fieldName} must be a lowercase SHA-256 hex string`);
+  }
 }
 
 function isUniqueConstraintError(error: unknown): boolean {
@@ -347,6 +381,187 @@ class LocalStoreImplementation implements LocalStore {
     return row === undefined ? null : toSupporterRecord(row);
   }
 
+  getSupporterPortalAccess(
+    supporterId: string,
+  ): SupporterPortalAccessRecord | null {
+    assertValidSupporterId(supporterId);
+    if (this.getSupporterById(supporterId) === null) {
+      throw new SupporterNotFoundError(supporterId);
+    }
+
+    const row = this.database
+      .prepare(
+        `SELECT supporter_id,
+                token_hash,
+                issued_at,
+                provisioned_at,
+                sent_at
+         FROM supporter_portal_access
+         WHERE supporter_id = ?`,
+      )
+      .get(supporterId) as SupporterPortalAccessRow | undefined;
+
+    return row === undefined ? null : toSupporterPortalAccessRecord(row);
+  }
+
+  replaceSupporterPortalAccessToken(
+    supporterId: string,
+    tokenHash: string,
+  ): SupporterPortalAccessRecord {
+    assertValidSupporterId(supporterId);
+    assertValidPortalTokenHash(tokenHash, "tokenHash");
+
+    const replace = this.database.transaction((): SupporterPortalAccessRecord => {
+      if (this.getSupporterById(supporterId) === null) {
+        throw new SupporterNotFoundError(supporterId);
+      }
+
+      const owner = this.database
+        .prepare(
+          `SELECT supporter_id
+           FROM supporter_portal_access
+           WHERE token_hash = ?`,
+        )
+        .get(tokenHash) as { supporter_id: string } | undefined;
+      if (owner !== undefined && owner.supporter_id !== supporterId) {
+        throw new PortalTokenHashConflictError(supporterId);
+      }
+
+      const timestamp = timestampFromClock(this.clock);
+      this.database
+        .prepare(
+          `INSERT INTO supporter_portal_access (
+             supporter_id,
+             token_hash,
+             issued_at,
+             provisioned_at,
+             sent_at
+           ) VALUES (?, ?, ?, NULL, NULL)
+           ON CONFLICT(supporter_id) DO UPDATE SET
+             token_hash = excluded.token_hash,
+             issued_at = excluded.issued_at,
+             provisioned_at = NULL,
+             sent_at = NULL`,
+        )
+        .run(supporterId, tokenHash, timestamp);
+
+      const row = this.getSupporterPortalAccessRow(supporterId);
+      if (row === undefined) {
+        throw new Error("replaced supporter portal access could not be loaded");
+      }
+
+      return toSupporterPortalAccessRecord(row);
+    });
+
+    try {
+      return replace();
+    } catch (error: unknown) {
+      if (isUniqueConstraintError(error)) {
+        const owner = this.database
+          .prepare(
+            `SELECT supporter_id
+             FROM supporter_portal_access
+             WHERE token_hash = ?`,
+          )
+          .get(tokenHash) as { supporter_id: string } | undefined;
+        if (owner !== undefined && owner.supporter_id !== supporterId) {
+          throw new PortalTokenHashConflictError(supporterId);
+        }
+      }
+
+      throw error;
+    }
+  }
+
+  markSupporterPortalAccessProvisioned(
+    supporterId: string,
+    expectedTokenHash: string,
+  ): SupporterPortalAccessRecord {
+    assertValidSupporterId(supporterId);
+    assertValidPortalTokenHash(expectedTokenHash, "expectedTokenHash");
+
+    const mark = this.database.transaction((): SupporterPortalAccessRecord => {
+      if (this.getSupporterById(supporterId) === null) {
+        throw new SupporterNotFoundError(supporterId);
+      }
+
+      const row = this.getSupporterPortalAccessRow(supporterId);
+      if (row === undefined) {
+        throw new PortalAccessNotIssuedError(supporterId);
+      }
+      if (row.token_hash !== expectedTokenHash) {
+        throw new StalePortalAccessError(supporterId);
+      }
+      if (row.provisioned_at !== null) {
+        return toSupporterPortalAccessRecord(row);
+      }
+
+      const timestamp = timestampFromClock(this.clock);
+      this.database
+        .prepare(
+          `UPDATE supporter_portal_access
+           SET provisioned_at = ?
+           WHERE supporter_id = ? AND token_hash = ?`,
+        )
+        .run(timestamp, supporterId, expectedTokenHash);
+
+      const persistedRow = this.getSupporterPortalAccessRow(supporterId);
+      if (persistedRow === undefined) {
+        throw new Error("provisioned supporter portal access could not be loaded");
+      }
+
+      return toSupporterPortalAccessRecord(persistedRow);
+    });
+
+    return mark();
+  }
+
+  markSupporterPortalAccessSent(
+    supporterId: string,
+    expectedTokenHash: string,
+  ): SupporterPortalAccessRecord {
+    assertValidSupporterId(supporterId);
+    assertValidPortalTokenHash(expectedTokenHash, "expectedTokenHash");
+
+    const mark = this.database.transaction((): SupporterPortalAccessRecord => {
+      if (this.getSupporterById(supporterId) === null) {
+        throw new SupporterNotFoundError(supporterId);
+      }
+
+      const row = this.getSupporterPortalAccessRow(supporterId);
+      if (row === undefined) {
+        throw new PortalAccessNotIssuedError(supporterId);
+      }
+      if (row.token_hash !== expectedTokenHash) {
+        throw new StalePortalAccessError(supporterId);
+      }
+      if (row.provisioned_at === null) {
+        throw new PortalAccessNotProvisionedError(supporterId);
+      }
+      if (row.sent_at !== null) {
+        return toSupporterPortalAccessRecord(row);
+      }
+
+      const timestamp = timestampFromClock(this.clock);
+      this.database
+        .prepare(
+          `UPDATE supporter_portal_access
+           SET sent_at = ?
+           WHERE supporter_id = ? AND token_hash = ?`,
+        )
+        .run(timestamp, supporterId, expectedTokenHash);
+
+      const persistedRow = this.getSupporterPortalAccessRow(supporterId);
+      if (persistedRow === undefined) {
+        throw new Error("sent supporter portal access could not be loaded");
+      }
+
+      return toSupporterPortalAccessRecord(persistedRow);
+    });
+
+    return mark();
+  }
+
   updateSupporterProfile(
     id: string,
     patch: SupporterProfilePatch,
@@ -452,6 +667,22 @@ class LocalStoreImplementation implements LocalStore {
       .all(supporterId) as LevelOperationRow[];
 
     return Object.freeze(rows.map(toLevelOperationRecord));
+  }
+
+  private getSupporterPortalAccessRow(
+    supporterId: string,
+  ): SupporterPortalAccessRow | undefined {
+    return this.database
+      .prepare(
+        `SELECT supporter_id,
+                token_hash,
+                issued_at,
+                provisioned_at,
+                sent_at
+         FROM supporter_portal_access
+         WHERE supporter_id = ?`,
+      )
+      .get(supporterId) as SupporterPortalAccessRow | undefined;
   }
 
   private runMonthlyTransition(
@@ -730,8 +961,12 @@ export function openLocalStore(
     if (userVersion === 0) {
       applyVersionOneMigration(database);
       applyVersionTwoMigration(database);
+      applyVersionThreeMigration(database);
     } else if (userVersion === 1) {
       applyVersionTwoMigration(database);
+      applyVersionThreeMigration(database);
+    } else if (userVersion === 2) {
+      applyVersionThreeMigration(database);
     }
 
     return new LocalStoreImplementation(database, clock);

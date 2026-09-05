@@ -45,3 +45,43 @@ export class UnsupportedSchemaVersionError extends Error {
     this.supportedVersion = supportedVersion;
   }
 }
+
+export class PortalAccessNotIssuedError extends Error {
+  readonly supporterId: string;
+
+  constructor(supporterId: string) {
+    super(`Portal access has not been issued for supporter ${supporterId}`);
+    this.name = "PortalAccessNotIssuedError";
+    this.supporterId = supporterId;
+  }
+}
+
+export class PortalAccessNotProvisionedError extends Error {
+  readonly supporterId: string;
+
+  constructor(supporterId: string) {
+    super(`Portal access has not been provisioned for supporter ${supporterId}`);
+    this.name = "PortalAccessNotProvisionedError";
+    this.supporterId = supporterId;
+  }
+}
+
+export class StalePortalAccessError extends Error {
+  readonly supporterId: string;
+
+  constructor(supporterId: string) {
+    super(`Portal access acknowledgement is stale for supporter ${supporterId}`);
+    this.name = "StalePortalAccessError";
+    this.supporterId = supporterId;
+  }
+}
+
+export class PortalTokenHashConflictError extends Error {
+  readonly supporterId: string;
+
+  constructor(supporterId: string) {
+    super(`Portal access token hash is already owned by another supporter`);
+    this.name = "PortalTokenHashConflictError";
+    this.supporterId = supporterId;
+  }
+}
