@@ -1,0 +1,16 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "fanbox-level-portal",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-05",
+  "workers_dev": true,
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "fanbox-level-portal",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "preview_database_id": "fanbox-level-portal-local",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

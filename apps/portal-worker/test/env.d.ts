@@ -1,0 +1,6 @@
+declare namespace Cloudflare {
+  interface Env {
+    TEST_MIGRATIONS: import("cloudflare:test").D1Migration[];
+    SYNC_API_TOKEN: string;
+  }
+}

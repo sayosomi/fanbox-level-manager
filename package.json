@@ -7,10 +7,10 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace=@sayosomi/domain && npm run build --workspace=@sayosomi/storage && npm run build --workspace=@sayosomi/application",
-    "lint": "eslint .",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "build": "npm run build --workspace=@sayosomi/domain && npm run build --workspace=@sayosomi/storage && npm run build --workspace=@sayosomi/application && npm run build --workspace=@sayosomi/portal-worker",
+    "lint": "eslint packages",
+    "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspace=@sayosomi/portal-worker",
+    "test": "vitest run packages && npm run test --workspace=@sayosomi/portal-worker"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
