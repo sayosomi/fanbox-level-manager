@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import {
   FanboxPdfExtractionError,
   extractFanboxPdfStructure,
@@ -12,6 +13,7 @@ type AnnotationFixture = {
 type PageFixture = {
   annotations: readonly AnnotationFixture[];
   text: readonly string[];
+  content?: string;
 };
 
 function pdfObject(value: string): string {
@@ -69,15 +71,17 @@ function createPdf(pages: readonly PageFixture[]): Uint8Array {
       throw new Error("invalid synthetic PDF fixture");
     }
 
-    const content = [
-      "BT",
-      "/F1 12 Tf",
-      ...page.text.flatMap((text, textIndex) => [
-        `1 0 0 1 72 ${720 - textIndex * 24} Tm`,
-        `${encodeText(text)} Tj`,
-      ]),
-      "ET",
-    ].join("\n");
+    const content =
+      page.content ??
+      [
+        "BT",
+        "/F1 12 Tf",
+        ...page.text.flatMap((text, textIndex) => [
+          `1 0 0 1 72 ${720 - textIndex * 24} Tm`,
+          `${encodeText(text)} Tj`,
+        ]),
+        "ET",
+      ].join("\n");
     objects[contentObjectNumber - 1] = [
       `<< /Length ${content.length} >>`,
       "stream",
@@ -138,6 +142,85 @@ function createPdf(pages: readonly PageFixture[]): Uint8Array {
   return new TextEncoder().encode(pdf);
 }
 
+function createUnicodePdf(): Uint8Array {
+  const content = [
+    "BT",
+    "/F1 12 Tf",
+    "1 0 0 1 72 720 Tm",
+    "<0001 0002 0003 0004 0005> Tj",
+    "ET",
+  ].join("\n");
+  const cmap = [
+    "/CIDInit /ProcSet findresource begin",
+    "12 dict begin",
+    "begincmap",
+    "/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def",
+    "/CMapName /Adobe-Identity-UCS def",
+    "/CMapType 2 def",
+    "1 begincodespacerange",
+    "<0000> <FFFF>",
+    "endcodespacerange",
+    "5 beginbfchar",
+    "<0001> <0043>",
+    "<0002> <0061>",
+    "<0003> <0066>",
+    "<0004> <0065>",
+    "<0005> <0301>",
+    "endbfchar",
+    "endcmap",
+    "CMapName currentdict /CMap defineresource pop",
+    "end",
+    "end",
+  ].join("\n");
+  const objects = [
+    pdfObject("<< /Type /Catalog /Pages 2 0 R >>"),
+    pdfObject("<< /Type /Pages /Kids [3 0 R] /Count 1 >>"),
+    pdfObject(
+      "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>",
+    ),
+    [
+      `<< /Length ${content.length} >>`,
+      "stream",
+      content,
+      "endstream",
+    ]
+      .map(pdfObject)
+      .join(""),
+    pdfObject(
+      "<< /Type /Font /Subtype /Type0 /BaseFont /DejaVuSans /Encoding /Identity-H /DescendantFonts [6 0 R] /ToUnicode 7 0 R >>",
+    ),
+    pdfObject(
+      "<< /Type /Font /Subtype /CIDFontType2 /BaseFont /DejaVuSans /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /DW 1000 /FontDescriptor 8 0 R >>",
+    ),
+    [
+      `<< /Length ${cmap.length} >>`,
+      "stream",
+      cmap,
+      "endstream",
+    ]
+      .map(pdfObject)
+      .join(""),
+    pdfObject(
+      "<< /Type /FontDescriptor /FontName /DejaVuSans /Flags 4 /FontBBox [0 -200 1000 900] /ItalicAngle 0 /Ascent 900 /Descent -200 /CapHeight 700 /StemV 80 >>",
+    ),
+  ];
+  const header = "%PDF-1.7\n% synthetic unicode fixture\n";
+  let pdf = header;
+  const offsets = [0];
+  for (const [objectIndex, object] of objects.entries()) {
+    offsets.push(pdf.length);
+    pdf += `${objectIndex + 1} 0 obj\n${object}endobj\n`;
+  }
+  const xrefOffset = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n`;
+  pdf += "0000000000 65535 f \n";
+  for (let objectNumber = 1; objectNumber <= objects.length; objectNumber += 1) {
+    pdf += `${String(offsets[objectNumber]).padStart(10, "0")} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return new TextEncoder().encode(pdf);
+}
+
 const fixture = createPdf([
   {
     annotations: [
@@ -170,7 +253,8 @@ const fixture = createPdf([
         rect: [50, 60, 70, 80],
       },
     ],
-    text: ["first second", "Cafe"],
+    content: "BT\n/F1 12 Tf\n1 0 0 1 72 720 Tm\n[(first) -1000 (second)] TJ\nET",
+    text: [],
   },
   {
     annotations: [
@@ -190,6 +274,8 @@ const fixture = createPdf([
     text: ["second"],
   },
 ]);
+
+const decomposedUnicodeFixture = createUnicodePdf();
 
 describe("extractFanboxPdfStructure", () => {
   it("extracts ordered relationship links and exact page count", async () => {
@@ -236,17 +322,25 @@ describe("extractFanboxPdfStructure", () => {
     }))).toEqual([
       {
         pageNumber: 1,
-        text: "first second",
+        text: "first",
         transform: [12, 0, 0, 12, 72, 720],
-        width: 61.35599999999999,
+        width: 19.332,
         height: 12,
-        hasEol: true,
+        hasEol: false,
       },
       {
         pageNumber: 1,
-        text: "Cafe",
-        transform: [12, 0, 0, 12, 72, 696],
-        width: 25.343999999999998,
+        text: " ",
+        transform: [12, 0, 0, 12, 91.332, 720],
+        width: 12,
+        height: 0,
+        hasEol: false,
+      },
+      {
+        pageNumber: 1,
+        text: "second",
+        transform: [12, 0, 0, 12, 103.332, 720],
+        width: 38.687999999999995,
         height: 12,
         hasEol: false,
       },
@@ -259,6 +353,10 @@ describe("extractFanboxPdfStructure", () => {
         hasEol: false,
       },
     ]);
+
+    const unicodeResult = await extractFanboxPdfStructure(decomposedUnicodeFixture);
+    expect(unicodeResult.textRuns.map((run) => run.text)).toEqual(["Cafe\u0301"]);
+    expect(unicodeResult.textRuns[0]?.text).not.toBe("Café");
   });
 
   it("freezes every returned array, tuple, and object", async () => {
@@ -297,5 +395,28 @@ describe("extractFanboxPdfStructure", () => {
         error.message === "Failed to extract PDF structure." &&
         !error.message.includes("PDF.js"),
     );
+  });
+
+  it("does not invoke PDF.js page rendering", async () => {
+    const loadingTask = getDocument({ data: fixture.slice() });
+    const document = await loadingTask.promise;
+    const page = await document.getPage(1);
+    const pagePrototype = Object.getPrototypeOf(page) as {
+      render: (...args: never[]) => unknown;
+    };
+    const renderSpy = vi
+      .spyOn(pagePrototype, "render")
+      .mockImplementation(() => {
+        throw new Error("rendering path invoked");
+      });
+
+    try {
+      await expect(extractFanboxPdfStructure(fixture)).resolves.toBeDefined();
+      expect(renderSpy).not.toHaveBeenCalled();
+    } finally {
+      renderSpy.mockRestore();
+      await document.cleanup().catch(() => undefined);
+      await loadingTask.destroy();
+    }
   });
 });
