@@ -5,9 +5,14 @@ import {
   type Server,
 } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SupporterPortalDeliveryConflictError } from "@sayosomi/application";
+import {
+  FanboxPdfInspectionError,
+  SupporterPortalDeliveryConflictError,
+} from "@sayosomi/application";
 import type {
   CreateSupporterPortalLinkServiceOptions,
+  FanboxPdfInspection,
+  FanboxPdfInspectionService,
   SupporterPortalDeliveryService,
   SupporterPortalLinkService,
   SupporterListItem,
@@ -78,7 +83,8 @@ function requestOnPort(
   port: number,
   method: string,
   path: string,
-  body = "",
+  body: string | Uint8Array = "",
+  headers: Record<string, string> = {},
 ): Promise<HttpResponse> {
   return new Promise((resolve, reject) => {
     const request = httpRequest(
@@ -87,6 +93,7 @@ function requestOnPort(
         method,
         path,
         port,
+        headers,
       },
       (response) => {
         let body = "";
@@ -111,9 +118,10 @@ function requestOnPort(
 function request(
   method: string,
   path: string,
-  body = "",
+  body: string | Uint8Array = "",
+  headers: Record<string, string> = {},
 ): Promise<HttpResponse> {
-  return requestOnPort(serverPort, method, path, body);
+  return requestOnPort(serverPort, method, path, body, headers);
 }
 
 function ephemeralPort(): Promise<number> {
@@ -163,6 +171,44 @@ const sampleSupporters: readonly SupporterListItem[] = Object.freeze([
 const sampleSupporterListService: SupporterListService = {
   listSupporters: () => sampleSupporters,
 };
+
+const samplePdfInspection: FanboxPdfInspection = Object.freeze({
+  pageCount: 1,
+  relationshipLinks: Object.freeze([
+    Object.freeze({
+      pageNumber: 1,
+      relationshipId: "relationship_123",
+      rect: Object.freeze([0, 0, 10, 10]) as readonly [
+        number,
+        number,
+        number,
+        number,
+      ],
+      textRuns: Object.freeze([
+        Object.freeze({
+          text: "  raw text  ",
+          transform: Object.freeze([1, 0, 0, 1, 2, 5]) as readonly [
+            number,
+            number,
+            number,
+            number,
+            number,
+            number,
+          ],
+          width: 8,
+          height: 10,
+          hasEol: false,
+        }),
+      ]),
+    }),
+  ]),
+});
+
+function createPdfInspectionService(
+  implementation: FanboxPdfInspectionService["inspectFanboxPdf"],
+): FanboxPdfInspectionService {
+  return { inspectFanboxPdf: implementation };
+}
 
 function expectCommonSecurityHeaders(headers: IncomingHttpHeaders): void {
   expect(headers["cache-control"]).toBe("no-store");
@@ -335,6 +381,167 @@ describe("admin web server", () => {
       expect(response.body).not.toContain("/private/admin.sqlite");
     } finally {
       await closeServer(failingServer);
+    }
+  });
+});
+
+describe("PDF inspection route", () => {
+  it("passes exact PDF bytes to the service and returns the exact immutable DTO", async () => {
+    const received: Uint8Array[] = [];
+    const service = createPdfInspectionService(async (data) => {
+      received.push(data);
+      return samplePdfInspection;
+    });
+    const inspectionServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      service,
+    );
+    const inspectionPort = await listenOnEphemeralPort(inspectionServer);
+    const pdfBytes = new Uint8Array([37, 80, 68, 70, 0, 255]);
+
+    try {
+      const response = await requestOnPort(
+        inspectionPort,
+        "POST",
+        "/api/fanbox-pdf/inspect",
+        pdfBytes,
+        { "Content-Type": "application/pdf; charset=binary" },
+      );
+
+      expect(received).toHaveLength(1);
+      expect([...received[0] ?? []]).toEqual([...pdfBytes]);
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toBe(
+        "application/json; charset=UTF-8",
+      );
+      expectCommonSecurityHeaders(response.headers);
+      expect(response.body).toBe(JSON.stringify(samplePdfInspection));
+    } finally {
+      await closeServer(inspectionServer);
+    }
+  });
+
+  it.each(["GET", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])(
+    "returns 405 and Allow: POST for %s",
+    async (method) => {
+      const response = await request(
+        method,
+        "/api/fanbox-pdf/inspect",
+      );
+
+      expect(response.statusCode).toBe(405);
+      expect(response.headers.allow).toBe("POST");
+    },
+  );
+
+  it.each([undefined, "application/json", "application/pdfx"])(
+    "returns exact 415 for unsupported media type %j",
+    async (contentType) => {
+      const headers = contentType === undefined ? {} : { "Content-Type": contentType };
+      const response = await request(
+        "POST",
+        "/api/fanbox-pdf/inspect",
+        new Uint8Array([1]),
+        headers,
+      );
+
+      expect(response.statusCode).toBe(415);
+      expect(response.body).toBe('{"error":"unsupported_media_type"}');
+    },
+  );
+
+  it("returns exact 400 for an empty PDF request", async () => {
+    const response = await request(
+      "POST",
+      "/api/fanbox-pdf/inspect",
+      "",
+      { "Content-Type": "application/pdf" },
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toBe('{"error":"invalid_request"}');
+  });
+
+  it("rejects a streamed body over 25 MiB without calling the service", async () => {
+    const inspect = vi.fn(async () => samplePdfInspection);
+    const service = createPdfInspectionService(inspect);
+    const inspectionServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      service,
+    );
+    const inspectionPort = await listenOnEphemeralPort(inspectionServer);
+    const body = Buffer.alloc(25 * 1024 * 1024 + 1, 1);
+
+    try {
+      const response = await requestOnPort(
+        inspectionPort,
+        "POST",
+        "/api/fanbox-pdf/inspect",
+        body,
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect(response.statusCode).toBe(413);
+      expect(response.body).toBe('{"error":"pdf_too_large"}');
+      expect(inspect).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(inspectionServer);
+    }
+  });
+
+  it("returns exact unavailable, invalid-PDF, and unexpected-failure responses", async () => {
+    const cases = [
+      {
+        service: undefined,
+        statusCode: 500,
+        body: '{"error":"pdf_inspection_unavailable"}',
+      },
+      {
+        service: createPdfInspectionService(async () => {
+          throw new FanboxPdfInspectionError("private PDF diagnostics");
+        }),
+        statusCode: 422,
+        body: '{"error":"invalid_pdf"}',
+      },
+      {
+        service: createPdfInspectionService(async () => {
+          throw new Error("SQL, PDF contents, and local path");
+        }),
+        statusCode: 500,
+        body: '{"error":"pdf_inspection_failed"}',
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const inspectionServer = createAdminServer(
+        sampleSupporterListService,
+        undefined,
+        undefined,
+        testCase.service,
+      );
+      const inspectionPort = await listenOnEphemeralPort(inspectionServer);
+
+      try {
+        const response = await requestOnPort(
+          inspectionPort,
+          "POST",
+          "/api/fanbox-pdf/inspect",
+          new Uint8Array([1, 2, 3]),
+          { "Content-Type": "application/pdf" },
+        );
+
+        expect(response.statusCode).toBe(testCase.statusCode);
+        expect(response.body).toBe(testCase.body);
+        expect(response.body).not.toContain("private PDF diagnostics");
+        expect(response.body).not.toContain("SQL");
+        expect(response.body).not.toContain("local path");
+      } finally {
+        await closeServer(inspectionServer);
+      }
     }
   });
 });
@@ -680,12 +887,17 @@ describe("admin server configuration", () => {
       expect(suppliedStore).toBe(store);
       return deliveryService;
     });
+    const inspectionService = createPdfInspectionService(async () =>
+      samplePdfInspection,
+    );
+    const createInspectionService = vi.fn(() => inspectionService);
 
     try {
       productionServer = startProductionAdminServer({
         openLocalStore: () => store,
         createSupporterListService: () => sampleSupporterListService,
         createSupporterPortalDeliveryService: createDeliveryService,
+        createFanboxPdfInspectionService: createInspectionService,
       });
       await new Promise<void>((resolve, reject) => {
         productionServer?.once("listening", () => resolve());
@@ -709,6 +921,7 @@ describe("admin server configuration", () => {
       expect(portalResponse.statusCode).toBe(503);
       expect(portalResponse.body).toBe('{"error":"portal_not_configured"}');
       expect(createDeliveryService).toHaveBeenCalledTimes(1);
+      expect(createInspectionService).toHaveBeenCalledTimes(1);
     } finally {
       if (productionServer !== undefined && productionServer.listening) {
         await closeServer(productionServer);
@@ -946,6 +1159,10 @@ describe("admin server configuration", () => {
   it("keeps browser data private and uses the required safe fetch/render path", () => {
     expect(ADMIN_PAGE).toContain("支援者一覧");
     expect(ADMIN_PAGE).toContain("支援者一覧を読み込んでいます。");
+    expect(ADMIN_PAGE).toContain("FANBOX PDF確認");
+    expect(ADMIN_PAGE).toContain('type="file" accept="application/pdf"');
+    expect(ADMIN_PAGE).toContain("PDFを確認");
+    expect(ADMIN_PAGE).toContain("pdf-inspection-status");
     expect(ADMIN_SCRIPT).toContain('fetch("/api/supporters", {');
     expect(ADMIN_SCRIPT).toContain('method: "GET"');
     expect(ADMIN_SCRIPT).toContain('cache: "no-store"');
@@ -954,6 +1171,28 @@ describe("admin server configuration", () => {
     expect(ADMIN_SCRIPT).toContain('referrerPolicy: "no-referrer"');
     expect(ADMIN_SCRIPT).toContain("Object.keys(value)");
     expect(ADMIN_SCRIPT).toContain('hasExactKeys(value, ["supporters"])');
+    expect(ADMIN_SCRIPT).toContain(
+      'fetch("/api/fanbox-pdf/inspect", {',
+    );
+    expect(ADMIN_SCRIPT).toContain('method: "POST"');
+    expect(ADMIN_SCRIPT).toContain('"Content-Type": "application/pdf"');
+    expect(ADMIN_SCRIPT).toContain("body: file");
+    expect(ADMIN_SCRIPT).toContain("PDF_RELATIONSHIP_ID_PATTERN");
+    expect(ADMIN_SCRIPT).toContain(
+      'hasExactKeys(value, ["pageCount", "relationshipLinks"])',
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      'hasExactKeys(relationship, [\n        "pageNumber",\n        "relationshipId",\n        "rect",\n        "textRuns",\n      ])',
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      'hasExactKeys(textRun, [\n          "text",\n          "transform",\n          "width",\n          "height",\n          "hasEol",\n        ])',
+    );
+    expect(ADMIN_SCRIPT).toContain("重なるテキストはありません。");
+    expect(ADMIN_SCRIPT).toContain("関係リンクはありません。");
+    expect(ADMIN_SCRIPT).toContain("確認するPDFファイルを選択してください。");
+    expect(ADMIN_SCRIPT).toContain("PDFを確認しています。");
+    expect(ADMIN_SCRIPT).toContain("PDFを確認できませんでした。");
+    expect(ADMIN_SCRIPT).not.toContain('addEventListener("change"');
     expect(ADMIN_SCRIPT).toContain('"portalDeliveryState"');
     expect(ADMIN_SCRIPT).toContain("PORTAL_DELIVERY_STATES");
     for (const deliveryState of [

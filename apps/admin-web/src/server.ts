@@ -7,10 +7,13 @@ import {
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  FanboxPdfInspectionError,
+  createFanboxPdfInspectionService,
   createSupporterPortalLinkService,
   createSupporterPortalDeliveryService,
   createSupporterListService,
   SupporterPortalDeliveryConflictError,
+  type FanboxPdfInspectionService,
   type SupporterPortalLinkService,
   type SupporterPortalDeliveryService,
   type SupporterListService,
@@ -56,9 +59,24 @@ const PORTAL_SENT_SUCCESS_BODY = JSON.stringify({
 });
 const PORTAL_LINK_PATH = "/api/portal-link";
 const PORTAL_SENT_PATH = "/api/portal-link/sent";
+const PDF_INSPECTION_PATH = "/api/fanbox-pdf/inspect";
+const MAX_PDF_BODY_BYTES = 25 * 1024 * 1024;
 const INCOMPLETE_PORTAL_CONFIGURATION_ERROR =
   "incomplete portal configuration";
 const INVALID_PORTAL_CONFIGURATION_ERROR = "invalid portal configuration";
+const PDF_UNSUPPORTED_MEDIA_TYPE_BODY = JSON.stringify({
+  error: "unsupported_media_type",
+});
+const PDF_TOO_LARGE_BODY = JSON.stringify({ error: "pdf_too_large" });
+const PDF_INSPECTION_UNAVAILABLE_BODY = JSON.stringify({
+  error: "pdf_inspection_unavailable",
+});
+const INVALID_PDF_BODY = JSON.stringify({ error: "invalid_pdf" });
+const PDF_INSPECTION_FAILED_BODY = JSON.stringify({
+  error: "pdf_inspection_failed",
+});
+
+class PdfRequestTooLargeError extends Error {}
 
 export type ProductionAdminServerDependencies = Readonly<{
   openLocalStore?: typeof openLocalStore;
@@ -66,6 +84,7 @@ export type ProductionAdminServerDependencies = Readonly<{
   createSupporterPortalLinkService?: typeof createSupporterPortalLinkService;
   createSupporterPortalDeliveryService?:
     typeof createSupporterPortalDeliveryService;
+  createFanboxPdfInspectionService?: typeof createFanboxPdfInspectionService;
 }>;
 
 export function parseAdminPort(value: string | undefined): number {
@@ -163,6 +182,85 @@ function readRequestBody(request: IncomingMessage): Promise<string> {
     request.once("end", () => resolve(body));
     request.once("error", reject);
     request.once("aborted", () => reject(new Error("request aborted")));
+  });
+}
+
+function hasPdfContentType(request: IncomingMessage): boolean {
+  const contentType = request.headers["content-type"];
+  if (typeof contentType !== "string") {
+    return false;
+  }
+
+  const mediaType = contentType.split(";", 1)[0]?.trim().toLowerCase();
+  return mediaType === "application/pdf";
+}
+
+function readPdfRequestBody(request: IncomingMessage): Promise<Uint8Array> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let byteLength = 0;
+    const chunks: Buffer[] = [];
+
+    const fail = (error: Error): void => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      reject(error);
+    };
+
+    request.once("error", () => fail(new Error("request failed")));
+    request.once("aborted", () => fail(new Error("request aborted")));
+
+    const contentLength = request.headers["content-length"];
+    if (contentLength !== undefined) {
+      if (typeof contentLength !== "string") {
+        request.resume();
+        fail(new Error("invalid content length"));
+        return;
+      }
+
+      const declaredLength = Number(contentLength);
+      if (!Number.isSafeInteger(declaredLength) || declaredLength < 0) {
+        request.resume();
+        fail(new Error("invalid content length"));
+        return;
+      }
+      if (declaredLength > MAX_PDF_BODY_BYTES) {
+        request.resume();
+        fail(new PdfRequestTooLargeError());
+        return;
+      }
+    }
+
+    request.on("data", (chunk: Buffer | string) => {
+      if (settled) {
+        return;
+      }
+
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      byteLength += bytes.byteLength;
+      if (byteLength > MAX_PDF_BODY_BYTES) {
+        request.resume();
+        fail(new PdfRequestTooLargeError());
+        return;
+      }
+
+      chunks.push(bytes);
+    });
+    request.once("end", () => {
+      if (settled) {
+        return;
+      }
+      if (byteLength === 0) {
+        fail(new Error("empty request"));
+        return;
+      }
+
+      settled = true;
+      resolve(new Uint8Array(Buffer.concat(chunks)));
+    });
   });
 }
 
@@ -274,6 +372,48 @@ async function sendPortalSent(
   }
 }
 
+async function sendPdfInspection(
+  request: IncomingMessage,
+  response: ServerResponse,
+  inspectionService: FanboxPdfInspectionService | undefined,
+): Promise<void> {
+  if (!hasPdfContentType(request)) {
+    request.resume();
+    sendPortalJson(response, 415, PDF_UNSUPPORTED_MEDIA_TYPE_BODY);
+    return;
+  }
+
+  let data: Uint8Array;
+  try {
+    data = await readPdfRequestBody(request);
+  } catch (error: unknown) {
+    if (error instanceof PdfRequestTooLargeError) {
+      sendPortalJson(response, 413, PDF_TOO_LARGE_BODY);
+      return;
+    }
+
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  if (inspectionService === undefined) {
+    sendPortalJson(response, 500, PDF_INSPECTION_UNAVAILABLE_BODY);
+    return;
+  }
+
+  try {
+    const result = await inspectionService.inspectFanboxPdf(data);
+    sendPortalJson(response, 200, JSON.stringify(result));
+  } catch (error: unknown) {
+    if (error instanceof FanboxPdfInspectionError) {
+      sendPortalJson(response, 422, INVALID_PDF_BODY);
+      return;
+    }
+
+    sendPortalJson(response, 500, PDF_INSPECTION_FAILED_BODY);
+  }
+}
+
 function sendSupporterList(
   response: ServerResponse,
   supporterListService: SupporterListService | undefined,
@@ -304,6 +444,7 @@ export function createAdminServer(
   supporterListService?: SupporterListService,
   supporterPortalLinkService?: SupporterPortalLinkService,
   supporterPortalDeliveryService?: SupporterPortalDeliveryService,
+  fanboxPdfInspectionService?: FanboxPdfInspectionService,
 ): Server {
   return createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -314,7 +455,8 @@ export function createAdminServer(
       requestPath === "/api/health" ||
       requestPath === "/api/supporters" ||
       requestPath === PORTAL_LINK_PATH ||
-      requestPath === PORTAL_SENT_PATH;
+      requestPath === PORTAL_SENT_PATH ||
+      requestPath === PDF_INSPECTION_PATH;
 
     if (!knownRoute) {
       sendNotFound(response);
@@ -338,6 +480,16 @@ export function createAdminServer(
       }
 
       void sendPortalSent(request, response, supporterPortalDeliveryService);
+      return;
+    }
+
+    if (requestPath === PDF_INSPECTION_PATH) {
+      if (request.method !== "POST") {
+        sendPortalMethodNotAllowed(response);
+        return;
+      }
+
+      void sendPdfInspection(request, response, fanboxPdfInspectionService);
       return;
     }
 
@@ -385,12 +537,14 @@ export function startAdminServer(
   supporterListService?: SupporterListService,
   supporterPortalLinkService?: SupporterPortalLinkService,
   supporterPortalDeliveryService?: SupporterPortalDeliveryService,
+  fanboxPdfInspectionService?: FanboxPdfInspectionService,
 ): Server {
   validateListenPort(port);
   const server = createAdminServer(
     supporterListService,
     supporterPortalLinkService,
     supporterPortalDeliveryService,
+    fanboxPdfInspectionService,
   );
   server.listen(port, ADMIN_HOST);
   return server;
@@ -424,6 +578,10 @@ export function startProductionAdminServer(
 ): Server {
   const port = parseAdminPort(process.env.FANBOX_ADMIN_PORT);
   const databasePath = parseAdminDatabasePath(process.env.FANBOX_ADMIN_DB_PATH);
+  const createPdfInspectionService =
+    dependencies.createFanboxPdfInspectionService ??
+    createFanboxPdfInspectionService;
+  const fanboxPdfInspectionService = createPdfInspectionService();
   const portalConfiguration = readPortalConfiguration();
   const openStore = dependencies.openLocalStore ?? openLocalStore;
   let store: LocalStore;
@@ -471,6 +629,7 @@ export function startProductionAdminServer(
       supporterListService,
       supporterPortalLinkService,
       supporterPortalDeliveryService,
+      fanboxPdfInspectionService,
     );
     server.once("close", closeStore);
 

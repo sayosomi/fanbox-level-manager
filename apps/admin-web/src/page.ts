@@ -13,6 +13,16 @@ export const ADMIN_PAGE = `<!doctype html>
     <main>
       <h1>FANBOX抽選レベル管理</h1>
       <p id="status" role="status">ローカル管理アプリケーションは起動しています。</p>
+      <section aria-labelledby="pdf-inspection-heading">
+        <h2 id="pdf-inspection-heading">FANBOX PDF確認</h2>
+        <p>
+          <label for="pdf-inspection-file">PDFファイル</label>
+          <input id="pdf-inspection-file" type="file" accept="application/pdf">
+        </p>
+        <button id="pdf-inspection-button" type="button">PDFを確認</button>
+        <p id="pdf-inspection-status" role="status" aria-live="polite"></p>
+        <div id="pdf-inspection-result" aria-live="polite"></div>
+      </section>
       <section aria-labelledby="heading">
         <h2 id="heading">支援者一覧</h2>
         <p id="list-status" role="status">支援者一覧を読み込んでいます。</p>
@@ -193,6 +203,173 @@ function showPortalSuccess(status, portalUrl) {
     "この秘密のURLは保存されません。今すぐコピーしてください。";
   secretUrl.textContent = portalUrl;
   status.replaceChildren(success, warning, secretUrl);
+}
+
+const PDF_RELATIONSHIP_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+function isFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isFiniteNumberTuple(value, length) {
+  return (
+    Array.isArray(value) &&
+    value.length === length &&
+    value.every(isFiniteNumber)
+  );
+}
+
+function validatePdfInspectionResponse(value) {
+  if (!isRecord(value) || !hasExactKeys(value, ["pageCount", "relationshipLinks"])) {
+    throw new TypeError("invalid PDF inspection response");
+  }
+  if (!isNonNegativeInteger(value.pageCount) || !Array.isArray(value.relationshipLinks)) {
+    throw new TypeError("invalid PDF inspection response");
+  }
+
+  const relationshipLinks = value.relationshipLinks.map((relationship) => {
+    if (
+      !isRecord(relationship) ||
+      !hasExactKeys(relationship, [
+        "pageNumber",
+        "relationshipId",
+        "rect",
+        "textRuns",
+      ]) ||
+      !isNonNegativeInteger(relationship.pageNumber) ||
+      relationship.pageNumber < 1 ||
+      relationship.pageNumber > value.pageCount ||
+      typeof relationship.relationshipId !== "string" ||
+      relationship.relationshipId.length === 0 ||
+      !PDF_RELATIONSHIP_ID_PATTERN.test(relationship.relationshipId) ||
+      !isFiniteNumberTuple(relationship.rect, 4) ||
+      !Array.isArray(relationship.textRuns)
+    ) {
+      throw new TypeError("invalid PDF inspection relationship");
+    }
+
+    const textRuns = relationship.textRuns.map((textRun) => {
+      if (
+        !isRecord(textRun) ||
+        !hasExactKeys(textRun, [
+          "text",
+          "transform",
+          "width",
+          "height",
+          "hasEol",
+        ]) ||
+        typeof textRun.text !== "string" ||
+        !isFiniteNumberTuple(textRun.transform, 6) ||
+        !isFiniteNumber(textRun.width) ||
+        !isFiniteNumber(textRun.height) ||
+        typeof textRun.hasEol !== "boolean"
+      ) {
+        throw new TypeError("invalid PDF inspection text run");
+      }
+
+      return textRun;
+    });
+
+    return {
+      pageNumber: relationship.pageNumber,
+      relationshipId: relationship.relationshipId,
+      rect: relationship.rect,
+      textRuns,
+    };
+  });
+
+  return {
+    pageCount: value.pageCount,
+    relationshipLinks,
+  };
+}
+
+function renderPdfInspectionRelationship(relationship, index) {
+  const item = document.createElement("section");
+  const heading = document.createElement("h3");
+  const page = document.createElement("p");
+  const runs = document.createElement("ul");
+  const runItems = [];
+
+  heading.textContent = \`関係リンク \${index + 1}: \${relationship.relationshipId}\`;
+  page.textContent = \`ページ: \${relationship.pageNumber}\`;
+
+  if (relationship.textRuns.length === 0) {
+    const empty = document.createElement("p");
+    empty.textContent = "重なるテキストはありません。";
+    item.replaceChildren(heading, page, empty);
+    return item;
+  }
+
+  for (const textRun of relationship.textRuns) {
+    const run = document.createElement("li");
+    run.className = "pdf-inspection-text";
+    run.textContent = textRun.text;
+    runItems.push(run);
+  }
+
+  runs.replaceChildren(...runItems);
+  item.replaceChildren(heading, page, runs);
+  return item;
+}
+
+function showPdfInspectionResult(status, result, inspection) {
+  status.textContent = \`ページ数: \${inspection.pageCount}、関係リンク数: \${inspection.relationshipLinks.length}\`;
+
+  if (inspection.relationshipLinks.length === 0) {
+    const empty = document.createElement("p");
+    empty.textContent = "関係リンクはありません。";
+    result.replaceChildren(empty);
+    return;
+  }
+
+  result.replaceChildren(
+    ...inspection.relationshipLinks.map(renderPdfInspectionRelationship),
+  );
+}
+
+async function inspectSelectedPdf(fileInput, button, status, result) {
+  const file = fileInput.files?.[0];
+  if (file === undefined) {
+    status.textContent = "確認するPDFファイルを選択してください。";
+    result.replaceChildren();
+    return;
+  }
+
+  fileInput.disabled = true;
+  button.disabled = true;
+  status.textContent = "PDFを確認しています。";
+  result.replaceChildren();
+
+  try {
+    const response = await fetch("/api/fanbox-pdf/inspect", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/pdf",
+      },
+      body: file,
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    if (!response.ok) {
+      throw new Error("PDF inspection request failed");
+    }
+
+    showPdfInspectionResult(
+      status,
+      result,
+      validatePdfInspectionResponse(await response.json()),
+    );
+  } catch {
+    status.textContent = "PDFを確認できませんでした。";
+    result.replaceChildren();
+  } finally {
+    fileInput.disabled = false;
+    button.disabled = false;
+    fileInput.value = "";
+  }
 }
 
 function renderSupporter(supporter) {
@@ -393,6 +570,26 @@ async function loadSupporters(status, list) {
 }
 
 document.documentElement.dataset.adminReady = "true";
+const pdfInspectionFile = document.getElementById("pdf-inspection-file");
+const pdfInspectionButton = document.getElementById("pdf-inspection-button");
+const pdfInspectionStatus = document.getElementById("pdf-inspection-status");
+const pdfInspectionResult = document.getElementById("pdf-inspection-result");
+if (
+  pdfInspectionFile instanceof HTMLInputElement &&
+  pdfInspectionButton instanceof HTMLButtonElement &&
+  pdfInspectionStatus !== null &&
+  pdfInspectionResult !== null
+) {
+  pdfInspectionButton.addEventListener("click", () => {
+    void inspectSelectedPdf(
+      pdfInspectionFile,
+      pdfInspectionButton,
+      pdfInspectionStatus,
+      pdfInspectionResult,
+    );
+  });
+}
+
 const listStatus = document.getElementById("list-status");
 const supporterList = document.getElementById("list");
 if (listStatus !== null && supporterList !== null) {
@@ -471,5 +668,41 @@ h2 {
 
 #list p + p {
   margin-top: 0.35rem;
+}
+
+#pdf-inspection-button {
+  margin-top: 0.25rem;
+}
+
+#pdf-inspection-status {
+  min-height: 1.5rem;
+}
+
+#pdf-inspection-result {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+#pdf-inspection-result section {
+  margin-top: 0;
+  padding: 1rem 1.25rem;
+  border: 1px solid #cfd4dc;
+  border-radius: 0.5rem;
+  background: #ffffff;
+}
+
+#pdf-inspection-result h3,
+#pdf-inspection-result p {
+  margin: 0;
+}
+
+#pdf-inspection-result ul {
+  margin: 0.75rem 0 0;
+  padding-left: 1.5rem;
+}
+
+.pdf-inspection-text {
+  white-space: pre-wrap;
 }
 `;
