@@ -14,6 +14,7 @@ import {
   FanboxSupporterImportError,
   createExistingSupporterMigrationService,
   createFanboxSupporterImportService,
+  createLotteryLevelService,
   createSupporterPortalLinkService,
   createSupporterPortalDeliveryService,
   createSupporterListService,
@@ -25,6 +26,7 @@ import {
   type FanboxSupporterImportService,
   type FanboxPdfSupporterComparison,
   type ExistingSupporterMigrationService,
+  type LotteryLevelService,
   type SupporterPortalLinkService,
   type SupporterPortalDeliveryService,
   type SupporterListService,
@@ -32,6 +34,8 @@ import {
 import {
   DuplicateFanboxRelationshipError,
   openLocalStore,
+  StaleMonthError,
+  SupporterNotFoundError,
   type LocalStore,
 } from "@sayosomi/storage";
 import {
@@ -74,6 +78,7 @@ const PORTAL_SENT_SUCCESS_BODY = JSON.stringify({
 });
 const PORTAL_LINK_PATH = "/api/portal-link";
 const PORTAL_SENT_PATH = "/api/portal-link/sent";
+const LOTTERY_RESULTS_PATH = "/api/lottery-results";
 const PDF_INSPECTION_PATH = "/api/fanbox-pdf/inspect";
 const PDF_IMPORT_PATH = "/api/fanbox-pdf/import";
 const MAX_PDF_BODY_BYTES = 25 * 1024 * 1024;
@@ -109,6 +114,18 @@ const EXISTING_SUPPORTER_MIGRATION_FAILED_BODY = JSON.stringify({
 const EXISTING_SUPPORTER_MIGRATION_SUCCESS_BODY = JSON.stringify({
   status: "ok",
 });
+const LOTTERY_LEVEL_UNAVAILABLE_BODY = JSON.stringify({
+  error: "lottery_level_unavailable",
+});
+const LOTTERY_RESULT_CONFLICT_BODY = JSON.stringify({
+  error: "lottery_result_conflict",
+});
+const LOTTERY_RESULT_FAILED_BODY = JSON.stringify({
+  error: "lottery_result_failed",
+});
+const LOTTERY_RESULT_SUCCESS_BODY = JSON.stringify({
+  status: "ok",
+});
 const PDF_COMPARISON_UNAVAILABLE_BODY = JSON.stringify({
   error: "pdf_comparison_unavailable",
 });
@@ -136,6 +153,7 @@ export type ProductionAdminServerDependencies = Readonly<{
     typeof createFanboxSupporterImportService;
   createExistingSupporterMigrationService?:
     typeof createExistingSupporterMigrationService;
+  createLotteryLevelService?: typeof createLotteryLevelService;
 }>;
 
 export function parseAdminPort(value: string | undefined): number {
@@ -689,6 +707,139 @@ async function sendExistingSupporterMigration(
   sendPortalJson(response, 200, EXISTING_SUPPORTER_MIGRATION_SUCCESS_BODY);
 }
 
+type LotteryResultRequest = Readonly<{
+  participants: readonly {
+    supporterId: string;
+    outcome: "win" | "loss";
+  }[];
+  occurredAt: Date;
+}>;
+
+function parseLotteryResultRequest(body: string): LotteryResultRequest | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    return null;
+  }
+
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value)
+  ) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (
+    Object.keys(record).length !== 2 ||
+    !Object.hasOwn(record, "participants") ||
+    !Object.hasOwn(record, "occurredAt") ||
+    !Array.isArray(record.participants) ||
+    record.participants.length === 0 ||
+    typeof record.occurredAt !== "string"
+  ) {
+    return null;
+  }
+
+  const supporterIds = new Set<string>();
+  const participants: Array<{
+    supporterId: string;
+    outcome: "win" | "loss";
+  }> = [];
+  for (const participant of record.participants) {
+    if (
+      typeof participant !== "object" ||
+      participant === null ||
+      Array.isArray(participant)
+    ) {
+      return null;
+    }
+
+    const participantRecord = participant as Record<string, unknown>;
+    if (
+      Object.keys(participantRecord).length !== 2 ||
+      !Object.hasOwn(participantRecord, "supporterId") ||
+      !Object.hasOwn(participantRecord, "outcome") ||
+      typeof participantRecord.supporterId !== "string" ||
+      participantRecord.supporterId.trim().length === 0 ||
+      (participantRecord.outcome !== "win" &&
+        participantRecord.outcome !== "loss") ||
+      supporterIds.has(participantRecord.supporterId)
+    ) {
+      return null;
+    }
+
+    supporterIds.add(participantRecord.supporterId);
+    participants.push({
+      supporterId: participantRecord.supporterId,
+      outcome: participantRecord.outcome,
+    });
+  }
+
+  const occurredAtValue = record.occurredAt;
+  if (
+    !/^(?:\d{4}|[+-]\d{6})-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(
+      occurredAtValue,
+    )
+  ) {
+    return null;
+  }
+
+  const occurredAt = new Date(occurredAtValue);
+  if (
+    Number.isNaN(occurredAt.getTime()) ||
+    occurredAt.toISOString() !== occurredAtValue
+  ) {
+    return null;
+  }
+
+  return { participants, occurredAt };
+}
+
+async function sendLotteryResults(
+  request: IncomingMessage,
+  response: ServerResponse,
+  lotteryLevelService: LotteryLevelService | undefined,
+): Promise<void> {
+  let body: string;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  const input = parseLotteryResultRequest(body);
+  if (input === null) {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  if (lotteryLevelService === undefined) {
+    sendPortalJson(response, 500, LOTTERY_LEVEL_UNAVAILABLE_BODY);
+    return;
+  }
+
+  try {
+    lotteryLevelService.recordLotteryResults(input.participants, input.occurredAt);
+  } catch (error: unknown) {
+    if (
+      error instanceof SupporterNotFoundError ||
+      error instanceof StaleMonthError
+    ) {
+      sendPortalJson(response, 409, LOTTERY_RESULT_CONFLICT_BODY);
+      return;
+    }
+
+    sendPortalJson(response, 500, LOTTERY_RESULT_FAILED_BODY);
+    return;
+  }
+
+  sendPortalJson(response, 200, LOTTERY_RESULT_SUCCESS_BODY);
+}
+
 function sendSupporterList(
   response: ServerResponse,
   supporterListService: SupporterListService | undefined,
@@ -723,6 +874,7 @@ export function createAdminServer(
   fanboxSupporterComparisonService?: FanboxSupporterComparisonService,
   fanboxSupporterImportService?: FanboxSupporterImportService,
   existingSupporterMigrationService?: ExistingSupporterMigrationService,
+  lotteryLevelService?: LotteryLevelService,
 ): Server {
   return createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -734,6 +886,7 @@ export function createAdminServer(
       requestPath === "/api/supporters" ||
       requestPath === PORTAL_LINK_PATH ||
       requestPath === PORTAL_SENT_PATH ||
+      requestPath === LOTTERY_RESULTS_PATH ||
       requestPath === PDF_INSPECTION_PATH ||
       requestPath === PDF_IMPORT_PATH ||
       requestPath === "/api/supporters/migrate-existing";
@@ -760,6 +913,16 @@ export function createAdminServer(
       }
 
       void sendPortalSent(request, response, supporterPortalDeliveryService);
+      return;
+    }
+
+    if (requestPath === LOTTERY_RESULTS_PATH) {
+      if (request.method !== "POST") {
+        sendPortalMethodNotAllowed(response);
+        return;
+      }
+
+      void sendLotteryResults(request, response, lotteryLevelService);
       return;
     }
 
@@ -855,6 +1018,7 @@ export function startAdminServer(
   fanboxSupporterComparisonService?: FanboxSupporterComparisonService,
   fanboxSupporterImportService?: FanboxSupporterImportService,
   existingSupporterMigrationService?: ExistingSupporterMigrationService,
+  lotteryLevelService?: LotteryLevelService,
 ): Server {
   validateListenPort(port);
   const server = createAdminServer(
@@ -865,6 +1029,7 @@ export function startAdminServer(
     fanboxSupporterComparisonService,
     fanboxSupporterImportService,
     existingSupporterMigrationService,
+    lotteryLevelService,
   );
   server.listen(port, ADMIN_HOST);
   return server;
@@ -926,6 +1091,9 @@ export function startProductionAdminServer(
 
   try {
     const supporterListService = createService(store);
+    const createLotteryService =
+      dependencies.createLotteryLevelService ?? createLotteryLevelService;
+    const lotteryLevelService = createLotteryService(store);
     const createDeliveryService =
       dependencies.createSupporterPortalDeliveryService ??
       createSupporterPortalDeliveryService;
@@ -965,6 +1133,7 @@ export function startProductionAdminServer(
       fanboxSupporterComparisonService,
       fanboxSupporterImportService,
       existingSupporterMigrationService,
+      lotteryLevelService,
     );
     server.once("close", closeStore);
 

@@ -21,6 +21,7 @@ import type {
   FanboxPdfSupporterComparison,
   FanboxSupporterImportService,
   FanboxSupporterComparisonService,
+  LotteryLevelService,
   SupporterPortalDeliveryService,
   SupporterPortalLinkService,
   SupporterListItem,
@@ -28,6 +29,8 @@ import type {
 } from "@sayosomi/application";
 import {
   DuplicateFanboxRelationshipError,
+  StaleMonthError,
+  SupporterNotFoundError,
   type LocalStore,
 } from "@sayosomi/storage";
 import {
@@ -361,6 +364,12 @@ function createExistingSupporterMigrationService(
   return {
     registerExistingSupporter: implementation,
   } as unknown as ExistingSupporterMigrationService;
+}
+
+function createLotteryLevelService(
+  implementation: LotteryLevelService["recordLotteryResults"],
+): LotteryLevelService {
+  return { recordLotteryResults: implementation } as unknown as LotteryLevelService;
 }
 
 function expectCommonSecurityHeaders(headers: IncomingHttpHeaders): void {
@@ -734,6 +743,317 @@ describe("existing supporter migration route", () => {
     } finally {
       await closeServer(duplicateServer);
       await closeServer(failureServer);
+    }
+  });
+});
+
+describe("lottery results route", () => {
+  const occurredAt = "2026-09-08T09:00:00.000Z";
+  const participants = [
+    { supporterId: "  exact supporter id  ", outcome: "win" as const },
+    { supporterId: "synthetic-supporter-2", outcome: "loss" as const },
+  ];
+  const validBody = JSON.stringify({ participants, occurredAt });
+
+  it("delegates one valid request with exact ordered input and a canonical Date", async () => {
+    const recordLotteryResults = vi.fn();
+    const lotteryServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createLotteryLevelService(recordLotteryResults),
+    );
+    const lotteryPort = await listenOnEphemeralPort(lotteryServer);
+
+    try {
+      const response = await requestOnPort(
+        lotteryPort,
+        "POST",
+        "/api/lottery-results",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toBe(
+        "application/json; charset=UTF-8",
+      );
+      expectCommonSecurityHeaders(response.headers);
+      expect(response.body).toBe('{"status":"ok"}');
+      expect(recordLotteryResults).toHaveBeenCalledTimes(1);
+      const [receivedParticipants, receivedOccurredAt] =
+        recordLotteryResults.mock.calls[0] ?? [];
+      expect(receivedParticipants).toEqual(participants);
+      expect(receivedParticipants?.[0]?.supporterId).toBe(
+        "  exact supporter id  ",
+      );
+      expect(receivedOccurredAt).toBeInstanceOf(Date);
+      expect((receivedOccurredAt as Date).toISOString()).toBe(occurredAt);
+    } finally {
+      await closeServer(lotteryServer);
+    }
+  });
+
+  it("rejects invalid JSON envelopes before calling the lottery service", async () => {
+    const recordLotteryResults = vi.fn();
+    const lotteryServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createLotteryLevelService(recordLotteryResults),
+    );
+    const lotteryPort = await listenOnEphemeralPort(lotteryServer);
+    const invalidBodies = [
+      "{not-json",
+      JSON.stringify({ participants }),
+      JSON.stringify({ participants, occurredAt, extra: "private" }),
+      JSON.stringify([]),
+      JSON.stringify(null),
+      JSON.stringify({ participants: {}, occurredAt }),
+      JSON.stringify({ participants: [], occurredAt }),
+      JSON.stringify({ participants: [null], occurredAt }),
+      JSON.stringify({ participants: [[]], occurredAt }),
+      JSON.stringify({ participants: ["participant"], occurredAt }),
+      JSON.stringify({ participants: [1], occurredAt }),
+      JSON.stringify({ participants: [{}], occurredAt }),
+      JSON.stringify({ participants: [{ supporterId: "id" }], occurredAt }),
+      JSON.stringify({ participants: [{ outcome: "win" }], occurredAt }),
+      JSON.stringify({
+        participants: [{ supporterId: "id", outcome: "win", extra: true }],
+        occurredAt,
+      }),
+      JSON.stringify({
+        participants: [{ supporterId: "   ", outcome: "win" }],
+        occurredAt,
+      }),
+      JSON.stringify({
+        participants: [{ supporterId: "\t\n", outcome: "loss" }],
+        occurredAt,
+      }),
+      JSON.stringify({
+        participants: [{ supporterId: "id", outcome: "draw" }],
+        occurredAt,
+      }),
+      JSON.stringify({
+        participants: [
+          { supporterId: "duplicate", outcome: "win" },
+          { supporterId: "duplicate", outcome: "loss" },
+        ],
+        occurredAt,
+      }),
+      JSON.stringify({
+        participants,
+        occurredAt: 123,
+      }),
+      JSON.stringify({
+        participants,
+        occurredAt: null,
+      }),
+      JSON.stringify({
+        participants,
+        occurredAt: "not-a-timestamp",
+      }),
+      JSON.stringify({
+        participants,
+        occurredAt: "2026-09-08T09:00:00.000+00:00",
+      }),
+      JSON.stringify({
+        participants,
+        occurredAt: "2026-09-08T09:00:00Z",
+      }),
+      JSON.stringify({
+        participants,
+        occurredAt: "2026-02-30T09:00:00.000Z",
+      }),
+      JSON.stringify({
+        participants,
+        occurredAt: " 2026-09-08T09:00:00.000Z",
+      }),
+    ];
+
+    try {
+      for (const body of invalidBodies) {
+        const response = await requestOnPort(
+          lotteryPort,
+          "POST",
+          "/api/lottery-results",
+          body,
+        );
+
+        expect(response.statusCode).toBe(400);
+        expect(response.headers["content-type"]).toBe(
+          "application/json; charset=UTF-8",
+        );
+        expectCommonSecurityHeaders(response.headers);
+        expect(response.body).toBe('{"error":"invalid_request"}');
+      }
+      expect(recordLotteryResults).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(lotteryServer);
+    }
+  });
+
+  it.each(["GET", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])(
+    "returns 405 and Allow: POST for %s",
+    async (method) => {
+      const response = await request(method, "/api/lottery-results", validBody);
+
+      expect(response.statusCode).toBe(405);
+      expect(response.headers.allow).toBe("POST");
+    },
+  );
+
+  it("maps unavailable, conflict, and unexpected service failures generically", async () => {
+    const unavailable = await request(
+      "POST",
+      "/api/lottery-results",
+      validBody,
+    );
+    const conflictServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createLotteryLevelService(() => {
+        throw new SupporterNotFoundError("private-supporter-id");
+      }),
+    );
+    const staleServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createLotteryLevelService(() => {
+        throw new StaleMonthError("2026-08", "2026-09");
+      }),
+    );
+    const failureServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createLotteryLevelService(() => {
+        throw new Error(
+          "SQL failed for /private/admin.sqlite private-supporter-id operation-id month-key",
+        );
+      }),
+    );
+    const [conflictPort, stalePort, failurePort] = await Promise.all([
+      listenOnEphemeralPort(conflictServer),
+      listenOnEphemeralPort(staleServer),
+      listenOnEphemeralPort(failureServer),
+    ]);
+
+    try {
+      const conflict = await requestOnPort(
+        conflictPort,
+        "POST",
+        "/api/lottery-results",
+        validBody,
+      );
+      const stale = await requestOnPort(
+        stalePort,
+        "POST",
+        "/api/lottery-results",
+        validBody,
+      );
+      const failure = await requestOnPort(
+        failurePort,
+        "POST",
+        "/api/lottery-results",
+        validBody,
+      );
+
+      expect(unavailable.statusCode).toBe(500);
+      expect(unavailable.body).toBe('{"error":"lottery_level_unavailable"}');
+      expect(conflict.statusCode).toBe(409);
+      expect(conflict.body).toBe('{"error":"lottery_result_conflict"}');
+      expect(stale.statusCode).toBe(409);
+      expect(stale.body).toBe('{"error":"lottery_result_conflict"}');
+      expect(failure.statusCode).toBe(500);
+      expect(failure.body).toBe('{"error":"lottery_result_failed"}');
+      for (const body of [
+        unavailable.body,
+        conflict.body,
+        stale.body,
+        failure.body,
+      ]) {
+        expect(body).not.toContain("private-supporter-id");
+        expect(body).not.toContain("2026-08");
+        expect(body).not.toContain("2026-09");
+        expect(body).not.toContain("operation-id");
+        expect(body).not.toContain("month-key");
+        expect(body).not.toContain("admin.sqlite");
+        expect(body).not.toContain("SQL");
+      }
+    } finally {
+      await closeServer(conflictServer);
+      await closeServer(staleServer);
+      await closeServer(failureServer);
+    }
+  });
+
+  it("does not expose application result data on success", async () => {
+    const resultServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createLotteryLevelService(() => [
+        {
+          supporterId: "private-supporter-id",
+          outcome: "win",
+          state: {
+            supporterId: "private-supporter-id",
+            monthKey: "2026-09",
+            level: 4,
+            supporting: true,
+            updatedAt: "2026-09-08T09:00:00.000Z",
+          },
+        },
+      ] as never),
+    );
+    const resultPort = await listenOnEphemeralPort(resultServer);
+
+    try {
+      const response = await requestOnPort(
+        resultPort,
+        "POST",
+        "/api/lottery-results",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toBe('{"status":"ok"}');
+      for (const value of [
+        "private-supporter-id",
+        "2026-09",
+        "2026-09-08T09:00:00.000Z",
+        "level",
+      ]) {
+        expect(response.body).not.toContain(value);
+      }
+    } finally {
+      await closeServer(resultServer);
     }
   });
 });
@@ -1801,6 +2121,11 @@ describe("admin server configuration", () => {
       expect(suppliedStore).toBe(store);
       return migrationService;
     });
+    const lotteryService = createLotteryLevelService(vi.fn());
+    const createLotteryService = vi.fn((suppliedStore: LocalStore) => {
+      expect(suppliedStore).toBe(store);
+      return lotteryService;
+    });
 
     try {
       productionServer = startProductionAdminServer({
@@ -1811,6 +2136,7 @@ describe("admin server configuration", () => {
         createFanboxSupporterComparisonService: createComparisonService,
         createFanboxSupporterImportService: createImportService,
         createExistingSupporterMigrationService: createMigrationService,
+        createLotteryLevelService: createLotteryService,
       });
       await new Promise<void>((resolve, reject) => {
         productionServer?.once("listening", () => resolve());
@@ -1839,6 +2165,7 @@ describe("admin server configuration", () => {
       expect(createComparisonService).toHaveBeenCalledTimes(1);
       expect(createImportService).toHaveBeenCalledTimes(1);
       expect(createMigrationService).toHaveBeenCalledTimes(1);
+      expect(createLotteryService).toHaveBeenCalledTimes(1);
     } finally {
       if (productionServer !== undefined && productionServer.listening) {
         await closeServer(productionServer);
@@ -2025,6 +2352,11 @@ describe("admin server configuration", () => {
       expect(suppliedStore).toBe(store);
       return migrationService;
     });
+    const lotteryService = createLotteryLevelService(vi.fn());
+    const createLotteryService = vi.fn((suppliedStore: LocalStore) => {
+      expect(suppliedStore).toBe(store);
+      return lotteryService;
+    });
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     let productionServer: Server | undefined;
 
@@ -2040,6 +2372,7 @@ describe("admin server configuration", () => {
         createSupporterPortalLinkService: createPortalService,
         createSupporterPortalDeliveryService: createDeliveryService,
         createExistingSupporterMigrationService: createMigrationService,
+        createLotteryLevelService: createLotteryService,
       });
       await new Promise<void>((resolve, reject) => {
         productionServer?.once("listening", () => resolve());
@@ -2049,6 +2382,7 @@ describe("admin server configuration", () => {
       expect(createPortalService).toHaveBeenCalledTimes(1);
       expect(createDeliveryService).toHaveBeenCalledTimes(1);
       expect(createMigrationService).toHaveBeenCalledTimes(1);
+      expect(createLotteryService).toHaveBeenCalledTimes(1);
       expect(logSpy.mock.calls.flat().join(" ")).not.toContain(portalOrigin);
       expect(logSpy.mock.calls.flat().join(" ")).not.toContain(syncApiToken);
     } finally {
