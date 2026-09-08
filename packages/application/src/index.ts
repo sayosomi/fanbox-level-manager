@@ -109,3 +109,13 @@ export type {
   MonthEndSource,
   MonthEndSupporterResult,
 } from "./month-end-processing-service.js";
+export {
+  EncryptedBackupAuthenticationError,
+  EncryptedBackupFormatError,
+  createEncryptedBackupCodec,
+} from "./encrypted-backup-codec.js";
+export type {
+  BackupNonceGenerator,
+  CreateEncryptedBackupCodecOptions,
+  EncryptedBackupCodec,
+} from "./encrypted-backup-codec.js";
