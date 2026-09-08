@@ -271,6 +271,24 @@ function isPdfPresentSupporterStatus(value) {
   return typeof value === "string" && PDF_PRESENT_SUPPORTER_STATUSES.has(value);
 }
 
+function validateExistingSupporterMigrationResponse(value) {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["status"]) ||
+    value.status !== "ok"
+  ) {
+    throw new TypeError("invalid existing supporter migration response");
+  }
+}
+
+function isExistingSupporterMigrationConflictResponse(value) {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["error"]) &&
+    value.error === "supporter_already_registered"
+  );
+}
+
 function validatePdfInspectionResponse(value) {
   if (
     !isRecord(value) ||
@@ -420,7 +438,59 @@ function validatePdfInspectionResponse(value) {
   };
 }
 
-function renderPdfInspectionRelationship(relationship, comparison, index) {
+function renderExistingSupporterMigrationControl(
+  relationship,
+  pdfControls,
+) {
+  const migration = document.createElement("div");
+  const label = document.createElement("label");
+  const levelInput = document.createElement("input");
+  const button = document.createElement("button");
+  const status = document.createElement("p");
+  const eligible = isNonBlankString(relationship.displayNameCandidate);
+  const control = {
+    button,
+    levelInput,
+    eligible,
+    inFlight: false,
+    succeeded: false,
+  };
+
+  label.textContent = "旧管理レベル";
+  levelInput.type = "number";
+  levelInput.min = "0";
+  levelInput.step = "1";
+  levelInput.value = "";
+  button.type = "button";
+  button.textContent = "旧管理レベルで登録";
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+
+  if (!eligible) {
+    status.textContent =
+      "表示名候補が必要なため、旧管理レベルで登録できません。";
+  }
+
+  pdfControls.state.migrationControls.push(control);
+  button.addEventListener("click", () => {
+    void migrateExistingSupporter(
+      relationship,
+      levelInput,
+      status,
+      control,
+      pdfControls,
+    );
+  });
+  migration.replaceChildren(label, levelInput, button, status);
+  return migration;
+}
+
+function renderPdfInspectionRelationship(
+  relationship,
+  comparison,
+  index,
+  pdfControls,
+) {
   const item = document.createElement("section");
   const heading = document.createElement("h3");
   const page = document.createElement("p");
@@ -446,11 +516,27 @@ function renderPdfInspectionRelationship(relationship, comparison, index) {
     relationship.displayNameCandidate === null
       ? "表示名候補を確定できません。"
       : \`表示名候補: \${relationship.displayNameCandidate}\`;
+  const migrationControl =
+    comparison.status === "new"
+      ? renderExistingSupporterMigrationControl(relationship, pdfControls)
+      : null;
 
   if (relationship.textRuns.length === 0) {
     const empty = document.createElement("p");
     empty.textContent = "重なるテキストはありません。";
-    item.replaceChildren(heading, page, classification, storedName, displayName, empty);
+    if (migrationControl === null) {
+      item.replaceChildren(heading, page, classification, storedName, displayName, empty);
+    } else {
+      item.replaceChildren(
+        heading,
+        page,
+        classification,
+        storedName,
+        displayName,
+        empty,
+        migrationControl,
+      );
+    }
     return item;
   }
 
@@ -462,7 +548,19 @@ function renderPdfInspectionRelationship(relationship, comparison, index) {
   }
 
   runs.replaceChildren(...runItems);
-  item.replaceChildren(heading, page, classification, storedName, displayName, runs);
+  if (migrationControl === null) {
+    item.replaceChildren(heading, page, classification, storedName, displayName, runs);
+  } else {
+    item.replaceChildren(
+      heading,
+      page,
+      classification,
+      storedName,
+      displayName,
+      runs,
+      migrationControl,
+    );
+  }
   return item;
 }
 
@@ -499,7 +597,7 @@ function renderPdfAbsentSupporters(absentSupporters) {
   return section;
 }
 
-function showPdfInspectionResult(status, result, inspection) {
+function showPdfInspectionResult(status, result, inspection, pdfControls) {
   const counts = {
     new: 0,
     continuing: 0,
@@ -517,12 +615,14 @@ function showPdfInspectionResult(status, result, inspection) {
     empty.textContent = "関係リンクはありません。";
     relationshipEvidence.push(empty);
   } else {
+    pdfControls.state.migrationControls = [];
     relationshipEvidence.push(
       ...inspection.relationshipLinks.map((relationship, index) =>
         renderPdfInspectionRelationship(
           relationship,
           inspection.comparison.presentSupporters[index],
           index,
+          pdfControls,
         ),
       ),
     );
@@ -541,6 +641,136 @@ function updatePdfActionButtons(fileInput, inspectionButton, importButton, state
     state.actionActive ||
     state.previewedFile === null ||
     state.previewedFile !== state.selectedFile;
+  for (const control of state.migrationControls) {
+    control.button.disabled =
+      state.actionActive ||
+      control.inFlight ||
+      control.succeeded ||
+      !control.eligible;
+    control.levelInput.disabled =
+      state.actionActive || control.inFlight || control.succeeded;
+  }
+}
+
+function parseExistingSupporterMigrationLevel(value) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+
+  const level = Number(value);
+  return isNonNegativeInteger(level) ? level : null;
+}
+
+async function migrateExistingSupporter(
+  relationship,
+  levelInput,
+  status,
+  control,
+  pdfControls,
+) {
+  const { state, fileInput, inspectionButton, importButton, listStatus, supporterList } =
+    pdfControls;
+  if (
+    state.actionActive ||
+    control.inFlight ||
+    control.succeeded ||
+    !control.eligible
+  ) {
+    return;
+  }
+
+  const currentLevel = parseExistingSupporterMigrationLevel(levelInput.value);
+  if (currentLevel === null) {
+    status.textContent =
+      "旧管理レベルは0以上の整数を入力してください。";
+    return;
+  }
+
+  if (!isNonBlankString(relationship.displayNameCandidate)) {
+    status.textContent =
+      "表示名候補が必要なため、旧管理レベルで登録できません。";
+    control.eligible = false;
+    updatePdfActionButtons(
+      fileInput,
+      inspectionButton,
+      importButton,
+      state,
+    );
+    return;
+  }
+
+  if (
+    !window.confirm(
+      \`表示されている支援者「\${relationship.displayNameCandidate}」を、入力した旧管理用抽選レベル \${currentLevel} で登録します。続行しますか？\`,
+    )
+  ) {
+    return;
+  }
+
+  state.actionActive = true;
+  control.inFlight = true;
+  updatePdfActionButtons(
+    fileInput,
+    inspectionButton,
+    importButton,
+    state,
+  );
+  status.textContent = "旧管理レベルで登録しています。";
+
+  try {
+    const response = await fetch("/api/supporters/migrate-existing", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        fanboxRelationshipId: relationship.relationshipId,
+        displayName: relationship.displayNameCandidate,
+        currentLevel,
+      }),
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    let responseBody;
+    try {
+      responseBody = await response.json();
+    } catch {
+      throw new Error("invalid existing supporter migration response");
+    }
+
+    if (response.status === 409) {
+      if (isExistingSupporterMigrationConflictResponse(responseBody)) {
+        status.textContent =
+          "すでに登録済みの可能性があります。一覧を確認してから再試行してください。";
+        return;
+      }
+      throw new Error("invalid existing supporter migration conflict");
+    }
+    if (!response.ok) {
+      throw new Error("existing supporter migration request failed");
+    }
+
+    validateExistingSupporterMigrationResponse(responseBody);
+    control.succeeded = true;
+    status.textContent =
+      "旧管理レベルで登録しました。反映時に現在のローカル状態で再判定されます。";
+    if (listStatus !== null && supporterList !== null) {
+      await loadSupporters(listStatus, supporterList);
+    }
+  } catch {
+    status.textContent = "旧管理レベルで登録できませんでした。";
+  } finally {
+    control.inFlight = false;
+    state.actionActive = false;
+    updatePdfActionButtons(
+      fileInput,
+      inspectionButton,
+      importButton,
+      state,
+    );
+  }
 }
 
 function invalidatePdfPreview(
@@ -553,6 +783,7 @@ function invalidatePdfPreview(
 ) {
   state.selectedFile = fileInput.files?.[0] ?? null;
   state.previewedFile = null;
+  state.migrationControls = [];
   result.replaceChildren();
   status.textContent =
     state.selectedFile === null ? "" : "PDFを確認してください。";
@@ -571,6 +802,8 @@ async function inspectSelectedPdf(
   status,
   result,
   state,
+  listStatus,
+  supporterList,
 ) {
   if (state.actionActive) {
     return;
@@ -592,6 +825,7 @@ async function inspectSelectedPdf(
 
   state.selectedFile = file;
   state.previewedFile = null;
+  state.migrationControls = [];
   state.actionActive = true;
   updatePdfActionButtons(
     fileInput,
@@ -623,7 +857,14 @@ async function inspectSelectedPdf(
       throw new Error("PDF selection changed during inspection");
     }
 
-    showPdfInspectionResult(status, result, inspection);
+    showPdfInspectionResult(status, result, inspection, {
+      fileInput,
+      inspectionButton,
+      importButton,
+      state,
+      listStatus,
+      supporterList,
+    });
     state.previewedFile = file;
   } catch {
     state.previewedFile = null;
@@ -703,6 +944,7 @@ async function importSelectedPdf(
 
     const importResult = validatePdfImportResponse(await response.json());
     state.previewedFile = null;
+    state.migrationControls = [];
     result.replaceChildren();
     status.textContent =
       \`支援者状態を反映しました。支援者数: \${importResult.presentSupporterCount}人、取込日時: \${importResult.importedAt}\`;
@@ -944,6 +1186,7 @@ if (
     actionActive: false,
     selectedFile: pdfInspectionFile.files?.[0] ?? null,
     previewedFile: null,
+    migrationControls: [],
   };
   pdfInspectionFile.addEventListener("change", () => {
     invalidatePdfPreview(
@@ -963,6 +1206,8 @@ if (
       pdfInspectionStatus,
       pdfInspectionResult,
       pdfState,
+      listStatus,
+      supporterList,
     );
   });
   pdfImportButton.addEventListener("click", () => {

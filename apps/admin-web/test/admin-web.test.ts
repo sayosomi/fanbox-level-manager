@@ -14,6 +14,8 @@ import {
 } from "@sayosomi/application";
 import type {
   CreateSupporterPortalLinkServiceOptions,
+  ExistingSupporterMigrationInput,
+  ExistingSupporterMigrationService,
   FanboxPdfInspection,
   FanboxPdfInspectionService,
   FanboxPdfSupporterComparison,
@@ -24,7 +26,10 @@ import type {
   SupporterListItem,
   SupporterListService,
 } from "@sayosomi/application";
-import type { LocalStore } from "@sayosomi/storage";
+import {
+  DuplicateFanboxRelationshipError,
+  type LocalStore,
+} from "@sayosomi/storage";
 import {
   ADMIN_HOST,
   createAdminServer,
@@ -350,6 +355,14 @@ function createPdfImportService(
   return { applyInspection: implementation };
 }
 
+function createExistingSupporterMigrationService(
+  implementation: (input: ExistingSupporterMigrationInput) => void,
+): ExistingSupporterMigrationService {
+  return {
+    registerExistingSupporter: implementation,
+  } as unknown as ExistingSupporterMigrationService;
+}
+
 function expectCommonSecurityHeaders(headers: IncomingHttpHeaders): void {
   expect(headers["cache-control"]).toBe("no-store");
   expect(headers["x-content-type-options"]).toBe("nosniff");
@@ -521,6 +534,206 @@ describe("admin web server", () => {
       expect(response.body).not.toContain("/private/admin.sqlite");
     } finally {
       await closeServer(failingServer);
+    }
+  });
+});
+
+describe("existing supporter migration route", () => {
+  const validBody = JSON.stringify({
+    fanboxRelationshipId: "legacy_relationship_52",
+    displayName: "  Legacy synthetic display name  ",
+    currentLevel: 4,
+  });
+
+  it("passes the exact migration input and returns privacy-minimized success", async () => {
+    const inputs: ExistingSupporterMigrationInput[] = [];
+    const migrationService = createExistingSupporterMigrationService((input) => {
+      inputs.push(input);
+    });
+    const migrationServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      migrationService,
+    );
+    const migrationPort = await listenOnEphemeralPort(migrationServer);
+
+    try {
+      const response = await requestOnPort(
+        migrationPort,
+        "POST",
+        "/api/supporters/migrate-existing",
+        validBody,
+        { "Content-Type": "application/json" },
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toBe('{"status":"ok"}');
+      expect(JSON.parse(response.body)).toEqual({ status: "ok" });
+      expectCommonSecurityHeaders(response.headers);
+      expect(inputs).toHaveLength(1);
+      expect(inputs[0]?.fanboxRelationshipId).toBe("legacy_relationship_52");
+      expect(inputs[0]?.displayName).toBe("  Legacy synthetic display name  ");
+      expect(inputs[0]?.currentLevel).toBe(4);
+      expect(inputs[0]?.supporting).toBe(true);
+      expect(inputs[0]?.migratedAt).toBeInstanceOf(Date);
+      expect(Number.isNaN(inputs[0]?.migratedAt.getTime())).toBe(false);
+    } finally {
+      await closeServer(migrationServer);
+    }
+  });
+
+  it.each([
+    "{not-json",
+    JSON.stringify({ displayName: "name", currentLevel: 1 }),
+    JSON.stringify({
+      fanboxRelationshipId: "relationship",
+      displayName: "name",
+      currentLevel: 1,
+      extra: "not accepted",
+    }),
+    JSON.stringify({
+      fanboxRelationshipId: "relationship.invalid",
+      displayName: "name",
+      currentLevel: 1,
+    }),
+    JSON.stringify({
+      fanboxRelationshipId: "relationship",
+      displayName: "   ",
+      currentLevel: 1,
+    }),
+    JSON.stringify({
+      fanboxRelationshipId: "relationship",
+      displayName: "name",
+      currentLevel: -1,
+    }),
+    JSON.stringify({
+      fanboxRelationshipId: "relationship",
+      displayName: "name",
+      currentLevel: 1.5,
+    }),
+    '{"fanboxRelationshipId":"relationship","displayName":"name","currentLevel":1e999}',
+    JSON.stringify({
+      fanboxRelationshipId: "relationship",
+      displayName: "name",
+      currentLevel: "1",
+    }),
+  ])("rejects invalid request %s without calling the service", async (body) => {
+    const registerExistingSupporter = vi.fn();
+    const migrationServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        registerExistingSupporter,
+      } as unknown as ExistingSupporterMigrationService,
+    );
+    const migrationPort = await listenOnEphemeralPort(migrationServer);
+
+    try {
+      const response = await requestOnPort(
+        migrationPort,
+        "POST",
+        "/api/supporters/migrate-existing",
+        body,
+      );
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toBe('{"error":"invalid_request"}');
+      expect(registerExistingSupporter).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(migrationServer);
+    }
+  });
+
+  it.each(["GET", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])(
+    "returns 405 and Allow: POST for %s",
+    async (method) => {
+      const response = await request(
+        method,
+        "/api/supporters/migrate-existing",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(405);
+      expect(response.headers.allow).toBe("POST");
+    },
+  );
+
+  it("returns generic unavailable, duplicate, and unexpected failure responses", async () => {
+    const unavailable = await request(
+      "POST",
+      "/api/supporters/migrate-existing",
+      validBody,
+    );
+    const duplicateServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createExistingSupporterMigrationService(() => {
+        throw new DuplicateFanboxRelationshipError("legacy_relationship_52");
+      }),
+    );
+    const failureServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createExistingSupporterMigrationService(() => {
+        throw new Error(
+          "SQL failed for /private/admin.sqlite legacy_relationship_52 operation-id month-key",
+        );
+      }),
+    );
+    const duplicatePort = await listenOnEphemeralPort(duplicateServer);
+    const failurePort = await listenOnEphemeralPort(failureServer);
+
+    try {
+      const duplicate = await requestOnPort(
+        duplicatePort,
+        "POST",
+        "/api/supporters/migrate-existing",
+        validBody,
+      );
+      const failure = await requestOnPort(
+        failurePort,
+        "POST",
+        "/api/supporters/migrate-existing",
+        validBody,
+      );
+
+      expect(unavailable.statusCode).toBe(500);
+      expect(unavailable.body).toBe(
+        '{"error":"existing_supporter_migration_unavailable"}',
+      );
+      expect(duplicate.statusCode).toBe(409);
+      expect(duplicate.body).toBe('{"error":"supporter_already_registered"}');
+      expect(failure.statusCode).toBe(500);
+      expect(failure.body).toBe(
+        '{"error":"existing_supporter_migration_failed"}',
+      );
+      for (const body of [unavailable.body, duplicate.body, failure.body]) {
+        expect(body).not.toContain("legacy_relationship_52");
+        expect(body).not.toContain("Legacy synthetic display name");
+        expect(body).not.toContain("operation-id");
+        expect(body).not.toContain("month-key");
+        expect(body).not.toContain("admin.sqlite");
+        expect(body).not.toContain("SQL");
+      }
+    } finally {
+      await closeServer(duplicateServer);
+      await closeServer(failureServer);
     }
   });
 });
@@ -1583,6 +1796,11 @@ describe("admin server configuration", () => {
       expect(suppliedStore).toBe(store);
       return sampleSupporterListService;
     });
+    const migrationService = createExistingSupporterMigrationService(() => {});
+    const createMigrationService = vi.fn((suppliedStore: LocalStore) => {
+      expect(suppliedStore).toBe(store);
+      return migrationService;
+    });
 
     try {
       productionServer = startProductionAdminServer({
@@ -1592,6 +1810,7 @@ describe("admin server configuration", () => {
         createFanboxPdfInspectionService: createInspectionService,
         createFanboxSupporterComparisonService: createComparisonService,
         createFanboxSupporterImportService: createImportService,
+        createExistingSupporterMigrationService: createMigrationService,
       });
       await new Promise<void>((resolve, reject) => {
         productionServer?.once("listening", () => resolve());
@@ -1619,6 +1838,7 @@ describe("admin server configuration", () => {
       expect(createInspectionService).toHaveBeenCalledTimes(1);
       expect(createComparisonService).toHaveBeenCalledTimes(1);
       expect(createImportService).toHaveBeenCalledTimes(1);
+      expect(createMigrationService).toHaveBeenCalledTimes(1);
     } finally {
       if (productionServer !== undefined && productionServer.listening) {
         await closeServer(productionServer);
@@ -1800,6 +2020,11 @@ describe("admin server configuration", () => {
       expect(suppliedStore).toBe(store);
       return deliveryService;
     });
+    const migrationService = createExistingSupporterMigrationService(() => {});
+    const createMigrationService = vi.fn((suppliedStore: LocalStore) => {
+      expect(suppliedStore).toBe(store);
+      return migrationService;
+    });
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     let productionServer: Server | undefined;
 
@@ -1814,6 +2039,7 @@ describe("admin server configuration", () => {
         createSupporterListService: () => sampleSupporterListService,
         createSupporterPortalLinkService: createPortalService,
         createSupporterPortalDeliveryService: createDeliveryService,
+        createExistingSupporterMigrationService: createMigrationService,
       });
       await new Promise<void>((resolve, reject) => {
         productionServer?.once("listening", () => resolve());
@@ -1822,6 +2048,7 @@ describe("admin server configuration", () => {
 
       expect(createPortalService).toHaveBeenCalledTimes(1);
       expect(createDeliveryService).toHaveBeenCalledTimes(1);
+      expect(createMigrationService).toHaveBeenCalledTimes(1);
       expect(logSpy.mock.calls.flat().join(" ")).not.toContain(portalOrigin);
       expect(logSpy.mock.calls.flat().join(" ")).not.toContain(syncApiToken);
     } finally {
@@ -1886,6 +2113,21 @@ describe("admin server configuration", () => {
     );
     expect(ADMIN_SCRIPT).toContain("PDF_PRESENT_SUPPORTER_STATUSES");
     expect(ADMIN_SCRIPT).toContain("isPdfPresentSupporterStatus");
+    expect(ADMIN_SCRIPT).toContain(
+      'fetch("/api/supporters/migrate-existing", {',
+    );
+    expect(ADMIN_SCRIPT).toContain('"Content-Type": "application/json"');
+    expect(ADMIN_SCRIPT).toContain('cache: "no-store"');
+    expect(ADMIN_SCRIPT).toContain('credentials: "omit"');
+    expect(ADMIN_SCRIPT).toContain('redirect: "error"');
+    expect(ADMIN_SCRIPT).toContain('referrerPolicy: "no-referrer"');
+    expect(ADMIN_SCRIPT).toContain("旧管理レベル");
+    expect(ADMIN_SCRIPT).toContain("旧管理レベルで登録");
+    expect(ADMIN_SCRIPT).toContain("comparison.status === \"new\"");
+    expect(ADMIN_SCRIPT).toContain("value.status !== \"ok\"");
+    expect(ADMIN_SCRIPT).toContain(
+      "isExistingSupporterMigrationConflictResponse",
+    );
     expect(ADMIN_SCRIPT).toContain(
       'hasExactKeys(value.comparison, ["presentSupporters", "absentSupporters"])',
     );
@@ -2087,6 +2329,7 @@ describe("admin server configuration", () => {
     type FetchCall = Readonly<{
       url: string;
       body: unknown;
+      options: Readonly<Record<string, unknown>>;
     }>;
 
     class FakeElement {
@@ -2095,6 +2338,10 @@ describe("admin server configuration", () => {
       disabled = false;
       files: readonly unknown[] = [];
       textContent = "";
+      type = "";
+      min = "";
+      step = "";
+      value = "";
 
       addEventListener(type: string, listener: FakeListener): void {
         this.listeners.set(type, listener);
@@ -2138,13 +2385,34 @@ describe("admin server configuration", () => {
       createElement: (): FakeElement => new FakeElement(),
     };
     const inspectionResponseBody = {
-      pageCount: 1,
+      pageCount: 2,
       relationshipLinks: [
         {
           pageNumber: 1,
           relationshipId: "synthetic_relationship",
-          displayNameCandidate: null,
+          displayNameCandidate: "  exact synthetic candidate  ",
           rect: [0, 0, 10, 10],
+          textRuns: [],
+        },
+        {
+          pageNumber: 1,
+          relationshipId: "continuing_synthetic_relationship",
+          displayNameCandidate: "continuing synthetic candidate",
+          rect: [10, 10, 20, 20],
+          textRuns: [],
+        },
+        {
+          pageNumber: 2,
+          relationshipId: "returning_synthetic_relationship",
+          displayNameCandidate: "returning synthetic candidate",
+          rect: [20, 20, 30, 30],
+          textRuns: [],
+        },
+        {
+          pageNumber: 1,
+          relationshipId: "blank_synthetic_relationship",
+          displayNameCandidate: "   ",
+          rect: [30, 30, 40, 40],
           textRuns: [],
         },
       ],
@@ -2155,6 +2423,21 @@ describe("admin server configuration", () => {
             relationshipId: "synthetic_relationship",
             storedDisplayName: null,
           },
+          {
+            status: "continuing",
+            relationshipId: "continuing_synthetic_relationship",
+            storedDisplayName: "continuing stored name",
+          },
+          {
+            status: "returning",
+            relationshipId: "returning_synthetic_relationship",
+            storedDisplayName: "returning stored name",
+          },
+          {
+            status: "new",
+            relationshipId: "blank_synthetic_relationship",
+            storedDisplayName: null,
+          },
         ],
         absentSupporters: [],
       },
@@ -2162,14 +2445,19 @@ describe("admin server configuration", () => {
     const fetchCalls: FetchCall[] = [];
     const inspectionResolvers: Array<(response: FakeResponse) => void> = [];
     const importResolvers: Array<(response: FakeResponse) => void> = [];
+    const migrationResolvers: Array<(response: FakeResponse) => void> = [];
+    const confirmMock = vi.fn(() => true);
     const response = (status: number, body: unknown): FakeResponse => ({
       ok: status >= 200 && status < 300,
       status,
       json: async () => body,
     });
     const fetchMock = vi.fn(
-      (url: string, options: { body?: unknown } = {}): Promise<FakeResponse> => {
-        fetchCalls.push({ url, body: options.body });
+      (
+        url: string,
+        options: Readonly<Record<string, unknown>> = {},
+      ): Promise<FakeResponse> => {
+        fetchCalls.push({ url, body: options.body, options });
         if (url === "/api/supporters") {
           return Promise.resolve(response(200, { supporters: [] }));
         }
@@ -2178,6 +2466,9 @@ describe("admin server configuration", () => {
         }
         if (url === "/api/fanbox-pdf/import") {
           return new Promise((resolve) => importResolvers.push(resolve));
+        }
+        if (url === "/api/supporters/migrate-existing") {
+          return new Promise((resolve) => migrationResolvers.push(resolve));
         }
         return Promise.reject(new Error("unexpected synthetic request"));
       },
@@ -2196,6 +2487,9 @@ describe("admin server configuration", () => {
       Set,
       TypeError,
       URL,
+      window: {
+        confirm: confirmMock,
+      },
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -2226,6 +2520,145 @@ describe("admin server configuration", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(importButton.disabled).toBe(false);
     expect(inspectionResult.children.length).toBeGreaterThan(0);
+
+    const newRelationship = inspectionResult.children[0];
+    expect(newRelationship).toBeDefined();
+    if (newRelationship === undefined) {
+      throw new Error("synthetic new relationship was not rendered");
+    }
+    const migrationRow =
+      newRelationship.children[newRelationship.children.length - 1];
+    expect(migrationRow).toBeDefined();
+    if (migrationRow === undefined) {
+      throw new Error("synthetic migration row was not rendered");
+    }
+    const migrationLevelInput = migrationRow.children[1];
+    const migrationButton = migrationRow.children[2];
+    const migrationStatus = migrationRow.children[3];
+    expect(migrationLevelInput?.type).toBe("number");
+    expect(migrationLevelInput?.min).toBe("0");
+    expect(migrationLevelInput?.step).toBe("1");
+    expect(migrationLevelInput?.value).toBe("");
+    expect(migrationButton?.textContent).toBe("旧管理レベルで登録");
+    expect(migrationButton?.disabled).toBe(false);
+    expect(inspectionResult.children[1]?.children).toHaveLength(6);
+    expect(inspectionResult.children[2]?.children).toHaveLength(6);
+    const blankRelationship = inspectionResult.children[3];
+    const blankMigrationRow = blankRelationship?.children.at(-1);
+    expect(blankMigrationRow?.children[0]?.textContent).toBe("旧管理レベル");
+    expect(blankMigrationRow?.children[2]?.disabled).toBe(true);
+    expect(blankMigrationRow?.children[3]?.textContent).toBe(
+      "表示名候補が必要なため、旧管理レベルで登録できません。",
+    );
+
+    for (const invalidLevel of ["", "-1", "1.5"]) {
+      if (migrationLevelInput !== undefined && migrationButton !== undefined) {
+        migrationLevelInput.value = invalidLevel;
+        migrationButton.click();
+      }
+      expect(
+        fetchCalls.filter(
+          ({ url }) => url === "/api/supporters/migrate-existing",
+        ),
+      ).toHaveLength(0);
+      expect(migrationStatus?.textContent).toBe(
+        "旧管理レベルは0以上の整数を入力してください。",
+      );
+    }
+
+    if (migrationLevelInput !== undefined && migrationButton !== undefined) {
+      migrationLevelInput.value = "4";
+      migrationButton.click();
+    }
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(
+      fetchCalls.filter(
+        ({ url }) => url === "/api/supporters/migrate-existing",
+      ),
+    ).toHaveLength(1);
+    const migrationFetchIndex = fetchMock.mock.calls.findIndex(
+      ([url]) => url === "/api/supporters/migrate-existing",
+    );
+    expect(confirmMock.mock.invocationCallOrder[0]).toBeLessThan(
+      fetchMock.mock.invocationCallOrder[migrationFetchIndex] ?? Infinity,
+    );
+    expect(inspectionButton.disabled).toBe(true);
+    expect(importButton.disabled).toBe(true);
+    importButton.click();
+    inspectionButton.click();
+    expect(
+      fetchCalls.filter(
+        ({ url }) => url === "/api/supporters/migrate-existing",
+      ),
+    ).toHaveLength(1);
+    const migrationCall = fetchCalls.find(
+      ({ url }) => url === "/api/supporters/migrate-existing",
+    );
+    expect(migrationCall?.body).toBe(
+      JSON.stringify({
+        fanboxRelationshipId: "synthetic_relationship",
+        displayName: "  exact synthetic candidate  ",
+        currentLevel: 4,
+      }),
+    );
+    expect(migrationCall?.options).toMatchObject({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    migrationResolvers[0]?.(
+      response(409, { error: "supporter_already_registered" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(migrationStatus?.textContent).toBe(
+      "すでに登録済みの可能性があります。一覧を確認してから再試行してください。",
+    );
+    expect(migrationButton?.disabled).toBe(false);
+    expect(importButton.disabled).toBe(false);
+
+    migrationButton?.click();
+    expect(confirmMock).toHaveBeenCalledTimes(2);
+    expect(
+      fetchCalls.filter(
+        ({ url }) => url === "/api/supporters/migrate-existing",
+      ),
+    ).toHaveLength(2);
+    migrationResolvers[1]?.(
+      response(500, { error: "private remote diagnostic" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(migrationStatus?.textContent).toBe(
+      "旧管理レベルで登録できませんでした。",
+    );
+    expect(migrationStatus?.textContent).not.toContain(
+      "private remote diagnostic",
+    );
+    expect(migrationButton?.disabled).toBe(false);
+
+    migrationButton?.click();
+    expect(confirmMock).toHaveBeenCalledTimes(3);
+    expect(
+      fetchCalls.filter(
+        ({ url }) => url === "/api/supporters/migrate-existing",
+      ),
+    ).toHaveLength(3);
+    migrationResolvers[2]?.(response(200, { status: "ok" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(migrationStatus?.textContent).toBe(
+      "旧管理レベルで登録しました。反映時に現在のローカル状態で再判定されます。",
+    );
+    expect(newRelationship.children[2]?.textContent).toBe("分類: 新規");
+    expect(migrationButton?.disabled).toBe(true);
+    expect(importButton.disabled).toBe(false);
+    migrationButton?.click();
+    expect(
+      fetchCalls.filter(
+        ({ url }) => url === "/api/supporters/migrate-existing",
+      ),
+    ).toHaveLength(3);
 
     fileInput.files = [otherFile];
     fileInput.dispatch("change");
@@ -2312,7 +2745,7 @@ describe("admin server configuration", () => {
     expect(inspectionResult.children).toHaveLength(0);
     expect(importButton.disabled).toBe(true);
     expect(fileInput.files[0]).toBe(previewedFile);
-    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(2);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(3);
   });
 
   it("opens the original configured path and closes the production store once", async () => {
