@@ -83,3 +83,13 @@ export type {
   FanboxPdfSupporterComparison,
   FanboxSupporterComparisonService,
 } from "./fanbox-supporter-comparison-service.js";
+export {
+  FanboxSupporterImportBlockedError,
+  FanboxSupporterImportError,
+  createFanboxSupporterImportService,
+} from "./fanbox-supporter-import-service.js";
+export type {
+  FanboxSupporterImportBlockedReason,
+  FanboxSupporterImportResult,
+  FanboxSupporterImportService,
+} from "./fanbox-supporter-import-service.js";

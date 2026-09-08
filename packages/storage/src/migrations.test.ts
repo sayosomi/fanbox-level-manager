@@ -12,6 +12,7 @@ import type { LocalStore } from "./index.js";
 import {
   applyVersionOneMigration,
   applyVersionTwoMigration,
+  applyVersionThreeMigration,
   configureDatabase,
 } from "./migrations.js";
 
@@ -48,7 +49,7 @@ afterEach(() => {
 });
 
 describe("schema migration and connection setup", () => {
-  it("migrates an empty in-memory database to version 3", () => {
+  it("migrates an empty in-memory database to version 4", () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const database = databaseOf(store);
     const tables = database
@@ -62,9 +63,10 @@ describe("schema migration and connection setup", () => {
       .map((row) => (row as { name: string }).name)
       .filter((name) => name !== "sqlite_sequence");
 
-    expect(CURRENT_SCHEMA_VERSION).toBe(3);
-    expect(database.pragma("user_version", { simple: true })).toBe(3);
+    expect(CURRENT_SCHEMA_VERSION).toBe(4);
+    expect(database.pragma("user_version", { simple: true })).toBe(4);
     expect(tables).toEqual([
+      "fanbox_supporter_imports",
       "level_operations",
       "supporter_month_states",
       "supporter_portal_access",
@@ -84,6 +86,57 @@ describe("schema migration and connection setup", () => {
     expect(database.pragma("foreign_keys", { simple: true })).toBe(1);
     expect(database.pragma("synchronous", { simple: true })).toBe(2);
     expect(database.pragma("busy_timeout", { simple: true })).toBe(5000);
+  });
+
+  it("creates the exact strict FANBOX import receipt schema and constraints", () => {
+    const store = track(openLocalStore(":memory:", { clock: fixedClock }));
+    const database = databaseOf(store);
+    const columns = database
+      .prepare("PRAGMA table_info(fanbox_supporter_imports)")
+      .all()
+      .map((row) => {
+        const column = row as {
+          name: string;
+          type: string;
+          notnull: number;
+          pk: number;
+        };
+        return [column.name, column.type, column.notnull, column.pk];
+      });
+    const table = database
+      .prepare("PRAGMA table_list")
+      .all()
+      .find(
+        (row) =>
+          (row as { name: string }).name === "fanbox_supporter_imports",
+      ) as { strict: number } | undefined;
+    const insert = database.prepare(
+      `INSERT INTO fanbox_supporter_imports (
+         imported_at,
+         present_supporter_count
+       ) VALUES (?, ?)`,
+    );
+
+    expect(columns).toEqual([
+      ["sequence", "INTEGER", 0, 1],
+      ["imported_at", "TEXT", 1, 0],
+      ["present_supporter_count", "INTEGER", 1, 0],
+    ]);
+    expect(table?.strict).toBe(1);
+    expect(
+      database
+        .prepare(
+          `SELECT sql
+           FROM sqlite_master
+           WHERE type = 'table' AND name = 'fanbox_supporter_imports'`,
+        )
+        .all()
+        .map((row) => (row as { sql: string }).sql)[0],
+    ).toContain("present_supporter_count >= 0");
+    expect(() => insert.run("2026-09-04T00:00:00.000Z", -1)).toThrow();
+    expect(() => insert.run("2026-09-04T00:00:00.000Z", 1.5)).toThrow();
+    expect(() => insert.run(null, 0)).toThrow();
+    expect(insert.run("2026-09-04T00:00:00.000Z", 0).changes).toBe(1);
   });
 
   it("uses WAL and preserves data across an idempotent reopen", () => {
@@ -127,7 +180,7 @@ describe("schema migration and connection setup", () => {
         openLocalStore(databasePath, { clock: fixedClock }),
       );
       expect(databaseOf(reopened).pragma("user_version", { simple: true })).toBe(
-        3,
+        4,
       );
       expect(reopened.getSupporterById(created.id)).toEqual(expectedSupporter);
       expect(reopened.listLevelOperations(created.id)).toEqual([operation]);
@@ -145,7 +198,7 @@ describe("schema migration and connection setup", () => {
 
     try {
       const store = track(openLocalStore(databasePath, { clock: fixedClock }));
-      databaseOf(store).pragma("user_version = 4");
+      databaseOf(store).pragma("user_version = 5");
       store.close();
       const before = readFileSync(databasePath);
 
@@ -156,8 +209,8 @@ describe("schema migration and connection setup", () => {
         openLocalStore(databasePath, { clock: fixedClock });
       } catch (error: unknown) {
         expect(error).toBeInstanceOf(UnsupportedSchemaVersionError);
-        expect((error as UnsupportedSchemaVersionError).actualVersion).toBe(4);
-        expect((error as UnsupportedSchemaVersionError).supportedVersion).toBe(3);
+        expect((error as UnsupportedSchemaVersionError).actualVersion).toBe(5);
+        expect((error as UnsupportedSchemaVersionError).supportedVersion).toBe(4);
       }
 
       expect(readFileSync(databasePath)).toEqual(before);
@@ -166,7 +219,7 @@ describe("schema migration and connection setup", () => {
     }
   });
 
-  it("migrates a real version-1 database through version 3 without changing data", () => {
+  it("migrates a real version-1 database through version 4 without changing data", () => {
     const directory = mkdtempSync(join(tmpdir(), "fanbox-level-manager-"));
     const databasePath = join(directory, "version-one.sqlite");
 
@@ -226,7 +279,7 @@ describe("schema migration and connection setup", () => {
       );
 
       expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(
-        3,
+        4,
       );
       expect(migrated.getSupporterById("supporter-v1")).toEqual({
         id: "supporter-v1",
@@ -253,7 +306,7 @@ describe("schema migration and connection setup", () => {
     }
   });
 
-  it("migrates a real version-2 database to version 3 without changing data", () => {
+  it("migrates a real version-2 database to version 4 without changing data", () => {
     const directory = mkdtempSync(join(tmpdir(), "fanbox-level-manager-"));
     const databasePath = join(directory, "version-two.sqlite");
 
@@ -339,7 +392,7 @@ describe("schema migration and connection setup", () => {
       );
 
       expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(
-        3,
+        4,
       );
       expect(migrated.getSupporterById("supporter-v2")).toEqual({
         id: "supporter-v2",
@@ -373,6 +426,98 @@ describe("schema migration and connection setup", () => {
           createdAt: "2026-09-15T00:00:00.000Z",
         },
       ]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("migrates a real version-3 database to version 4 without changing data", () => {
+    const directory = mkdtempSync(join(tmpdir(), "fanbox-level-manager-"));
+    const databasePath = join(directory, "version-three.sqlite");
+
+    try {
+      const legacyDatabase = new Database(databasePath);
+      configureDatabase(legacyDatabase);
+      applyVersionOneMigration(legacyDatabase);
+      applyVersionTwoMigration(legacyDatabase);
+      applyVersionThreeMigration(legacyDatabase);
+      legacyDatabase
+        .prepare(
+          `INSERT INTO supporters (
+             id,
+             fanbox_relationship_id,
+             display_name,
+             current_level,
+             supporting,
+             latest_month_key,
+             created_at,
+             updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "supporter-v3",
+          "relationship-v3",
+          "Version three supporter",
+          3,
+          1,
+          null,
+          "2026-09-01T00:00:00.000Z",
+          "2026-09-02T00:00:00.000Z",
+        );
+      const tokenHash = "c".repeat(64);
+      legacyDatabase
+        .prepare(
+          `INSERT INTO supporter_portal_access (
+             supporter_id,
+             token_hash,
+             issued_at,
+             provisioned_at,
+             sent_at
+           ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "supporter-v3",
+          tokenHash,
+          "2026-09-03T00:00:00.000Z",
+          null,
+          null,
+        );
+      expect(legacyDatabase.pragma("user_version", { simple: true })).toBe(3);
+      legacyDatabase.close();
+
+      const migrated = track(
+        openLocalStore(databasePath, { clock: fixedClock }),
+      );
+
+      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(
+        4,
+      );
+      expect(migrated.getSupporterById("supporter-v3")).toEqual({
+        id: "supporter-v3",
+        fanboxRelationshipId: "relationship-v3",
+        displayName: "Version three supporter",
+        currentLevel: 3,
+        supporting: true,
+        latestMonthKey: null,
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-02T00:00:00.000Z",
+      });
+      expect(migrated.getSupporterPortalAccess("supporter-v3")).toEqual({
+        supporterId: "supporter-v3",
+        tokenHash,
+        issuedAt: "2026-09-03T00:00:00.000Z",
+        provisionedAt: null,
+        sentAt: null,
+      });
+      expect(
+        databaseOf(migrated)
+          .prepare(
+            `SELECT name
+             FROM sqlite_master
+             WHERE type = 'table' AND name = 'fanbox_supporter_imports'`,
+          )
+          .all(),
+      ).toEqual([{ name: "fanbox_supporter_imports" }]);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

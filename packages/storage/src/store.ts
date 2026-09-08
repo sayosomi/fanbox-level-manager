@@ -14,15 +14,18 @@ import {
   applyVersionOneMigration,
   applyVersionTwoMigration,
   applyVersionThreeMigration,
+  applyVersionFourMigration,
   configureDatabase,
   configureFileJournalMode,
   CURRENT_SCHEMA_VERSION,
   readUserVersion,
 } from "./migrations.js";
 import type {
+  ApplyFanboxSupporterImportInput,
   CreateMigratedSupporterInput,
   CreateMigratedSupporterResult,
   CreateSupporterInput,
+  FanboxSupporterImportRecord,
   LevelOperationRecord,
   LevelTransitionOperationInput,
   LocalStore,
@@ -37,6 +40,7 @@ import type {
 } from "./types.js";
 import {
   assertNonBlankString,
+  assertValidApplyFanboxSupporterImportInput,
   assertValidCreateMigratedSupporterInput,
   assertValidCreateSupporterInput,
   assertValidMonthKey,
@@ -88,6 +92,12 @@ type SupporterPortalAccessRow = {
   issued_at: string;
   provisioned_at: string | null;
   sent_at: string | null;
+};
+
+type FanboxSupporterImportRow = {
+  sequence: number;
+  imported_at: string;
+  present_supporter_count: number;
 };
 
 type SupporterInsertValues = Readonly<{
@@ -150,6 +160,16 @@ function toSupporterPortalAccessRecord(
     issuedAt: row.issued_at,
     provisionedAt: row.provisioned_at,
     sentAt: row.sent_at,
+  });
+}
+
+function toFanboxSupporterImportRecord(
+  row: FanboxSupporterImportRow,
+): FanboxSupporterImportRecord {
+  return Object.freeze({
+    sequence: row.sequence,
+    importedAt: row.imported_at,
+    presentSupporterCount: row.present_supporter_count,
   });
 }
 
@@ -243,6 +263,99 @@ class LocalStoreImplementation implements LocalStore {
     }
 
     return supporter;
+  }
+
+  applyFanboxSupporterImport(
+    input: ApplyFanboxSupporterImportInput,
+  ): FanboxSupporterImportRecord {
+    assertValidApplyFanboxSupporterImportInput(input);
+    const timestamp = timestampFromClock(this.clock);
+
+    const apply = this.database.transaction((): FanboxSupporterImportRecord => {
+      for (const create of input.creates) {
+        this.insertSupporterRow({
+          id: randomUUID(),
+          fanboxRelationshipId: create.fanboxRelationshipId,
+          displayName: create.displayName,
+          currentLevel: 0,
+          supporting: true,
+          timestamp,
+        });
+      }
+
+      for (const update of input.updates) {
+        const existing = this.database
+          .prepare("SELECT id FROM supporters WHERE id = ?")
+          .get(update.supporterId) as { id: string } | undefined;
+        if (existing === undefined) {
+          throw new SupporterNotFoundError(update.supporterId);
+        }
+
+        const fields: string[] = [];
+        const values: Array<string | number> = [];
+        if ("displayName" in update) {
+          fields.push("display_name = ?");
+          values.push(update.displayName as string);
+        }
+        if ("supporting" in update) {
+          fields.push("supporting = ?");
+          values.push(update.supporting ? 1 : 0);
+        }
+        values.push(timestamp, update.supporterId);
+
+        const result = this.database
+          .prepare(
+            `UPDATE supporters
+             SET ${fields.join(", ")}, updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(...values);
+        if (result.changes !== 1) {
+          throw new SupporterNotFoundError(update.supporterId);
+        }
+      }
+
+      const insertResult = this.database
+        .prepare(
+          `INSERT INTO fanbox_supporter_imports (
+             imported_at,
+             present_supporter_count
+           ) VALUES (?, ?)`,
+        )
+        .run(timestamp, input.presentSupporterCount);
+      const sequence = Number(insertResult.lastInsertRowid);
+      const row = this.database
+        .prepare(
+          `SELECT sequence,
+                  imported_at,
+                  present_supporter_count
+           FROM fanbox_supporter_imports
+           WHERE sequence = ?`,
+        )
+        .get(sequence) as FanboxSupporterImportRow | undefined;
+      if (row === undefined) {
+        throw new Error("created FANBOX supporter import could not be loaded");
+      }
+
+      return toFanboxSupporterImportRecord(row);
+    });
+
+    return apply();
+  }
+
+  getLatestFanboxSupporterImport(): FanboxSupporterImportRecord | null {
+    const row = this.database
+      .prepare(
+        `SELECT sequence,
+                imported_at,
+                present_supporter_count
+         FROM fanbox_supporter_imports
+         ORDER BY sequence DESC
+         LIMIT 1`,
+      )
+      .get() as FanboxSupporterImportRow | undefined;
+
+    return row === undefined ? null : toFanboxSupporterImportRecord(row);
   }
 
   createMigratedSupporter(
@@ -974,11 +1087,16 @@ export function openLocalStore(
       applyVersionOneMigration(database);
       applyVersionTwoMigration(database);
       applyVersionThreeMigration(database);
+      applyVersionFourMigration(database);
     } else if (userVersion === 1) {
       applyVersionTwoMigration(database);
       applyVersionThreeMigration(database);
+      applyVersionFourMigration(database);
     } else if (userVersion === 2) {
       applyVersionThreeMigration(database);
+      applyVersionFourMigration(database);
+    } else if (userVersion === 3) {
+      applyVersionFourMigration(database);
     }
 
     return new LocalStoreImplementation(database, clock);
