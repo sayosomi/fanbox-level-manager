@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build --workspace=@sayosomi/domain && npm run build --workspace=@sayosomi/storage && npm run build --workspace=@sayosomi/application && npm run build --workspace=@sayosomi/admin-web && npm run build --workspace=@sayosomi/portal-worker",
+    "build": "npm run build --workspace=@sayosomi/domain && npm run build --workspace=@sayosomi/storage && npm run build --workspace=@sayosomi/fanbox-pdf && npm run build --workspace=@sayosomi/application && npm run build --workspace=@sayosomi/admin-web && npm run build --workspace=@sayosomi/portal-worker",
     "lint": "eslint packages apps/admin-web",
     "typecheck": "tsc --noEmit -p tsconfig.json && npm run typecheck --workspace=@sayosomi/portal-worker",
     "test": "vitest run packages apps/admin-web && npm run test --workspace=@sayosomi/portal-worker"
