@@ -6,6 +6,7 @@ import type {
   FanboxSupporterImportUpdate,
   LevelOperationKind,
   MonthlyState,
+  MonthlyTransitionWithOperationBatchItem,
   SupporterProfilePatch,
   StoreClock,
 } from "./types.js";
@@ -306,4 +307,37 @@ export function timestampFromClock(clock: StoreClock): string {
   }
 
   return date.toISOString();
+}
+
+export function assertValidMonthlyTransitionWithOperationBatch(
+  input: unknown,
+): asserts input is readonly MonthlyTransitionWithOperationBatchItem[] {
+  assertArray(input, "monthly transition batch");
+  if (input.length === 0) {
+    throw new TypeError("monthly transition batch must not be empty");
+  }
+
+  const supporterIds = new Set<string>();
+  for (const item of input) {
+    if (!isRecord(item) || Array.isArray(item)) {
+      throw new TypeError("monthly transition batch item must be an object");
+    }
+
+    assertAllowedKeys(
+      item,
+      ["supporterId", "monthKey", "operation", "transition"],
+      "monthly transition batch item",
+    );
+    assertValidSupporterId(item.supporterId);
+    assertValidMonthKey(item.monthKey);
+    assertValidTransitionCallback(item.transition);
+    normalizeLevelTransitionOperation(item.operation);
+
+    if (supporterIds.has(item.supporterId)) {
+      throw new TypeError(
+        "monthly transition batch must not contain duplicate supporter IDs",
+      );
+    }
+    supporterIds.add(item.supporterId);
+  }
 }

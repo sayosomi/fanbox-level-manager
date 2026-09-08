@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLotteryLevelService } from "./index.js";
 import {
   StaleMonthError,
@@ -44,6 +44,179 @@ afterEach(() => {
 });
 
 describe("lottery level application service", () => {
+  it("records mixed lottery results atomically in request order", () => {
+    const { service, store } = openService();
+    const winner = createSupporter(store, "batch-winner", 7);
+    const loser = createSupporter(store, "batch-loser");
+    const occurredAt = new Date("2026-08-31T15:00:00.000Z");
+    const batch = vi.spyOn(store, "transitionMonthlyStatesWithOperations");
+
+    const results = service.recordLotteryResults(
+      [
+        { supporterId: winner.id, outcome: "win" },
+        { supporterId: loser.id, outcome: "loss" },
+      ],
+      occurredAt,
+    );
+
+    expect(batch).toHaveBeenCalledTimes(1);
+    const [items] = batch.mock.calls[0]!;
+    expect(items.map((item) => item.supporterId)).toEqual([
+      winner.id,
+      loser.id,
+    ]);
+    expect(items.map((item) => item.monthKey)).toEqual([
+      "2026-09",
+      "2026-09",
+    ]);
+    expect(
+      items.every((item) =>
+        item.operation.kind === "lottery_win" ||
+        item.operation.kind === "lottery_loss",
+      ),
+    ).toBe(true);
+    expect(items[0]?.operation).toEqual({
+      kind: "lottery_win",
+      occurredAt,
+    });
+    expect(items[1]?.operation).toEqual({
+      kind: "lottery_loss",
+      occurredAt,
+    });
+    expect(results.map((result) => result.supporterId)).toEqual([
+      winner.id,
+      loser.id,
+    ]);
+    expect(results.map((result) => result.outcome)).toEqual(["win", "loss"]);
+    expect(results[0]?.state).toMatchObject({
+      level: 0,
+      monthlyPlusOneUsed: false,
+      lotteryParticipationOccurred: true,
+    });
+    expect(results[1]?.state).toMatchObject({
+      level: 1,
+      monthlyPlusOneUsed: true,
+      lotteryParticipationOccurred: true,
+    });
+    expect(Object.isFrozen(results)).toBe(true);
+    expect(Object.isFrozen(results[0])).toBe(true);
+    expect(store.listLevelOperations(winner.id)[0]).toMatchObject({
+      kind: "lottery_win",
+      occurredAt: occurredAt.toISOString(),
+      beforeLevel: 7,
+      afterLevel: 0,
+    });
+    expect(store.listLevelOperations(loser.id)[0]).toMatchObject({
+      kind: "lottery_loss",
+      occurredAt: occurredAt.toISOString(),
+      beforeLevel: 0,
+      afterLevel: 1,
+    });
+  });
+
+  it("preserves accepted supporter IDs without trimming them", () => {
+    const transitionMonthlyStatesWithOperations = vi.fn(
+      (items: readonly { supporterId: string; monthKey: string }[]) =>
+        Object.freeze(
+          items.map((item) =>
+            Object.freeze({
+              state: Object.freeze({
+                supporterId: item.supporterId,
+                monthKey: item.monthKey,
+                level: 0,
+                monthlyPlusOneUsed: false,
+                lotteryParticipationOccurred: true,
+                createdAt: "2026-09-04T00:00:00.000Z",
+                updatedAt: "2026-09-04T00:00:00.000Z",
+              }),
+              operation: {},
+            }),
+          ),
+        ),
+    );
+    const store = {
+      transitionMonthlyStatesWithOperations,
+    } as unknown as LocalStore;
+    const service = createLotteryLevelService(store);
+    const supporterId = "  exact supporter id  ";
+
+    const results = service.recordLotteryResults(
+      [{ supporterId, outcome: "win" }],
+      new Date("2026-09-15T00:00:00.000Z"),
+    );
+
+    expect(transitionMonthlyStatesWithOperations).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({ supporterId }),
+      ]),
+    );
+    expect(results[0]?.supporterId).toBe(supporterId);
+  });
+
+  it("rejects invalid result requests before storage", () => {
+    const invalidParticipants: readonly unknown[] = [
+      "not-an-array",
+      [],
+      [null],
+      [[]],
+      [{ supporterId: "id" }],
+      [{ supporterId: "id", outcome: "win", extra: true }],
+      [{ supporterId: "   ", outcome: "win" }],
+      [{ supporterId: "id", outcome: "draw" }],
+      [
+        { supporterId: "id", outcome: "win" },
+        { supporterId: "id", outcome: "loss" },
+      ],
+    ];
+
+    for (const participants of invalidParticipants) {
+      const transitionMonthlyStatesWithOperations = vi.fn();
+      const service = createLotteryLevelService({
+        transitionMonthlyStatesWithOperations,
+      } as unknown as LocalStore);
+
+      expect(() =>
+        service.recordLotteryResults(
+          participants as never,
+          new Date("2026-09-15T00:00:00.000Z"),
+        ),
+      ).toThrow();
+      expect(transitionMonthlyStatesWithOperations).not.toHaveBeenCalled();
+    }
+  });
+
+  it("rejects invalid dates before storage", () => {
+    const transitionMonthlyStatesWithOperations = vi.fn();
+    const service = createLotteryLevelService({
+      transitionMonthlyStatesWithOperations,
+    } as unknown as LocalStore);
+
+    expect(() =>
+      service.recordLotteryResults(
+        [{ supporterId: "id", outcome: "win" }],
+        new Date(Number.NaN),
+      ),
+    ).toThrow(RangeError);
+    expect(transitionMonthlyStatesWithOperations).not.toHaveBeenCalled();
+  });
+
+  it("propagates storage failures without shaping a partial result", () => {
+    const failure = new Error("batch storage failure");
+    const transitionMonthlyStatesWithOperations = vi.fn(() => {
+      throw failure;
+    });
+    const service = createLotteryLevelService({
+      transitionMonthlyStatesWithOperations,
+    } as unknown as LocalStore);
+
+    expect(() =>
+      service.recordLotteryResults(
+        [{ supporterId: "id", outcome: "loss" }],
+        new Date("2026-09-15T00:00:00.000Z"),
+      ),
+    ).toThrow(failure);
+  });
+
   it("persists the canonical domain increment for a first loss", () => {
     const { service, store } = openService();
     const supporter = createSupporter(store, "first-loss");
