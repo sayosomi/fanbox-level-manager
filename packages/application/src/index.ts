@@ -119,3 +119,10 @@ export type {
   CreateEncryptedBackupCodecOptions,
   EncryptedBackupCodec,
 } from "./encrypted-backup-codec.js";
+export { createEncryptedBackupService } from "./encrypted-backup-service.js";
+export type {
+  BackupEncryptionKeyProvider,
+  CreateEncryptedBackupServiceOptions,
+  EncryptedBackupArtifactSink,
+  EncryptedBackupService,
+} from "./encrypted-backup-service.js";
