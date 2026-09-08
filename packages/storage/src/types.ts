@@ -129,6 +129,7 @@ export type OpenLocalStoreOptions = Readonly<{
 
 export interface LocalStore {
   close(): void;
+  createDatabaseSnapshot(): Uint8Array;
   createSupporter(input: CreateSupporterInput): SupporterRecord;
   applyFanboxSupporterImport(
     input: ApplyFanboxSupporterImportInput,

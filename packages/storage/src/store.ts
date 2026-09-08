@@ -230,6 +230,10 @@ class LocalStoreImplementation implements LocalStore {
     }
   }
 
+  createDatabaseSnapshot(): Uint8Array {
+    return this.database.serialize();
+  }
+
   createSupporter(input: CreateSupporterInput): SupporterRecord {
     assertValidCreateSupporterInput(input);
 
