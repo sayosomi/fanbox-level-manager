@@ -12,6 +12,7 @@ import {
   createFanboxSupporterComparisonService,
   FanboxSupporterImportBlockedError,
   FanboxSupporterImportError,
+  createExistingSupporterMigrationService,
   createFanboxSupporterImportService,
   createSupporterPortalLinkService,
   createSupporterPortalDeliveryService,
@@ -23,11 +24,16 @@ import {
   type FanboxSupporterImportBlockedReason,
   type FanboxSupporterImportService,
   type FanboxPdfSupporterComparison,
+  type ExistingSupporterMigrationService,
   type SupporterPortalLinkService,
   type SupporterPortalDeliveryService,
   type SupporterListService,
 } from "@sayosomi/application";
-import { openLocalStore, type LocalStore } from "@sayosomi/storage";
+import {
+  DuplicateFanboxRelationshipError,
+  openLocalStore,
+  type LocalStore,
+} from "@sayosomi/storage";
 import {
   ADMIN_CONTENT_SECURITY_POLICY,
   ADMIN_PAGE,
@@ -91,6 +97,18 @@ const FANBOX_IMPORT_UNAVAILABLE_BODY = JSON.stringify({
 const FANBOX_IMPORT_FAILED_BODY = JSON.stringify({
   error: "fanbox_import_failed",
 });
+const EXISTING_SUPPORTER_MIGRATION_UNAVAILABLE_BODY = JSON.stringify({
+  error: "existing_supporter_migration_unavailable",
+});
+const SUPPORTER_ALREADY_REGISTERED_BODY = JSON.stringify({
+  error: "supporter_already_registered",
+});
+const EXISTING_SUPPORTER_MIGRATION_FAILED_BODY = JSON.stringify({
+  error: "existing_supporter_migration_failed",
+});
+const EXISTING_SUPPORTER_MIGRATION_SUCCESS_BODY = JSON.stringify({
+  status: "ok",
+});
 const PDF_COMPARISON_UNAVAILABLE_BODY = JSON.stringify({
   error: "pdf_comparison_unavailable",
 });
@@ -116,6 +134,8 @@ export type ProductionAdminServerDependencies = Readonly<{
     typeof createFanboxSupporterComparisonService;
   createFanboxSupporterImportService?:
     typeof createFanboxSupporterImportService;
+  createExistingSupporterMigrationService?:
+    typeof createExistingSupporterMigrationService;
 }>;
 
 export function parseAdminPort(value: string | undefined): number {
@@ -575,6 +595,100 @@ async function sendPdfImport(
   }
 }
 
+type ExistingSupporterMigrationRequest = Readonly<{
+  fanboxRelationshipId: string;
+  displayName: string;
+  currentLevel: number;
+}>;
+
+function parseExistingSupporterMigrationRequest(
+  body: string,
+): ExistingSupporterMigrationRequest | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    return null;
+  }
+
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value)
+  ) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (
+    Object.keys(record).length !== 3 ||
+    !Object.hasOwn(record, "fanboxRelationshipId") ||
+    !Object.hasOwn(record, "displayName") ||
+    !Object.hasOwn(record, "currentLevel") ||
+    typeof record.fanboxRelationshipId !== "string" ||
+    !/^[A-Za-z0-9_-]+$/.test(record.fanboxRelationshipId) ||
+    typeof record.displayName !== "string" ||
+    record.displayName.trim().length === 0 ||
+    typeof record.currentLevel !== "number" ||
+    !Number.isFinite(record.currentLevel) ||
+    !Number.isInteger(record.currentLevel) ||
+    record.currentLevel < 0
+  ) {
+    return null;
+  }
+
+  return {
+    fanboxRelationshipId: record.fanboxRelationshipId,
+    displayName: record.displayName,
+    currentLevel: record.currentLevel,
+  };
+}
+
+async function sendExistingSupporterMigration(
+  request: IncomingMessage,
+  response: ServerResponse,
+  migrationService: ExistingSupporterMigrationService | undefined,
+): Promise<void> {
+  let body: string;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  const input = parseExistingSupporterMigrationRequest(body);
+  if (input === null) {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  if (migrationService === undefined) {
+    sendPortalJson(response, 500, EXISTING_SUPPORTER_MIGRATION_UNAVAILABLE_BODY);
+    return;
+  }
+
+  try {
+    migrationService.registerExistingSupporter({
+      fanboxRelationshipId: input.fanboxRelationshipId,
+      displayName: input.displayName,
+      currentLevel: input.currentLevel,
+      supporting: true,
+      migratedAt: new Date(),
+    });
+  } catch (error: unknown) {
+    if (error instanceof DuplicateFanboxRelationshipError) {
+      sendPortalJson(response, 409, SUPPORTER_ALREADY_REGISTERED_BODY);
+      return;
+    }
+
+    sendPortalJson(response, 500, EXISTING_SUPPORTER_MIGRATION_FAILED_BODY);
+    return;
+  }
+
+  sendPortalJson(response, 200, EXISTING_SUPPORTER_MIGRATION_SUCCESS_BODY);
+}
+
 function sendSupporterList(
   response: ServerResponse,
   supporterListService: SupporterListService | undefined,
@@ -608,6 +722,7 @@ export function createAdminServer(
   fanboxPdfInspectionService?: FanboxPdfInspectionService,
   fanboxSupporterComparisonService?: FanboxSupporterComparisonService,
   fanboxSupporterImportService?: FanboxSupporterImportService,
+  existingSupporterMigrationService?: ExistingSupporterMigrationService,
 ): Server {
   return createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -620,7 +735,8 @@ export function createAdminServer(
       requestPath === PORTAL_LINK_PATH ||
       requestPath === PORTAL_SENT_PATH ||
       requestPath === PDF_INSPECTION_PATH ||
-      requestPath === PDF_IMPORT_PATH;
+      requestPath === PDF_IMPORT_PATH ||
+      requestPath === "/api/supporters/migrate-existing";
 
     if (!knownRoute) {
       sendNotFound(response);
@@ -677,6 +793,20 @@ export function createAdminServer(
       return;
     }
 
+    if (requestPath === "/api/supporters/migrate-existing") {
+      if (request.method !== "POST") {
+        sendPortalMethodNotAllowed(response);
+        return;
+      }
+
+      void sendExistingSupporterMigration(
+        request,
+        response,
+        existingSupporterMigrationService,
+      );
+      return;
+    }
+
     if (request.method !== "GET") {
       sendMethodNotAllowed(response);
       return;
@@ -724,6 +854,7 @@ export function startAdminServer(
   fanboxPdfInspectionService?: FanboxPdfInspectionService,
   fanboxSupporterComparisonService?: FanboxSupporterComparisonService,
   fanboxSupporterImportService?: FanboxSupporterImportService,
+  existingSupporterMigrationService?: ExistingSupporterMigrationService,
 ): Server {
   validateListenPort(port);
   const server = createAdminServer(
@@ -733,6 +864,7 @@ export function startAdminServer(
     fanboxPdfInspectionService,
     fanboxSupporterComparisonService,
     fanboxSupporterImportService,
+    existingSupporterMigrationService,
   );
   server.listen(port, ADMIN_HOST);
   return server;
@@ -806,6 +938,10 @@ export function startProductionAdminServer(
       dependencies.createFanboxSupporterImportService ??
       createFanboxSupporterImportService;
     const fanboxSupporterImportService = createImportService(store);
+    const createMigrationService =
+      dependencies.createExistingSupporterMigrationService ??
+      createExistingSupporterMigrationService;
+    const existingSupporterMigrationService = createMigrationService(store);
     let supporterPortalLinkService: SupporterPortalLinkService | undefined;
     if (portalConfiguration !== null) {
       const createPortalLinkService =
@@ -828,6 +964,7 @@ export function startProductionAdminServer(
       fanboxPdfInspectionService,
       fanboxSupporterComparisonService,
       fanboxSupporterImportService,
+      existingSupporterMigrationService,
     );
     server.once("close", closeStore);
 
