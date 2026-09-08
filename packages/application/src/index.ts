@@ -54,3 +54,11 @@ export type {
   PrepareSupporterPortalLinkResult,
   SupporterPortalLinkService,
 } from "./supporter-portal-link-service.js";
+export {
+  createSupporterPortalDeliveryService,
+  SupporterPortalDeliveryConflictError,
+} from "./supporter-portal-delivery-service.js";
+export type {
+  SupporterPortalDeliveryState,
+  SupporterPortalDeliveryService,
+} from "./supporter-portal-delivery-service.js";

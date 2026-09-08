@@ -5,8 +5,10 @@ import {
   type Server,
 } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SupporterPortalDeliveryConflictError } from "@sayosomi/application";
 import type {
   CreateSupporterPortalLinkServiceOptions,
+  SupporterPortalDeliveryService,
   SupporterPortalLinkService,
   SupporterListItem,
   SupporterListService,
@@ -145,6 +147,7 @@ const sampleSupporters: readonly SupporterListItem[] = Object.freeze([
     nextLotteryEntryCount: 3,
     supporting: true,
     latestMonthKey: "2026-09",
+    portalDeliveryState: "provisioned",
   }),
   Object.freeze({
     id: "internal-supporter-id-2",
@@ -153,6 +156,7 @@ const sampleSupporters: readonly SupporterListItem[] = Object.freeze([
     nextLotteryEntryCount: 1,
     supporting: false,
     latestMonthKey: null,
+    portalDeliveryState: "not_issued",
   }),
 ]);
 
@@ -462,6 +466,155 @@ describe("portal link route", () => {
   });
 });
 
+describe("portal sent route", () => {
+  it("passes the exact supporter ID and returns one-key success JSON", async () => {
+    const supporterIds: string[] = [];
+    const deliveryService: SupporterPortalDeliveryService = {
+      getSupporterPortalDeliveryState: () => "provisioned",
+      markCurrentSupporterPortalAccessSent: (supporterId) => {
+        supporterIds.push(supporterId);
+        return "sent";
+      },
+    };
+    const sentServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      deliveryService,
+    );
+    const sentPort = await listenOnEphemeralPort(sentServer);
+
+    try {
+      const response = await requestOnPort(
+        sentPort,
+        "POST",
+        "/api/portal-link/sent",
+        JSON.stringify({ supporterId: "internal-supporter-id" }),
+      );
+
+      expect(supporterIds).toEqual(["internal-supporter-id"]);
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toBe(
+        "application/json; charset=UTF-8",
+      );
+      expectCommonSecurityHeaders(response.headers);
+      expect(response.body).toBe('{"portalDeliveryState":"sent"}');
+      expect(Object.keys(JSON.parse(response.body))).toEqual([
+        "portalDeliveryState",
+      ]);
+    } finally {
+      await closeServer(sentServer);
+    }
+  });
+
+  it.each([
+    "",
+    "{not-json",
+    "null",
+    "[]",
+    "1",
+    JSON.stringify({}),
+    JSON.stringify({ supporterId: "id", extra: true }),
+    JSON.stringify({ supporterId: 123 }),
+    JSON.stringify({ supporterId: "   " }),
+  ])("returns the exact 400 response for invalid body %j", async (body) => {
+    const response = await request(
+      "POST",
+      "/api/portal-link/sent",
+      body,
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers["content-type"]).toBe(
+      "application/json; charset=UTF-8",
+    );
+    expectCommonSecurityHeaders(response.headers);
+    expect(response.body).toBe('{"error":"invalid_request"}');
+  });
+
+  it.each(["GET", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])(
+    "returns 405 and Allow: POST for %s",
+    async (method) => {
+      const response = await request(method, "/api/portal-link/sent");
+
+      expect(response.statusCode).toBe(405);
+      expect(response.headers.allow).toBe("POST");
+    },
+  );
+
+  it("returns unavailable when the delivery service is not injected", async () => {
+    const response = await request(
+      "POST",
+      "/api/portal-link/sent",
+      JSON.stringify({ supporterId: "internal-supporter-id" }),
+    );
+
+    expect(response.statusCode).toBe(500);
+    expect(response.body).toBe('{"error":"portal_delivery_unavailable"}');
+  });
+
+  it("returns generic conflict and failure responses without sensitive details", async () => {
+    const sensitiveFailure =
+      "supporter internal-supporter-id token AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA hash 0f007385b6f9d4b7eeb2748605afe1a984a0a3bfa3f014d09e2a784ce9e5cd1a /private/admin.sqlite SELECT * FROM supporter_portal_access https://portal.example/level#secret";
+    const conflictService: SupporterPortalDeliveryService = {
+      getSupporterPortalDeliveryState: () => "provisioned",
+      markCurrentSupporterPortalAccessSent: () => {
+        throw new SupporterPortalDeliveryConflictError();
+      },
+    };
+    const failingService: SupporterPortalDeliveryService = {
+      getSupporterPortalDeliveryState: () => "provisioned",
+      markCurrentSupporterPortalAccessSent: () => {
+        throw new Error(sensitiveFailure);
+      },
+    };
+    const conflictServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      conflictService,
+    );
+    const failingServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      failingService,
+    );
+    const conflictPort = await listenOnEphemeralPort(conflictServer);
+    const failingPort = await listenOnEphemeralPort(failingServer);
+
+    try {
+      const body = JSON.stringify({ supporterId: "internal-supporter-id" });
+      const conflict = await requestOnPort(
+        conflictPort,
+        "POST",
+        "/api/portal-link/sent",
+        body,
+      );
+      const failure = await requestOnPort(
+        failingPort,
+        "POST",
+        "/api/portal-link/sent",
+        body,
+      );
+
+      expect(conflict.statusCode).toBe(409);
+      expect(conflict.body).toBe('{"error":"portal_state_conflict"}');
+      expect(failure.statusCode).toBe(500);
+      expect(failure.body).toBe('{"error":"portal_sent_update_failed"}');
+      for (const bodyText of [conflict.body, failure.body]) {
+        expect(bodyText).not.toContain("internal-supporter-id");
+        expect(bodyText).not.toContain("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+        expect(bodyText).not.toContain("0f007385b6f9d4b7eeb2748605afe1a984a0a3bfa3f014d09e2a784ce9e5cd1a");
+        expect(bodyText).not.toContain("portal.example");
+        expect(bodyText).not.toContain("admin.sqlite");
+        expect(bodyText).not.toContain("SELECT");
+        expect(bodyText).not.toContain("sensitiveFailure");
+      }
+    } finally {
+      await closeServer(conflictServer);
+      await closeServer(failingServer);
+    }
+  });
+});
+
 describe("admin server configuration", () => {
   it("uses the IPv4 loopback host and default port", () => {
     expect(ADMIN_HOST).toBe("127.0.0.1");
@@ -519,11 +672,20 @@ describe("admin server configuration", () => {
     process.env.FANBOX_ADMIN_PORT = String(await ephemeralPort());
     delete process.env.FANBOX_PORTAL_ORIGIN;
     delete process.env.FANBOX_PORTAL_SYNC_API_TOKEN;
+    const deliveryService: SupporterPortalDeliveryService = {
+      getSupporterPortalDeliveryState: () => "not_issued",
+      markCurrentSupporterPortalAccessSent: () => "sent",
+    };
+    const createDeliveryService = vi.fn((suppliedStore: LocalStore) => {
+      expect(suppliedStore).toBe(store);
+      return deliveryService;
+    });
 
     try {
       productionServer = startProductionAdminServer({
         openLocalStore: () => store,
         createSupporterListService: () => sampleSupporterListService,
+        createSupporterPortalDeliveryService: createDeliveryService,
       });
       await new Promise<void>((resolve, reject) => {
         productionServer?.once("listening", () => resolve());
@@ -546,6 +708,7 @@ describe("admin server configuration", () => {
       expect(listResponse.statusCode).toBe(200);
       expect(portalResponse.statusCode).toBe(503);
       expect(portalResponse.body).toBe('{"error":"portal_not_configured"}');
+      expect(createDeliveryService).toHaveBeenCalledTimes(1);
     } finally {
       if (productionServer !== undefined && productionServer.listening) {
         await closeServer(productionServer);
@@ -719,6 +882,14 @@ describe("admin server configuration", () => {
         return portalService;
       },
     );
+    const deliveryService: SupporterPortalDeliveryService = {
+      getSupporterPortalDeliveryState: () => "not_issued",
+      markCurrentSupporterPortalAccessSent: () => "sent",
+    };
+    const createDeliveryService = vi.fn((suppliedStore: LocalStore) => {
+      expect(suppliedStore).toBe(store);
+      return deliveryService;
+    });
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     let productionServer: Server | undefined;
 
@@ -732,6 +903,7 @@ describe("admin server configuration", () => {
         openLocalStore: () => store,
         createSupporterListService: () => sampleSupporterListService,
         createSupporterPortalLinkService: createPortalService,
+        createSupporterPortalDeliveryService: createDeliveryService,
       });
       await new Promise<void>((resolve, reject) => {
         productionServer?.once("listening", () => resolve());
@@ -739,6 +911,7 @@ describe("admin server configuration", () => {
       });
 
       expect(createPortalService).toHaveBeenCalledTimes(1);
+      expect(createDeliveryService).toHaveBeenCalledTimes(1);
       expect(logSpy.mock.calls.flat().join(" ")).not.toContain(portalOrigin);
       expect(logSpy.mock.calls.flat().join(" ")).not.toContain(syncApiToken);
     } finally {
@@ -781,6 +954,16 @@ describe("admin server configuration", () => {
     expect(ADMIN_SCRIPT).toContain('referrerPolicy: "no-referrer"');
     expect(ADMIN_SCRIPT).toContain("Object.keys(value)");
     expect(ADMIN_SCRIPT).toContain('hasExactKeys(value, ["supporters"])');
+    expect(ADMIN_SCRIPT).toContain('"portalDeliveryState"');
+    expect(ADMIN_SCRIPT).toContain("PORTAL_DELIVERY_STATES");
+    for (const deliveryState of [
+      "not_issued",
+      "issued",
+      "provisioned",
+      "sent",
+    ]) {
+      expect(ADMIN_SCRIPT).toContain(deliveryState);
+    }
     expect(ADMIN_SCRIPT).toContain(
       "supporter.nextLotteryEntryCount !== supporter.currentLevel + 1",
     );
@@ -789,6 +972,11 @@ describe("admin server configuration", () => {
     expect(ADMIN_SCRIPT).toContain("支援者一覧を読み込めませんでした。");
     expect(ADMIN_SCRIPT).toContain('createElement("button")');
     expect(ADMIN_SCRIPT).toContain("ポータルURLを発行・再発行");
+    expect(ADMIN_SCRIPT).toContain("ポータル: 未発行");
+    expect(ADMIN_SCRIPT).toContain("ポータル: 発行済み・未連携");
+    expect(ADMIN_SCRIPT).toContain("ポータル: 発行済み・未送信");
+    expect(ADMIN_SCRIPT).toContain("ポータル: 送信済み");
+    expect(ADMIN_SCRIPT).toContain("送信済みとして記録");
     expect(ADMIN_SCRIPT).toContain("window.confirm");
     expect(ADMIN_SCRIPT).toContain(
       "新しいポータルURLを発行します。以前のURLがある場合、以前のURLは現在のURLではなくなります。続行しますか？",
@@ -801,6 +989,23 @@ describe("admin server configuration", () => {
     expect(ADMIN_SCRIPT).toContain("PORTAL_TOKEN_PATTERN");
     expect(ADMIN_SCRIPT).toContain("ポータル連携が設定されていません。");
     expect(ADMIN_SCRIPT).toContain("ポータルURLを準備できませんでした。");
+    expect(ADMIN_SCRIPT).toContain('fetch("/api/portal-link/sent", {');
+    expect(ADMIN_SCRIPT).toContain(
+      "この操作はメッセージを送信しません。ポータルURLをすでに本人へ送信済みの場合のみ記録します。続行しますか？",
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      'hasExactKeys(value, ["portalDeliveryState"])',
+    );
+    expect(ADMIN_SCRIPT).toContain('value.portalDeliveryState !== "sent"');
+    expect(ADMIN_SCRIPT).toContain(
+      "ポータル状態が更新されています。一覧を再読み込みしてください。",
+    );
+    expect(ADMIN_SCRIPT).toContain("ポータル送信状態を記録できませんでした。");
+    expect(ADMIN_SCRIPT).toContain('portalDeliveryState = "provisioned"');
+    expect(ADMIN_SCRIPT).toContain('portalDeliveryState = "sent"');
+    expect(ADMIN_SCRIPT).toContain("portalOperationActive");
+    expect(ADMIN_SCRIPT).toContain("portalLinkStatus");
+    expect(ADMIN_SCRIPT).toContain("sentStatus");
     expect(ADMIN_SCRIPT).toContain("秘密のURLは保存されません");
     expect(ADMIN_SCRIPT).toContain("secretUrl.textContent = portalUrl");
     expect(ADMIN_SCRIPT).not.toContain('createElement("a")');
@@ -811,6 +1016,9 @@ describe("admin server configuration", () => {
     expect(ADMIN_SCRIPT).not.toContain("console.");
     expect(ADMIN_SCRIPT.indexOf('window.confirm')).toBeLessThan(
       ADMIN_SCRIPT.indexOf('fetch("/api/portal-link", {'),
+    );
+    expect(ADMIN_SCRIPT.indexOf('window.confirm')).toBeLessThan(
+      ADMIN_SCRIPT.indexOf('fetch("/api/portal-link/sent", {'),
     );
     expect(ADMIN_SCRIPT).toContain("createElement");
     expect(ADMIN_SCRIPT).toContain("textContent");

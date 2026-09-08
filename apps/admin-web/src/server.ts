@@ -8,8 +8,11 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createSupporterPortalLinkService,
+  createSupporterPortalDeliveryService,
   createSupporterListService,
+  SupporterPortalDeliveryConflictError,
   type SupporterPortalLinkService,
+  type SupporterPortalDeliveryService,
   type SupporterListService,
 } from "@sayosomi/application";
 import { openLocalStore, type LocalStore } from "@sayosomi/storage";
@@ -39,7 +42,20 @@ const PORTAL_NOT_CONFIGURED_BODY = JSON.stringify({
 const PORTAL_OPERATION_FAILED_BODY = JSON.stringify({
   error: "portal_operation_failed",
 });
+const PORTAL_DELIVERY_UNAVAILABLE_BODY = JSON.stringify({
+  error: "portal_delivery_unavailable",
+});
+const PORTAL_STATE_CONFLICT_BODY = JSON.stringify({
+  error: "portal_state_conflict",
+});
+const PORTAL_SENT_UPDATE_FAILED_BODY = JSON.stringify({
+  error: "portal_sent_update_failed",
+});
+const PORTAL_SENT_SUCCESS_BODY = JSON.stringify({
+  portalDeliveryState: "sent",
+});
 const PORTAL_LINK_PATH = "/api/portal-link";
+const PORTAL_SENT_PATH = "/api/portal-link/sent";
 const INCOMPLETE_PORTAL_CONFIGURATION_ERROR =
   "incomplete portal configuration";
 const INVALID_PORTAL_CONFIGURATION_ERROR = "invalid portal configuration";
@@ -48,6 +64,8 @@ export type ProductionAdminServerDependencies = Readonly<{
   openLocalStore?: typeof openLocalStore;
   createSupporterListService?: typeof createSupporterListService;
   createSupporterPortalLinkService?: typeof createSupporterPortalLinkService;
+  createSupporterPortalDeliveryService?:
+    typeof createSupporterPortalDeliveryService;
 }>;
 
 export function parseAdminPort(value: string | undefined): number {
@@ -217,6 +235,45 @@ async function sendPortalLink(
   }
 }
 
+async function sendPortalSent(
+  request: IncomingMessage,
+  response: ServerResponse,
+  supporterPortalDeliveryService: SupporterPortalDeliveryService | undefined,
+): Promise<void> {
+  let body: string;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  const supporterId = parsePortalLinkRequest(body);
+  if (supporterId === null) {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  if (supporterPortalDeliveryService === undefined) {
+    sendPortalJson(response, 500, PORTAL_DELIVERY_UNAVAILABLE_BODY);
+    return;
+  }
+
+  try {
+    supporterPortalDeliveryService.markCurrentSupporterPortalAccessSent(
+      supporterId,
+    );
+    sendPortalJson(response, 200, PORTAL_SENT_SUCCESS_BODY);
+  } catch (error: unknown) {
+    if (error instanceof SupporterPortalDeliveryConflictError) {
+      sendPortalJson(response, 409, PORTAL_STATE_CONFLICT_BODY);
+      return;
+    }
+
+    sendPortalJson(response, 500, PORTAL_SENT_UPDATE_FAILED_BODY);
+  }
+}
+
 function sendSupporterList(
   response: ServerResponse,
   supporterListService: SupporterListService | undefined,
@@ -246,6 +303,7 @@ function sendSupporterList(
 export function createAdminServer(
   supporterListService?: SupporterListService,
   supporterPortalLinkService?: SupporterPortalLinkService,
+  supporterPortalDeliveryService?: SupporterPortalDeliveryService,
 ): Server {
   return createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -255,7 +313,8 @@ export function createAdminServer(
       requestPath === "/style.css" ||
       requestPath === "/api/health" ||
       requestPath === "/api/supporters" ||
-      requestPath === PORTAL_LINK_PATH;
+      requestPath === PORTAL_LINK_PATH ||
+      requestPath === PORTAL_SENT_PATH;
 
     if (!knownRoute) {
       sendNotFound(response);
@@ -269,6 +328,16 @@ export function createAdminServer(
       }
 
       void sendPortalLink(request, response, supporterPortalLinkService);
+      return;
+    }
+
+    if (requestPath === PORTAL_SENT_PATH) {
+      if (request.method !== "POST") {
+        sendPortalMethodNotAllowed(response);
+        return;
+      }
+
+      void sendPortalSent(request, response, supporterPortalDeliveryService);
       return;
     }
 
@@ -315,11 +384,13 @@ export function startAdminServer(
   port = DEFAULT_ADMIN_PORT,
   supporterListService?: SupporterListService,
   supporterPortalLinkService?: SupporterPortalLinkService,
+  supporterPortalDeliveryService?: SupporterPortalDeliveryService,
 ): Server {
   validateListenPort(port);
   const server = createAdminServer(
     supporterListService,
     supporterPortalLinkService,
+    supporterPortalDeliveryService,
   );
   server.listen(port, ADMIN_HOST);
   return server;
@@ -377,6 +448,10 @@ export function startProductionAdminServer(
 
   try {
     const supporterListService = createService(store);
+    const createDeliveryService =
+      dependencies.createSupporterPortalDeliveryService ??
+      createSupporterPortalDeliveryService;
+    const supporterPortalDeliveryService = createDeliveryService(store);
     let supporterPortalLinkService: SupporterPortalLinkService | undefined;
     if (portalConfiguration !== null) {
       const createPortalLinkService =
@@ -395,6 +470,7 @@ export function startProductionAdminServer(
     const server = createAdminServer(
       supporterListService,
       supporterPortalLinkService,
+      supporterPortalDeliveryService,
     );
     server.once("close", closeStore);
 

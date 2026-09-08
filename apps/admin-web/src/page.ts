@@ -32,7 +32,20 @@ const SUPPORTER_KEYS = [
   "nextLotteryEntryCount",
   "supporting",
   "latestMonthKey",
+  "portalDeliveryState",
 ];
+const PORTAL_DELIVERY_STATES = new Set([
+  "not_issued",
+  "issued",
+  "provisioned",
+  "sent",
+]);
+const PORTAL_DELIVERY_LABELS = {
+  not_issued: "ポータル: 未発行",
+  issued: "ポータル: 発行済み・未連携",
+  provisioned: "ポータル: 発行済み・未送信",
+  sent: "ポータル: 送信済み",
+};
 const MONTH_KEY_PATTERN = /^\\d{4}-(0[1-9]|1[0-2])$/;
 const PORTAL_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const CANONICAL_TIMESTAMP_PATTERN =
@@ -61,6 +74,10 @@ function isNonNegativeInteger(value) {
 
 function isNonBlankString(value) {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isPortalDeliveryState(value) {
+  return typeof value === "string" && PORTAL_DELIVERY_STATES.has(value);
 }
 
 function isCanonicalTimestamp(value) {
@@ -104,7 +121,8 @@ function validateSupporterResponse(value) {
         (typeof supporter.latestMonthKey === "string" &&
           supporter.latestMonthKey.length === 7 &&
           MONTH_KEY_PATTERN.test(supporter.latestMonthKey))
-      )
+      ) ||
+      !isPortalDeliveryState(supporter.portalDeliveryState)
     ) {
       throw new TypeError("invalid supporter item");
     }
@@ -149,6 +167,18 @@ function validatePortalLinkResponse(value) {
   return value.portalUrl;
 }
 
+function validatePortalSentResponse(value) {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["portalDeliveryState"]) ||
+    value.portalDeliveryState !== "sent"
+  ) {
+    throw new TypeError("invalid portal sent response");
+  }
+
+  return "sent";
+}
+
 function showPortalFailure(status, message) {
   status.textContent = message;
 }
@@ -165,47 +195,6 @@ function showPortalSuccess(status, portalUrl) {
   status.replaceChildren(success, warning, secretUrl);
 }
 
-async function prepareSupporterPortalLink(supporterId, button, status) {
-  if (
-    !window.confirm(
-      "新しいポータルURLを発行します。以前のURLがある場合、以前のURLは現在のURLではなくなります。続行しますか？",
-    )
-  ) {
-    return;
-  }
-
-  button.disabled = true;
-  status.textContent = "ポータルURLを準備しています。";
-
-  try {
-    const response = await fetch("/api/portal-link", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ supporterId }),
-      cache: "no-store",
-      credentials: "omit",
-      redirect: "error",
-      referrerPolicy: "no-referrer",
-    });
-    if (response.status === 503) {
-      showPortalFailure(status, "ポータル連携が設定されていません。");
-      return;
-    }
-    if (!response.ok) {
-      throw new Error("portal link request failed");
-    }
-
-    const result = validatePortalLinkResponse(await response.json());
-    showPortalSuccess(status, result);
-  } catch {
-    showPortalFailure(status, "ポータルURLを準備できませんでした。");
-  } finally {
-    button.disabled = false;
-  }
-}
-
 function renderSupporter(supporter) {
   const item = document.createElement("li");
   const name = document.createElement("h3");
@@ -213,28 +202,159 @@ function renderSupporter(supporter) {
   const entries = document.createElement("p");
   const supportStatus = document.createElement("p");
   const latestMonth = document.createElement("p");
+  const portalDeliveryStatus = document.createElement("p");
   const portalButton = document.createElement("button");
-  const portalStatus = document.createElement("p");
+  const portalLinkStatus = document.createElement("p");
+  const sentButton = document.createElement("button");
+  const sentStatus = document.createElement("p");
+  let portalDeliveryState = supporter.portalDeliveryState;
+  let portalOperationActive = false;
+
+  function updatePortalButtons() {
+    portalButton.disabled = portalOperationActive;
+    sentButton.disabled =
+      portalOperationActive || portalDeliveryState !== "provisioned";
+  }
+
+  function updatePortalDeliveryState() {
+    portalDeliveryStatus.textContent = PORTAL_DELIVERY_LABELS[portalDeliveryState];
+    updatePortalButtons();
+  }
+
+  async function prepareSupporterPortalLink() {
+    if (portalOperationActive) {
+      return;
+    }
+    if (
+      !window.confirm(
+        "新しいポータルURLを発行します。以前のURLがある場合、以前のURLは現在のURLではなくなります。続行しますか？",
+      )
+    ) {
+      return;
+    }
+
+    portalOperationActive = true;
+    updatePortalButtons();
+    portalLinkStatus.textContent = "ポータルURLを準備しています。";
+
+    try {
+      const { id: supporterId } = supporter;
+      const response = await fetch("/api/portal-link", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ supporterId }),
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+      });
+      if (response.status === 503) {
+        showPortalFailure(portalLinkStatus, "ポータル連携が設定されていません。");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error("portal link request failed");
+      }
+
+      const result = validatePortalLinkResponse(await response.json());
+      portalDeliveryState = "provisioned";
+      updatePortalDeliveryState();
+      showPortalSuccess(portalLinkStatus, result);
+    } catch {
+      showPortalFailure(
+        portalLinkStatus,
+        "ポータルURLを準備できませんでした。",
+      );
+    } finally {
+      portalOperationActive = false;
+      updatePortalButtons();
+    }
+  }
+
+  async function markPortalSent() {
+    if (portalOperationActive || portalDeliveryState !== "provisioned") {
+      return;
+    }
+    if (
+      !window.confirm(
+        "この操作はメッセージを送信しません。ポータルURLをすでに本人へ送信済みの場合のみ記録します。続行しますか？",
+      )
+    ) {
+      return;
+    }
+
+    portalOperationActive = true;
+    updatePortalButtons();
+    sentStatus.textContent = "送信済みとして記録しています。";
+
+    try {
+      const { id: supporterId } = supporter;
+      const response = await fetch("/api/portal-link/sent", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ supporterId }),
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+      });
+      if (response.status === 409) {
+        sentStatus.textContent =
+          "ポータル状態が更新されています。一覧を再読み込みしてください。";
+        return;
+      }
+      if (!response.ok) {
+        throw new Error("portal sent request failed");
+      }
+
+      const result = validatePortalSentResponse(await response.json());
+      if (result !== "sent") {
+        throw new TypeError("invalid portal sent response");
+      }
+      portalDeliveryState = "sent";
+      updatePortalDeliveryState();
+      sentStatus.textContent = "送信済みとして記録しました。";
+    } catch {
+      sentStatus.textContent = "ポータル送信状態を記録できませんでした。";
+    } finally {
+      portalOperationActive = false;
+      updatePortalButtons();
+    }
+  }
 
   name.textContent = supporter.displayName;
   level.textContent = \`Lv.\${supporter.currentLevel}\`;
   entries.textContent = \`\${supporter.nextLotteryEntryCount}口\`;
   supportStatus.textContent = supporter.supporting ? "支援中" : "支援停止";
   latestMonth.textContent = \`最新処理月: \${supporter.latestMonthKey ?? "未処理"}\`;
+  portalDeliveryStatus.setAttribute("role", "status");
   portalButton.type = "button";
   portalButton.textContent = "ポータルURLを発行・再発行";
-  portalStatus.setAttribute("role", "status");
+  sentButton.type = "button";
+  sentButton.textContent = "送信済みとして記録";
+  sentStatus.setAttribute("role", "status");
   portalButton.addEventListener("click", () => {
-    void prepareSupporterPortalLink(supporter.id, portalButton, portalStatus);
+    void prepareSupporterPortalLink();
   });
+  sentButton.addEventListener("click", () => {
+    void markPortalSent();
+  });
+  updatePortalDeliveryState();
   item.replaceChildren(
     name,
     level,
     entries,
     supportStatus,
     latestMonth,
+    portalDeliveryStatus,
     portalButton,
-    portalStatus,
+    portalLinkStatus,
+    sentButton,
+    sentStatus,
   );
   return item;
 }
