@@ -2,6 +2,7 @@ export {
   FanboxPdfExtractionError,
   extractFanboxPdfStructure,
 } from "./extractor.js";
+export { deriveFanboxDisplayNameCandidate } from "./display-name-candidate.js";
 export { associateFanboxRelationshipText } from "./relationship-text.js";
 export type {
   FanboxPdfExtraction,

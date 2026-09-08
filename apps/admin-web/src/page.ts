@@ -233,6 +233,7 @@ function validatePdfInspectionResponse(value) {
       !hasExactKeys(relationship, [
         "pageNumber",
         "relationshipId",
+        "displayNameCandidate",
         "rect",
         "textRuns",
       ]) ||
@@ -242,6 +243,8 @@ function validatePdfInspectionResponse(value) {
       typeof relationship.relationshipId !== "string" ||
       relationship.relationshipId.length === 0 ||
       !PDF_RELATIONSHIP_ID_PATTERN.test(relationship.relationshipId) ||
+      (relationship.displayNameCandidate !== null &&
+        typeof relationship.displayNameCandidate !== "string") ||
       !isFiniteNumberTuple(relationship.rect, 4) ||
       !Array.isArray(relationship.textRuns)
     ) {
@@ -273,6 +276,7 @@ function validatePdfInspectionResponse(value) {
     return {
       pageNumber: relationship.pageNumber,
       relationshipId: relationship.relationshipId,
+      displayNameCandidate: relationship.displayNameCandidate,
       rect: relationship.rect,
       textRuns,
     };
@@ -293,11 +297,16 @@ function renderPdfInspectionRelationship(relationship, index) {
 
   heading.textContent = \`関係リンク \${index + 1}: \${relationship.relationshipId}\`;
   page.textContent = \`ページ: \${relationship.pageNumber}\`;
+  const displayName = document.createElement("p");
+  displayName.textContent =
+    relationship.displayNameCandidate === null
+      ? "表示名候補を確定できません。"
+      : \`表示名候補: \${relationship.displayNameCandidate}\`;
 
   if (relationship.textRuns.length === 0) {
     const empty = document.createElement("p");
     empty.textContent = "重なるテキストはありません。";
-    item.replaceChildren(heading, page, empty);
+    item.replaceChildren(heading, page, displayName, empty);
     return item;
   }
 
@@ -309,7 +318,7 @@ function renderPdfInspectionRelationship(relationship, index) {
   }
 
   runs.replaceChildren(...runItems);
-  item.replaceChildren(heading, page, runs);
+  item.replaceChildren(heading, page, displayName, runs);
   return item;
 }
 

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   associateFanboxRelationshipText,
+  deriveFanboxDisplayNameCandidate,
   extractFanboxPdfStructure,
   type FanboxPdfExtraction,
   type FanboxPdfTextRun,
@@ -13,10 +14,12 @@ import {
 
 vi.mock("@sayosomi/fanbox-pdf", () => ({
   associateFanboxRelationshipText: vi.fn(),
+  deriveFanboxDisplayNameCandidate: vi.fn(),
   extractFanboxPdfStructure: vi.fn(),
 }));
 
 const mockAssociate = vi.mocked(associateFanboxRelationshipText);
+const mockDerive = vi.mocked(deriveFanboxDisplayNameCandidate);
 const mockExtract = vi.mocked(extractFanboxPdfStructure);
 
 function createLink(
@@ -55,6 +58,7 @@ describe("fanbox PDF inspection service", () => {
     const firstLink = createLink("first", [0, 0, 10, 10]);
     const secondLink = createLink("second", [20, 20, 30, 30]);
     const firstRun = createTextRun("  raw e\u0301 text  ", 1, 5);
+    const firstDuplicateRun = createTextRun("  raw e\u0301 text  ", 2, 6);
     const secondRun = createTextRun("second raw", 21, 25);
     const extraction: FanboxPdfExtraction = {
       pageCount: 2,
@@ -62,10 +66,11 @@ describe("fanbox PDF inspection service", () => {
       textRuns: [firstRun, secondRun],
     };
     const associations = [
-      { link: firstLink, textRuns: [firstRun] },
+      { link: firstLink, textRuns: [firstRun, firstDuplicateRun] },
       { link: secondLink, textRuns: [] },
     ] as const;
     const callOrder: string[] = [];
+    const derivedRelationshipIds: string[] = [];
     mockExtract.mockImplementation(async () => {
       callOrder.push("extract");
       return extraction;
@@ -75,12 +80,21 @@ describe("fanbox PDF inspection service", () => {
       expect(value).toBe(extraction);
       return associations;
     });
+    mockDerive.mockImplementation((association) => {
+      derivedRelationshipIds.push(association.link.relationshipId);
+      return association.textRuns.length === 2
+        ? "  raw e\u0301 text  "
+        : null;
+    });
 
     const result = await createFanboxPdfInspectionService().inspectFanboxPdf(
       new Uint8Array([1, 2, 3]),
     );
 
     expect(callOrder).toEqual(["extract", "associate"]);
+    expect(derivedRelationshipIds).toEqual(["first", "second"]);
+    expect(mockDerive).toHaveBeenNthCalledWith(1, associations[0]);
+    expect(mockDerive).toHaveBeenNthCalledWith(2, associations[1]);
     expect(mockExtract).toHaveBeenCalledWith(new Uint8Array([1, 2, 3]));
     expect(result).toEqual({
       pageCount: 2,
@@ -88,6 +102,7 @@ describe("fanbox PDF inspection service", () => {
         {
           pageNumber: 1,
           relationshipId: "first",
+          displayNameCandidate: "  raw e\u0301 text  ",
           rect: [0, 0, 10, 10],
           textRuns: [
             {
@@ -97,11 +112,19 @@ describe("fanbox PDF inspection service", () => {
               height: 10,
               hasEol: false,
             },
+            {
+              text: "  raw e\u0301 text  ",
+              transform: [1, 0, 0, 1, 2, 6],
+              width: 12,
+              height: 10,
+              hasEol: false,
+            },
           ],
         },
         {
           pageNumber: 1,
           relationshipId: "second",
+          displayNameCandidate: null,
           rect: [20, 20, 30, 30],
           textRuns: [],
         },
@@ -110,11 +133,12 @@ describe("fanbox PDF inspection service", () => {
     expect(Object.keys(result.relationshipLinks[0] ?? {})).toEqual([
       "pageNumber",
       "relationshipId",
+      "displayNameCandidate",
       "rect",
       "textRuns",
     ]);
     expect(JSON.stringify(result)).not.toContain("https://fanbox.cc");
-    expect(result.relationshipLinks[0]?.textRuns).toHaveLength(1);
+    expect(result.relationshipLinks[0]?.textRuns).toHaveLength(2);
     expect(result.relationshipLinks[0]?.textRuns[0]?.text).toBe(
       "  raw e\u0301 text  ",
     );
@@ -141,6 +165,7 @@ describe("fanbox PDF inspection service", () => {
     const association = { link, textRuns: [textRun] };
     mockExtract.mockResolvedValue(extraction);
     mockAssociate.mockReturnValue([association]);
+    mockDerive.mockReturnValue("exact");
     const before = JSON.stringify({ extraction, association });
 
     const result = await createFanboxPdfInspectionService().inspectFanboxPdf(
@@ -151,6 +176,7 @@ describe("fanbox PDF inspection service", () => {
 
     expect(JSON.stringify({ extraction, association })).toBe(before);
     expect(relationship?.rect).not.toBe(rect);
+    expect(relationship?.displayNameCandidate).toBe("exact");
     expect(relationship?.textRuns).not.toBe(association.textRuns);
     expect(outputRun?.transform).not.toBe(transform);
     expect(Object.isFrozen(result)).toBe(true);
