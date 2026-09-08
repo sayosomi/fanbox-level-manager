@@ -2,6 +2,7 @@ export {
   FanboxPdfExtractionError,
   extractFanboxPdfStructure,
 } from "./extractor.js";
+export { associateFanboxRelationshipText } from "./relationship-text.js";
 export type {
   FanboxPdfExtraction,
   FanboxPdfTextRun,
@@ -9,3 +10,4 @@ export type {
   PdfRect,
   PdfTransform,
 } from "./extractor.js";
+export type { FanboxRelationshipTextAssociation } from "./relationship-text.js";
