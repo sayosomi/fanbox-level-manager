@@ -9,11 +9,15 @@ import { fileURLToPath } from "node:url";
 import {
   FanboxPdfInspectionError,
   createFanboxPdfInspectionService,
+  createFanboxSupporterComparisonService,
   createSupporterPortalLinkService,
   createSupporterPortalDeliveryService,
   createSupporterListService,
   SupporterPortalDeliveryConflictError,
+  type FanboxPdfInspection,
   type FanboxPdfInspectionService,
+  type FanboxSupporterComparisonService,
+  type FanboxPdfSupporterComparison,
   type SupporterPortalLinkService,
   type SupporterPortalDeliveryService,
   type SupporterListService,
@@ -75,6 +79,12 @@ const INVALID_PDF_BODY = JSON.stringify({ error: "invalid_pdf" });
 const PDF_INSPECTION_FAILED_BODY = JSON.stringify({
   error: "pdf_inspection_failed",
 });
+const PDF_COMPARISON_UNAVAILABLE_BODY = JSON.stringify({
+  error: "pdf_comparison_unavailable",
+});
+const PDF_COMPARISON_FAILED_BODY = JSON.stringify({
+  error: "pdf_comparison_failed",
+});
 
 class PdfRequestTooLargeError extends Error {}
 
@@ -85,6 +95,8 @@ export type ProductionAdminServerDependencies = Readonly<{
   createSupporterPortalDeliveryService?:
     typeof createSupporterPortalDeliveryService;
   createFanboxPdfInspectionService?: typeof createFanboxPdfInspectionService;
+  createFanboxSupporterComparisonService?:
+    typeof createFanboxSupporterComparisonService;
 }>;
 
 export function parseAdminPort(value: string | undefined): number {
@@ -376,6 +388,7 @@ async function sendPdfInspection(
   request: IncomingMessage,
   response: ServerResponse,
   inspectionService: FanboxPdfInspectionService | undefined,
+  comparisonService: FanboxSupporterComparisonService | undefined,
 ): Promise<void> {
   if (!hasPdfContentType(request)) {
     request.resume();
@@ -401,9 +414,14 @@ async function sendPdfInspection(
     return;
   }
 
+  if (comparisonService === undefined) {
+    sendPortalJson(response, 500, PDF_COMPARISON_UNAVAILABLE_BODY);
+    return;
+  }
+
+  let inspection: FanboxPdfInspection;
   try {
-    const result = await inspectionService.inspectFanboxPdf(data);
-    sendPortalJson(response, 200, JSON.stringify(result));
+    inspection = await inspectionService.inspectFanboxPdf(data);
   } catch (error: unknown) {
     if (error instanceof FanboxPdfInspectionError) {
       sendPortalJson(response, 422, INVALID_PDF_BODY);
@@ -411,7 +429,42 @@ async function sendPdfInspection(
     }
 
     sendPortalJson(response, 500, PDF_INSPECTION_FAILED_BODY);
+    return;
   }
+
+  let comparison: FanboxPdfSupporterComparison;
+  try {
+    comparison = comparisonService.compareInspection(inspection);
+  } catch {
+    sendPortalJson(response, 500, PDF_COMPARISON_FAILED_BODY);
+    return;
+  }
+
+  sendPortalJson(
+    response,
+    200,
+    JSON.stringify({
+      pageCount: inspection.pageCount,
+      relationshipLinks: inspection.relationshipLinks,
+      comparison: {
+        presentSupporters: comparison.presentSupporters.map(
+          ({ status, relationshipId, storedDisplayName }) => ({
+            status,
+            relationshipId,
+            storedDisplayName: status === "new" ? null : storedDisplayName,
+          }),
+        ),
+        absentSupporters: comparison.absentSupporters.map(
+          ({ status, relationshipId, storedDisplayName, wasSupporting }) => ({
+            status,
+            relationshipId,
+            storedDisplayName,
+            wasSupporting,
+          }),
+        ),
+      },
+    }),
+  );
 }
 
 function sendSupporterList(
@@ -445,6 +498,7 @@ export function createAdminServer(
   supporterPortalLinkService?: SupporterPortalLinkService,
   supporterPortalDeliveryService?: SupporterPortalDeliveryService,
   fanboxPdfInspectionService?: FanboxPdfInspectionService,
+  fanboxSupporterComparisonService?: FanboxSupporterComparisonService,
 ): Server {
   return createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -489,7 +543,12 @@ export function createAdminServer(
         return;
       }
 
-      void sendPdfInspection(request, response, fanboxPdfInspectionService);
+      void sendPdfInspection(
+        request,
+        response,
+        fanboxPdfInspectionService,
+        fanboxSupporterComparisonService,
+      );
       return;
     }
 
@@ -538,6 +597,7 @@ export function startAdminServer(
   supporterPortalLinkService?: SupporterPortalLinkService,
   supporterPortalDeliveryService?: SupporterPortalDeliveryService,
   fanboxPdfInspectionService?: FanboxPdfInspectionService,
+  fanboxSupporterComparisonService?: FanboxSupporterComparisonService,
 ): Server {
   validateListenPort(port);
   const server = createAdminServer(
@@ -545,6 +605,7 @@ export function startAdminServer(
     supporterPortalLinkService,
     supporterPortalDeliveryService,
     fanboxPdfInspectionService,
+    fanboxSupporterComparisonService,
   );
   server.listen(port, ADMIN_HOST);
   return server;
@@ -610,6 +671,10 @@ export function startProductionAdminServer(
       dependencies.createSupporterPortalDeliveryService ??
       createSupporterPortalDeliveryService;
     const supporterPortalDeliveryService = createDeliveryService(store);
+    const createComparisonService =
+      dependencies.createFanboxSupporterComparisonService ??
+      createFanboxSupporterComparisonService;
+    const fanboxSupporterComparisonService = createComparisonService(store);
     let supporterPortalLinkService: SupporterPortalLinkService | undefined;
     if (portalConfiguration !== null) {
       const createPortalLinkService =
@@ -630,6 +695,7 @@ export function startProductionAdminServer(
       supporterPortalLinkService,
       supporterPortalDeliveryService,
       fanboxPdfInspectionService,
+      fanboxSupporterComparisonService,
     );
     server.once("close", closeStore);
 
