@@ -15,6 +15,7 @@ export type {
   MonthlyState,
   MonthlyStateRecord,
   MonthlyStateTransition,
+  MonthlyTransitionWithOperationBatchItem,
   MonthlyTransitionWithOperationResult,
   OpenLocalStoreOptions,
   StoreClock,

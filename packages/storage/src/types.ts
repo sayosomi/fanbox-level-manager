@@ -116,6 +116,13 @@ export type MonthlyTransitionWithOperationResult = Readonly<{
   operation: LevelOperationRecord;
 }>;
 
+export type MonthlyTransitionWithOperationBatchItem = Readonly<{
+  supporterId: string;
+  monthKey: string;
+  operation: LevelTransitionOperationInput;
+  transition: MonthlyStateTransition;
+}>;
+
 export type OpenLocalStoreOptions = Readonly<{
   clock?: StoreClock;
 }>;
@@ -169,6 +176,9 @@ export interface LocalStore {
     operation: LevelTransitionOperationInput,
     transition: MonthlyStateTransition,
   ): MonthlyTransitionWithOperationResult;
+  transitionMonthlyStatesWithOperations(
+    items: readonly MonthlyTransitionWithOperationBatchItem[],
+  ): readonly MonthlyTransitionWithOperationResult[];
   listLevelOperations(
     supporterId: string,
   ): readonly LevelOperationRecord[];

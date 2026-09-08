@@ -30,6 +30,7 @@ import type {
   LevelTransitionOperationInput,
   LocalStore,
   MonthlyStateRecord,
+  MonthlyTransitionWithOperationBatchItem,
   MonthlyStateTransition,
   MonthlyTransitionWithOperationResult,
   OpenLocalStoreOptions,
@@ -44,6 +45,7 @@ import {
   assertValidCreateMigratedSupporterInput,
   assertValidCreateSupporterInput,
   assertValidMonthKey,
+  assertValidMonthlyTransitionWithOperationBatch,
   assertValidSupporterId,
   assertValidSupporterProfilePatch,
   assertValidTransitionCallback,
@@ -767,6 +769,29 @@ class LocalStoreImplementation implements LocalStore {
     );
   }
 
+  transitionMonthlyStatesWithOperations(
+    items: readonly MonthlyTransitionWithOperationBatchItem[],
+  ): readonly MonthlyTransitionWithOperationResult[] {
+    assertValidMonthlyTransitionWithOperationBatch(items);
+    const timestamp = timestampFromClock(this.clock);
+    const runTransitions = this.database.transaction(
+      (): readonly MonthlyTransitionWithOperationResult[] =>
+        Object.freeze(
+          items.map((item) =>
+            this.runMonthlyTransitionInCurrentTransaction(
+              item.supporterId,
+              item.monthKey,
+              item.transition,
+              item.operation,
+              timestamp,
+            ),
+          ),
+        ),
+    );
+
+    return runTransitions();
+  }
+
   listLevelOperations(supporterId: string): readonly LevelOperationRecord[] {
     assertValidSupporterId(supporterId);
     if (this.getSupporterById(supporterId) === null) {
@@ -835,232 +860,270 @@ class LocalStoreImplementation implements LocalStore {
     const timestamp = timestampFromClock(this.clock);
     const runTransition = this.database.transaction(
       (): MonthlyStateRecord | MonthlyTransitionWithOperationResult => {
-        const supporterRow = this.database
-          .prepare("SELECT * FROM supporters WHERE id = ?")
-          .get(supporterId) as SupporterRow | undefined;
-
-        if (supporterRow === undefined) {
-          throw new SupporterNotFoundError(supporterId);
-        }
-
-        let stateRow: MonthlyStateRow;
-        if (supporterRow.latest_month_key === null) {
-          this.database
-            .prepare(
-              `INSERT INTO supporter_month_states (
-                 supporter_id,
-                 month_key,
-                 level,
-                 monthly_plus_one_used,
-                 lottery_participation_occurred,
-                 created_at,
-                 updated_at
-               ) VALUES (?, ?, ?, 0, 0, ?, ?)`,
-            )
-            .run(
-              supporterId,
-              monthKey,
-              supporterRow.current_level,
-              timestamp,
-              timestamp,
-            );
-          this.database
-            .prepare(
-              `UPDATE supporters
-               SET latest_month_key = ?, updated_at = ?
-               WHERE id = ?`,
-            )
-            .run(monthKey, timestamp, supporterId);
-
-          stateRow = {
-            supporter_id: supporterId,
-            month_key: monthKey,
-            level: supporterRow.current_level,
-            monthly_plus_one_used: 0,
-            lottery_participation_occurred: 0,
-            created_at: timestamp,
-            updated_at: timestamp,
-          };
-        } else if (monthKey < supporterRow.latest_month_key) {
-          throw new StaleMonthError(monthKey, supporterRow.latest_month_key);
-        } else if (monthKey === supporterRow.latest_month_key) {
-          const loadedStateRow = this.database
-            .prepare(
-              `SELECT *
-               FROM supporter_month_states
-               WHERE supporter_id = ? AND month_key = ?`,
-            )
-            .get(supporterId, monthKey) as MonthlyStateRow | undefined;
-
-          if (loadedStateRow === undefined) {
-            throw new Error("latest supporter month state could not be loaded");
-          }
-
-          stateRow = loadedStateRow;
-        } else {
-          this.database
-            .prepare(
-              `INSERT INTO supporter_month_states (
-                 supporter_id,
-                 month_key,
-                 level,
-                 monthly_plus_one_used,
-                 lottery_participation_occurred,
-                 created_at,
-                 updated_at
-               ) VALUES (?, ?, ?, 0, 0, ?, ?)`,
-            )
-            .run(
-              supporterId,
-              monthKey,
-              supporterRow.current_level,
-              timestamp,
-              timestamp,
-            );
-          this.database
-            .prepare(
-              `UPDATE supporters
-               SET latest_month_key = ?, updated_at = ?
-               WHERE id = ?`,
-            )
-            .run(monthKey, timestamp, supporterId);
-
-          stateRow = {
-            supporter_id: supporterId,
-            month_key: monthKey,
-            level: supporterRow.current_level,
-            monthly_plus_one_used: 0,
-            lottery_participation_occurred: 0,
-            created_at: timestamp,
-            updated_at: timestamp,
-          };
-        }
-
-        const snapshot = Object.freeze({
-          level: stateRow.level,
-          monthlyPlusOneUsed: stateRow.monthly_plus_one_used === 1,
-          lotteryParticipationOccurred:
-            stateRow.lottery_participation_occurred === 1,
-        });
-        const result = validateTransitionResult(transition(snapshot));
-
-        if (snapshot.monthlyPlusOneUsed && !result.monthlyPlusOneUsed) {
-          throw new RangeError("monthlyPlusOneUsed cannot change from true to false");
-        }
-        if (
-          snapshot.lotteryParticipationOccurred &&
-          !result.lotteryParticipationOccurred
-        ) {
-          throw new RangeError(
-            "lotteryParticipationOccurred cannot change from true to false",
-          );
-        }
-
-        const normalizedOperation =
-          operation === null
-            ? null
-            : normalizeLevelTransitionOperation(operation);
-
-        this.database
-          .prepare(
-            `UPDATE supporter_month_states
-             SET level = ?,
-                 monthly_plus_one_used = ?,
-                 lottery_participation_occurred = ?,
-                 updated_at = ?
-             WHERE supporter_id = ? AND month_key = ?`,
-          )
-          .run(
-            result.level,
-            result.monthlyPlusOneUsed ? 1 : 0,
-            result.lotteryParticipationOccurred ? 1 : 0,
-            timestamp,
+        if (operation === null) {
+          return this.runMonthlyTransitionInCurrentTransaction(
             supporterId,
             monthKey,
-          );
-        this.database
-          .prepare(
-            `UPDATE supporters
-             SET current_level = ?, updated_at = ?
-             WHERE id = ?`,
-          )
-          .run(result.level, timestamp, supporterId);
-
-        const persistedRow = this.database
-          .prepare(
-            `SELECT *
-             FROM supporter_month_states
-             WHERE supporter_id = ? AND month_key = ?`,
-          )
-          .get(supporterId, monthKey) as MonthlyStateRow | undefined;
-        if (persistedRow === undefined) {
-          throw new Error("persisted supporter month state could not be loaded");
-        }
-
-        const persistedState = toMonthlyStateRecord(persistedRow);
-        if (normalizedOperation === null) {
-          return persistedState;
-        }
-
-        const operationId = randomUUID();
-        this.database
-          .prepare(
-            `INSERT INTO level_operations (
-               id,
-               supporter_id,
-               month_key,
-               kind,
-               before_level,
-               after_level,
-               occurred_at,
-               supporting_at_month_end,
-               created_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            operationId,
-            supporterId,
-            monthKey,
-            normalizedOperation.kind,
-            snapshot.level,
-            result.level,
-            normalizedOperation.occurredAt,
-            normalizedOperation.supportingAtMonthEnd === null
-              ? null
-              : normalizedOperation.supportingAtMonthEnd
-                ? 1
-                : 0,
+            transition,
+            null,
             timestamp,
           );
-
-        const persistedOperation = this.database
-          .prepare(
-            `SELECT sequence,
-                    id,
-                    supporter_id,
-                    month_key,
-                    kind,
-                    before_level,
-                    after_level,
-                    occurred_at,
-                    supporting_at_month_end,
-                    created_at
-             FROM level_operations
-             WHERE id = ?`,
-          )
-          .get(operationId) as LevelOperationRow | undefined;
-        if (persistedOperation === undefined) {
-          throw new Error("persisted level operation could not be loaded");
         }
 
-        return Object.freeze({
-          state: persistedState,
-          operation: toLevelOperationRecord(persistedOperation),
-        });
+        return this.runMonthlyTransitionInCurrentTransaction(
+          supporterId,
+          monthKey,
+          transition,
+          operation,
+          timestamp,
+        );
       },
     );
 
     return runTransition();
+  }
+
+  private runMonthlyTransitionInCurrentTransaction(
+    supporterId: string,
+    monthKey: string,
+    transition: MonthlyStateTransition,
+    operation: null,
+    timestamp: string,
+  ): MonthlyStateRecord;
+  private runMonthlyTransitionInCurrentTransaction(
+    supporterId: string,
+    monthKey: string,
+    transition: MonthlyStateTransition,
+    operation: LevelTransitionOperationInput,
+    timestamp: string,
+  ): MonthlyTransitionWithOperationResult;
+  private runMonthlyTransitionInCurrentTransaction(
+    supporterId: string,
+    monthKey: string,
+    transition: MonthlyStateTransition,
+    operation: LevelTransitionOperationInput | null,
+    timestamp: string,
+  ): MonthlyStateRecord | MonthlyTransitionWithOperationResult {
+    const supporterRow = this.database
+      .prepare("SELECT * FROM supporters WHERE id = ?")
+      .get(supporterId) as SupporterRow | undefined;
+
+    if (supporterRow === undefined) {
+      throw new SupporterNotFoundError(supporterId);
+    }
+
+    let stateRow: MonthlyStateRow;
+    if (supporterRow.latest_month_key === null) {
+      this.database
+        .prepare(
+          `INSERT INTO supporter_month_states (
+             supporter_id,
+             month_key,
+             level,
+             monthly_plus_one_used,
+             lottery_participation_occurred,
+             created_at,
+             updated_at
+           ) VALUES (?, ?, ?, 0, 0, ?, ?)`,
+        )
+        .run(
+          supporterId,
+          monthKey,
+          supporterRow.current_level,
+          timestamp,
+          timestamp,
+        );
+      this.database
+        .prepare(
+          `UPDATE supporters
+           SET latest_month_key = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(monthKey, timestamp, supporterId);
+
+      stateRow = {
+        supporter_id: supporterId,
+        month_key: monthKey,
+        level: supporterRow.current_level,
+        monthly_plus_one_used: 0,
+        lottery_participation_occurred: 0,
+        created_at: timestamp,
+        updated_at: timestamp,
+      };
+    } else if (monthKey < supporterRow.latest_month_key) {
+      throw new StaleMonthError(monthKey, supporterRow.latest_month_key);
+    } else if (monthKey === supporterRow.latest_month_key) {
+      const loadedStateRow = this.database
+        .prepare(
+          `SELECT *
+           FROM supporter_month_states
+           WHERE supporter_id = ? AND month_key = ?`,
+        )
+        .get(supporterId, monthKey) as MonthlyStateRow | undefined;
+
+      if (loadedStateRow === undefined) {
+        throw new Error("latest supporter month state could not be loaded");
+      }
+
+      stateRow = loadedStateRow;
+    } else {
+      this.database
+        .prepare(
+          `INSERT INTO supporter_month_states (
+             supporter_id,
+             month_key,
+             level,
+             monthly_plus_one_used,
+             lottery_participation_occurred,
+             created_at,
+             updated_at
+           ) VALUES (?, ?, ?, 0, 0, ?, ?)`,
+        )
+        .run(
+          supporterId,
+          monthKey,
+          supporterRow.current_level,
+          timestamp,
+          timestamp,
+        );
+      this.database
+        .prepare(
+          `UPDATE supporters
+           SET latest_month_key = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(monthKey, timestamp, supporterId);
+
+      stateRow = {
+        supporter_id: supporterId,
+        month_key: monthKey,
+        level: supporterRow.current_level,
+        monthly_plus_one_used: 0,
+        lottery_participation_occurred: 0,
+        created_at: timestamp,
+        updated_at: timestamp,
+      };
+    }
+
+    const snapshot = Object.freeze({
+      level: stateRow.level,
+      monthlyPlusOneUsed: stateRow.monthly_plus_one_used === 1,
+      lotteryParticipationOccurred:
+        stateRow.lottery_participation_occurred === 1,
+    });
+    const result = validateTransitionResult(transition(snapshot));
+
+    if (snapshot.monthlyPlusOneUsed && !result.monthlyPlusOneUsed) {
+      throw new RangeError("monthlyPlusOneUsed cannot change from true to false");
+    }
+    if (
+      snapshot.lotteryParticipationOccurred &&
+      !result.lotteryParticipationOccurred
+    ) {
+      throw new RangeError(
+        "lotteryParticipationOccurred cannot change from true to false",
+      );
+    }
+
+    const normalizedOperation =
+      operation === null ? null : normalizeLevelTransitionOperation(operation);
+
+    this.database
+      .prepare(
+        `UPDATE supporter_month_states
+         SET level = ?,
+             monthly_plus_one_used = ?,
+             lottery_participation_occurred = ?,
+             updated_at = ?
+         WHERE supporter_id = ? AND month_key = ?`,
+      )
+      .run(
+        result.level,
+        result.monthlyPlusOneUsed ? 1 : 0,
+        result.lotteryParticipationOccurred ? 1 : 0,
+        timestamp,
+        supporterId,
+        monthKey,
+      );
+    this.database
+      .prepare(
+        `UPDATE supporters
+         SET current_level = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(result.level, timestamp, supporterId);
+
+    const persistedRow = this.database
+      .prepare(
+        `SELECT *
+         FROM supporter_month_states
+         WHERE supporter_id = ? AND month_key = ?`,
+      )
+      .get(supporterId, monthKey) as MonthlyStateRow | undefined;
+    if (persistedRow === undefined) {
+      throw new Error("persisted supporter month state could not be loaded");
+    }
+
+    const persistedState = toMonthlyStateRecord(persistedRow);
+    if (normalizedOperation === null) {
+      return persistedState;
+    }
+
+    const operationId = randomUUID();
+    this.database
+      .prepare(
+        `INSERT INTO level_operations (
+           id,
+           supporter_id,
+           month_key,
+           kind,
+           before_level,
+           after_level,
+           occurred_at,
+           supporting_at_month_end,
+           created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        operationId,
+        supporterId,
+        monthKey,
+        normalizedOperation.kind,
+        snapshot.level,
+        result.level,
+        normalizedOperation.occurredAt,
+        normalizedOperation.supportingAtMonthEnd === null
+          ? null
+          : normalizedOperation.supportingAtMonthEnd
+            ? 1
+            : 0,
+        timestamp,
+      );
+
+    const persistedOperation = this.database
+      .prepare(
+        `SELECT sequence,
+                id,
+                supporter_id,
+                month_key,
+                kind,
+                before_level,
+                after_level,
+                occurred_at,
+                supporting_at_month_end,
+                created_at
+         FROM level_operations
+         WHERE id = ?`,
+      )
+      .get(operationId) as LevelOperationRow | undefined;
+    if (persistedOperation === undefined) {
+      throw new Error("persisted level operation could not be loaded");
+    }
+
+    return Object.freeze({
+      state: persistedState,
+      operation: toLevelOperationRecord(persistedOperation),
+    });
   }
 }
 
