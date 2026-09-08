@@ -62,3 +62,13 @@ export type {
   SupporterPortalDeliveryState,
   SupporterPortalDeliveryService,
 } from "./supporter-portal-delivery-service.js";
+export {
+  FanboxPdfInspectionError,
+  createFanboxPdfInspectionService,
+} from "./fanbox-pdf-inspection-service.js";
+export type {
+  FanboxPdfInspection,
+  FanboxPdfInspectionRelationship,
+  FanboxPdfInspectionService,
+  FanboxPdfInspectionTextRun,
+} from "./fanbox-pdf-inspection-service.js";

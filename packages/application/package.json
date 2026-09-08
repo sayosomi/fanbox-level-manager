@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@sayosomi/domain": "0.1.0",
+    "@sayosomi/fanbox-pdf": "0.1.0",
     "@sayosomi/storage": "0.1.0"
   }
 }
