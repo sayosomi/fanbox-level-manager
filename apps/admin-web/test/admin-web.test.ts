@@ -178,6 +178,7 @@ const samplePdfInspection: FanboxPdfInspection = Object.freeze({
     Object.freeze({
       pageNumber: 1,
       relationshipId: "relationship_123",
+      displayNameCandidate: "synthetic candidate",
       rect: Object.freeze([0, 0, 10, 10]) as readonly [
         number,
         number,
@@ -1182,7 +1183,25 @@ describe("admin server configuration", () => {
       'hasExactKeys(value, ["pageCount", "relationshipLinks"])',
     );
     expect(ADMIN_SCRIPT).toContain(
-      'hasExactKeys(relationship, [\n        "pageNumber",\n        "relationshipId",\n        "rect",\n        "textRuns",\n      ])',
+      'hasExactKeys(relationship, [\n        "pageNumber",\n        "relationshipId",\n        "displayNameCandidate",\n        "rect",\n        "textRuns",\n      ])',
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      'relationship.displayNameCandidate !== null &&\n        typeof relationship.displayNameCandidate !== "string"',
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      "displayNameCandidate: relationship.displayNameCandidate",
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      'displayName.textContent =\n    relationship.displayNameCandidate === null\n      ? "表示名候補を確定できません。"',
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      ": `表示名候補: ${relationship.displayNameCandidate}`;",
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      "item.replaceChildren(heading, page, displayName, runs)",
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      "item.replaceChildren(heading, page, displayName, empty)",
     );
     expect(ADMIN_SCRIPT).toContain(
       'hasExactKeys(textRun, [\n          "text",\n          "transform",\n          "width",\n          "height",\n          "hasEol",\n        ])',

@@ -1,5 +1,6 @@
 import {
   associateFanboxRelationshipText,
+  deriveFanboxDisplayNameCandidate,
   extractFanboxPdfStructure,
   type FanboxPdfTextRun,
   type FanboxRelationshipTextAssociation,
@@ -26,6 +27,7 @@ export type FanboxPdfInspectionTextRun = Readonly<{
 export type FanboxPdfInspectionRelationship = Readonly<{
   pageNumber: number;
   relationshipId: string;
+  displayNameCandidate: string | null;
   rect: InspectionRect;
   textRuns: readonly FanboxPdfInspectionTextRun[];
 }>;
@@ -82,6 +84,7 @@ function copyRelationship(
   return Object.freeze({
     pageNumber: association.link.pageNumber,
     relationshipId: association.link.relationshipId,
+    displayNameCandidate: deriveFanboxDisplayNameCandidate(association),
     rect: copyRect(association.link.rect),
     textRuns,
   });
