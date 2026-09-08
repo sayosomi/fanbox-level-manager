@@ -46,3 +46,11 @@ export type {
   SupporterPortalSyncResult,
   SupporterPortalSyncService,
 } from "./supporter-portal-sync-service.js";
+export {
+  createSupporterPortalLinkService,
+} from "./supporter-portal-link-service.js";
+export type {
+  CreateSupporterPortalLinkServiceOptions,
+  PrepareSupporterPortalLinkResult,
+  SupporterPortalLinkService,
+} from "./supporter-portal-link-service.js";

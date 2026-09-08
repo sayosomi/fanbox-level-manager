@@ -6,6 +6,8 @@ import {
 } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  CreateSupporterPortalLinkServiceOptions,
+  SupporterPortalLinkService,
   SupporterListItem,
   SupporterListService,
 } from "@sayosomi/application";
@@ -74,6 +76,7 @@ function requestOnPort(
   port: number,
   method: string,
   path: string,
+  body = "",
 ): Promise<HttpResponse> {
   return new Promise((resolve, reject) => {
     const request = httpRequest(
@@ -99,12 +102,16 @@ function requestOnPort(
       },
     );
     request.on("error", reject);
-    request.end();
+    request.end(body);
   });
 }
 
-function request(method: string, path: string): Promise<HttpResponse> {
-  return requestOnPort(serverPort, method, path);
+function request(
+  method: string,
+  path: string,
+  body = "",
+): Promise<HttpResponse> {
+  return requestOnPort(serverPort, method, path, body);
 }
 
 function ephemeralPort(): Promise<number> {
@@ -328,6 +335,133 @@ describe("admin web server", () => {
   });
 });
 
+describe("portal link route", () => {
+  it("passes the exact supporter ID to the injected service and returns exact success JSON", async () => {
+    const result = Object.freeze({
+      portalUrl:
+        "https://portal.example/level#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      verifiedAt: "2026-09-05T12:34:56.789Z",
+    });
+    const supporterIds: string[] = [];
+    const portalService: SupporterPortalLinkService = {
+      prepareSupporterPortalLink: async (supporterId) => {
+        supporterIds.push(supporterId);
+        return result;
+      },
+    };
+    const portalServer = createAdminServer(
+      sampleSupporterListService,
+      portalService,
+    );
+    const portalPort = await listenOnEphemeralPort(portalServer);
+
+    try {
+      const response = await requestOnPort(
+        portalPort,
+        "POST",
+        "/api/portal-link",
+        JSON.stringify({ supporterId: "internal-supporter-id" }),
+      );
+
+      expect(supporterIds).toEqual(["internal-supporter-id"]);
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toBe(
+        "application/json; charset=UTF-8",
+      );
+      expectCommonSecurityHeaders(response.headers);
+      expect(response.body).toBe(JSON.stringify(result));
+      expect(Object.keys(JSON.parse(response.body))).toEqual([
+        "portalUrl",
+        "verifiedAt",
+      ]);
+    } finally {
+      await closeServer(portalServer);
+    }
+  });
+
+  it.each([
+    "",
+    "{not-json",
+    "null",
+    "[]",
+    "1",
+    JSON.stringify({}),
+    JSON.stringify({ supporterId: "id", extra: true }),
+    JSON.stringify({ supporterId: 123 }),
+    JSON.stringify({ supporterId: "   " }),
+  ])("returns the exact 400 response for invalid body %j", async (body) => {
+    const response = await request("POST", "/api/portal-link", body);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers["content-type"]).toBe(
+      "application/json; charset=UTF-8",
+    );
+    expectCommonSecurityHeaders(response.headers);
+    expect(response.body).toBe('{"error":"invalid_request"}');
+  });
+
+  it.each(["GET", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])(
+    "returns 405 and Allow: POST for %s",
+    async (method) => {
+      const response = await request(method, "/api/portal-link");
+
+      expect(response.statusCode).toBe(405);
+      expect(response.headers.allow).toBe("POST");
+    },
+  );
+
+  it("returns the exact generic 503 response when portal operations are not configured", async () => {
+    const response = await request(
+      "POST",
+      "/api/portal-link",
+      JSON.stringify({ supporterId: "internal-supporter-id" }),
+    );
+
+    expect(response.statusCode).toBe(503);
+    expect(response.headers["content-type"]).toBe(
+      "application/json; charset=UTF-8",
+    );
+    expectCommonSecurityHeaders(response.headers);
+    expect(response.body).toBe('{"error":"portal_not_configured"}');
+  });
+
+  it("returns a generic 502 without leaking service failure details", async () => {
+    const failureMessage =
+      "Worker 500 token AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA hash 0f007385b6f9d4b7eeb2748605afe1a984a0a3bfa3f014d09e2a784ce9e5cd1a /private/admin.sqlite";
+    const portalService: SupporterPortalLinkService = {
+      prepareSupporterPortalLink: async () => {
+        throw new Error(failureMessage);
+      },
+    };
+    const portalServer = createAdminServer(
+      sampleSupporterListService,
+      portalService,
+    );
+    const portalPort = await listenOnEphemeralPort(portalServer);
+
+    try {
+      const response = await requestOnPort(
+        portalPort,
+        "POST",
+        "/api/portal-link",
+        JSON.stringify({ supporterId: "internal-supporter-id" }),
+      );
+
+      expect(response.statusCode).toBe(502);
+      expect(response.headers["content-type"]).toBe(
+        "application/json; charset=UTF-8",
+      );
+      expectCommonSecurityHeaders(response.headers);
+      expect(response.body).toBe('{"error":"portal_operation_failed"}');
+      expect(response.body).not.toContain(failureMessage);
+      expect(response.body).not.toContain("Worker");
+      expect(response.body).not.toContain("0f007385b6f9d4b7eeb2748605afe1a984a0a3bfa3f014d09e2a784ce9e5cd1a");
+    } finally {
+      await closeServer(portalServer);
+    }
+  });
+});
+
 describe("admin server configuration", () => {
   it("uses the IPv4 loopback host and default port", () => {
     expect(ADMIN_HOST).toBe("127.0.0.1");
@@ -373,6 +507,269 @@ describe("admin server configuration", () => {
     expect(parseAdminDatabasePath(suppliedPath)).toBe(suppliedPath);
   });
 
+  it("starts production without portal configuration and keeps portal preparation unavailable", async () => {
+    const originalDatabasePath = process.env.FANBOX_ADMIN_DB_PATH;
+    const originalPort = process.env.FANBOX_ADMIN_PORT;
+    const originalPortalOrigin = process.env.FANBOX_PORTAL_ORIGIN;
+    const originalSyncApiToken = process.env.FANBOX_PORTAL_SYNC_API_TOKEN;
+    const store = { close: vi.fn() } as unknown as LocalStore;
+    let productionServer: Server | undefined;
+
+    process.env.FANBOX_ADMIN_DB_PATH = "/tmp/issue-32-admin.sqlite";
+    process.env.FANBOX_ADMIN_PORT = String(await ephemeralPort());
+    delete process.env.FANBOX_PORTAL_ORIGIN;
+    delete process.env.FANBOX_PORTAL_SYNC_API_TOKEN;
+
+    try {
+      productionServer = startProductionAdminServer({
+        openLocalStore: () => store,
+        createSupporterListService: () => sampleSupporterListService,
+      });
+      await new Promise<void>((resolve, reject) => {
+        productionServer?.once("listening", () => resolve());
+        productionServer?.once("error", reject);
+      });
+      const productionPort = Number(process.env.FANBOX_ADMIN_PORT);
+
+      const listResponse = await requestOnPort(
+        productionPort,
+        "GET",
+        "/api/supporters",
+      );
+      const portalResponse = await requestOnPort(
+        productionPort,
+        "POST",
+        "/api/portal-link",
+        JSON.stringify({ supporterId: "internal-supporter-id" }),
+      );
+
+      expect(listResponse.statusCode).toBe(200);
+      expect(portalResponse.statusCode).toBe(503);
+      expect(portalResponse.body).toBe('{"error":"portal_not_configured"}');
+    } finally {
+      if (productionServer !== undefined && productionServer.listening) {
+        await closeServer(productionServer);
+      }
+      expect(store.close).toHaveBeenCalledTimes(1);
+      if (originalDatabasePath === undefined) {
+        delete process.env.FANBOX_ADMIN_DB_PATH;
+      } else {
+        process.env.FANBOX_ADMIN_DB_PATH = originalDatabasePath;
+      }
+      if (originalPort === undefined) {
+        delete process.env.FANBOX_ADMIN_PORT;
+      } else {
+        process.env.FANBOX_ADMIN_PORT = originalPort;
+      }
+      if (originalPortalOrigin === undefined) {
+        delete process.env.FANBOX_PORTAL_ORIGIN;
+      } else {
+        process.env.FANBOX_PORTAL_ORIGIN = originalPortalOrigin;
+      }
+      if (originalSyncApiToken === undefined) {
+        delete process.env.FANBOX_PORTAL_SYNC_API_TOKEN;
+      } else {
+        process.env.FANBOX_PORTAL_SYNC_API_TOKEN = originalSyncApiToken;
+      }
+    }
+  });
+
+  it.each([
+    {
+      origin: "https://portal.example",
+      syncApiToken: undefined,
+    },
+    {
+      origin: undefined,
+      syncApiToken: "sync-secret-value",
+    },
+    {
+      origin: "   ",
+      syncApiToken: "sync-secret-value",
+    },
+    {
+      origin: "https://portal.example",
+      syncApiToken: "\t",
+    },
+  ])("rejects incomplete portal configuration without values", async ({
+    origin,
+    syncApiToken,
+  }) => {
+    const originalDatabasePath = process.env.FANBOX_ADMIN_DB_PATH;
+    const originalPort = process.env.FANBOX_ADMIN_PORT;
+    const originalPortalOrigin = process.env.FANBOX_PORTAL_ORIGIN;
+    const originalSyncApiToken = process.env.FANBOX_PORTAL_SYNC_API_TOKEN;
+
+    process.env.FANBOX_ADMIN_DB_PATH = "/tmp/issue-32-admin.sqlite";
+    process.env.FANBOX_ADMIN_PORT = String(await ephemeralPort());
+    if (origin === undefined) {
+      delete process.env.FANBOX_PORTAL_ORIGIN;
+    } else {
+      process.env.FANBOX_PORTAL_ORIGIN = origin;
+    }
+    if (syncApiToken === undefined) {
+      delete process.env.FANBOX_PORTAL_SYNC_API_TOKEN;
+    } else {
+      process.env.FANBOX_PORTAL_SYNC_API_TOKEN = syncApiToken;
+    }
+
+    try {
+      expect(() =>
+        startProductionAdminServer({
+          openLocalStore: () => {
+            throw new Error("store must not open");
+          },
+        }),
+      ).toThrowError("incomplete portal configuration");
+    } finally {
+      if (originalDatabasePath === undefined) {
+        delete process.env.FANBOX_ADMIN_DB_PATH;
+      } else {
+        process.env.FANBOX_ADMIN_DB_PATH = originalDatabasePath;
+      }
+      if (originalPort === undefined) {
+        delete process.env.FANBOX_ADMIN_PORT;
+      } else {
+        process.env.FANBOX_ADMIN_PORT = originalPort;
+      }
+      if (originalPortalOrigin === undefined) {
+        delete process.env.FANBOX_PORTAL_ORIGIN;
+      } else {
+        process.env.FANBOX_PORTAL_ORIGIN = originalPortalOrigin;
+      }
+      if (originalSyncApiToken === undefined) {
+        delete process.env.FANBOX_PORTAL_SYNC_API_TOKEN;
+      } else {
+        process.env.FANBOX_PORTAL_SYNC_API_TOKEN = originalSyncApiToken;
+      }
+    }
+  });
+
+  it("rejects invalid portal configuration generically without exposing values", async () => {
+    const originalDatabasePath = process.env.FANBOX_ADMIN_DB_PATH;
+    const originalPort = process.env.FANBOX_ADMIN_PORT;
+    const originalPortalOrigin = process.env.FANBOX_PORTAL_ORIGIN;
+    const originalSyncApiToken = process.env.FANBOX_PORTAL_SYNC_API_TOKEN;
+    const portalOrigin = "http://portal.invalid/private";
+    const syncApiToken = "sync-secret-value";
+    const store = { close: vi.fn() } as unknown as LocalStore;
+
+    process.env.FANBOX_ADMIN_DB_PATH = "/tmp/issue-32-admin.sqlite";
+    process.env.FANBOX_ADMIN_PORT = String(await ephemeralPort());
+    process.env.FANBOX_PORTAL_ORIGIN = portalOrigin;
+    process.env.FANBOX_PORTAL_SYNC_API_TOKEN = syncApiToken;
+
+    try {
+      const error = await Promise.resolve().then(() =>
+        startProductionAdminServer({
+          openLocalStore: () => store,
+        }),
+      ).catch((value: unknown) => value);
+
+      expect(error).toEqual(new Error("invalid portal configuration"));
+      expect(String(error)).not.toContain(portalOrigin);
+      expect(String(error)).not.toContain(syncApiToken);
+      expect(store.close).toHaveBeenCalledTimes(1);
+    } finally {
+      if (originalDatabasePath === undefined) {
+        delete process.env.FANBOX_ADMIN_DB_PATH;
+      } else {
+        process.env.FANBOX_ADMIN_DB_PATH = originalDatabasePath;
+      }
+      if (originalPort === undefined) {
+        delete process.env.FANBOX_ADMIN_PORT;
+      } else {
+        process.env.FANBOX_ADMIN_PORT = originalPort;
+      }
+      if (originalPortalOrigin === undefined) {
+        delete process.env.FANBOX_PORTAL_ORIGIN;
+      } else {
+        process.env.FANBOX_PORTAL_ORIGIN = originalPortalOrigin;
+      }
+      if (originalSyncApiToken === undefined) {
+        delete process.env.FANBOX_PORTAL_SYNC_API_TOKEN;
+      } else {
+        process.env.FANBOX_PORTAL_SYNC_API_TOKEN = originalSyncApiToken;
+      }
+    }
+  });
+
+  it("constructs the injected portal service for valid portal configuration without logging values", async () => {
+    const originalDatabasePath = process.env.FANBOX_ADMIN_DB_PATH;
+    const originalPort = process.env.FANBOX_ADMIN_PORT;
+    const originalPortalOrigin = process.env.FANBOX_PORTAL_ORIGIN;
+    const originalSyncApiToken = process.env.FANBOX_PORTAL_SYNC_API_TOKEN;
+    const portalOrigin = "https://portal.example";
+    const syncApiToken = "sync-secret-value";
+    const store = { close: vi.fn() } as unknown as LocalStore;
+    const portalService: SupporterPortalLinkService = {
+      prepareSupporterPortalLink: async () => ({
+        portalUrl:
+          "https://portal.example/level#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        verifiedAt: "2026-09-05T12:34:56.789Z",
+      }),
+    };
+    const createPortalService = vi.fn(
+      (
+        suppliedStore: LocalStore,
+        options: CreateSupporterPortalLinkServiceOptions,
+      ) => {
+        expect(suppliedStore).toBe(store);
+        expect(options).toEqual({ portalOrigin, syncApiToken });
+        return portalService;
+      },
+    );
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    let productionServer: Server | undefined;
+
+    process.env.FANBOX_ADMIN_DB_PATH = "/tmp/issue-32-admin.sqlite";
+    process.env.FANBOX_ADMIN_PORT = String(await ephemeralPort());
+    process.env.FANBOX_PORTAL_ORIGIN = portalOrigin;
+    process.env.FANBOX_PORTAL_SYNC_API_TOKEN = syncApiToken;
+
+    try {
+      productionServer = startProductionAdminServer({
+        openLocalStore: () => store,
+        createSupporterListService: () => sampleSupporterListService,
+        createSupporterPortalLinkService: createPortalService,
+      });
+      await new Promise<void>((resolve, reject) => {
+        productionServer?.once("listening", () => resolve());
+        productionServer?.once("error", reject);
+      });
+
+      expect(createPortalService).toHaveBeenCalledTimes(1);
+      expect(logSpy.mock.calls.flat().join(" ")).not.toContain(portalOrigin);
+      expect(logSpy.mock.calls.flat().join(" ")).not.toContain(syncApiToken);
+    } finally {
+      if (productionServer !== undefined && productionServer.listening) {
+        await closeServer(productionServer);
+      }
+      expect(store.close).toHaveBeenCalledTimes(1);
+      logSpy.mockRestore();
+      if (originalDatabasePath === undefined) {
+        delete process.env.FANBOX_ADMIN_DB_PATH;
+      } else {
+        process.env.FANBOX_ADMIN_DB_PATH = originalDatabasePath;
+      }
+      if (originalPort === undefined) {
+        delete process.env.FANBOX_ADMIN_PORT;
+      } else {
+        process.env.FANBOX_ADMIN_PORT = originalPort;
+      }
+      if (originalPortalOrigin === undefined) {
+        delete process.env.FANBOX_PORTAL_ORIGIN;
+      } else {
+        process.env.FANBOX_PORTAL_ORIGIN = originalPortalOrigin;
+      }
+      if (originalSyncApiToken === undefined) {
+        delete process.env.FANBOX_PORTAL_SYNC_API_TOKEN;
+      } else {
+        process.env.FANBOX_PORTAL_SYNC_API_TOKEN = originalSyncApiToken;
+      }
+    }
+  });
+
   it("keeps browser data private and uses the required safe fetch/render path", () => {
     expect(ADMIN_PAGE).toContain("支援者一覧");
     expect(ADMIN_PAGE).toContain("支援者一覧を読み込んでいます。");
@@ -390,6 +787,31 @@ describe("admin server configuration", () => {
     expect(ADMIN_SCRIPT).toContain("MONTH_KEY_PATTERN");
     expect(ADMIN_SCRIPT).toContain("支援者はいません。");
     expect(ADMIN_SCRIPT).toContain("支援者一覧を読み込めませんでした。");
+    expect(ADMIN_SCRIPT).toContain('createElement("button")');
+    expect(ADMIN_SCRIPT).toContain("ポータルURLを発行・再発行");
+    expect(ADMIN_SCRIPT).toContain("window.confirm");
+    expect(ADMIN_SCRIPT).toContain(
+      "新しいポータルURLを発行します。以前のURLがある場合、以前のURLは現在のURLではなくなります。続行しますか？",
+    );
+    expect(ADMIN_SCRIPT).toContain('fetch("/api/portal-link", {');
+    expect(ADMIN_SCRIPT).toContain('body: JSON.stringify({ supporterId })');
+    expect(ADMIN_SCRIPT).toContain('hasExactKeys(value, ["portalUrl", "verifiedAt"])');
+    expect(ADMIN_SCRIPT).toContain("CANONICAL_TIMESTAMP_PATTERN");
+    expect(ADMIN_SCRIPT).toContain('portalUrl.pathname !== "/level"');
+    expect(ADMIN_SCRIPT).toContain("PORTAL_TOKEN_PATTERN");
+    expect(ADMIN_SCRIPT).toContain("ポータル連携が設定されていません。");
+    expect(ADMIN_SCRIPT).toContain("ポータルURLを準備できませんでした。");
+    expect(ADMIN_SCRIPT).toContain("秘密のURLは保存されません");
+    expect(ADMIN_SCRIPT).toContain("secretUrl.textContent = portalUrl");
+    expect(ADMIN_SCRIPT).not.toContain('createElement("a")');
+    expect(ADMIN_SCRIPT).not.toContain("dataset.supporterId");
+    expect(ADMIN_SCRIPT).not.toContain("localStorage");
+    expect(ADMIN_SCRIPT).not.toContain("sessionStorage");
+    expect(ADMIN_SCRIPT).not.toContain("history.");
+    expect(ADMIN_SCRIPT).not.toContain("console.");
+    expect(ADMIN_SCRIPT.indexOf('window.confirm')).toBeLessThan(
+      ADMIN_SCRIPT.indexOf('fetch("/api/portal-link", {'),
+    );
     expect(ADMIN_SCRIPT).toContain("createElement");
     expect(ADMIN_SCRIPT).toContain("textContent");
     expect(ADMIN_SCRIPT).toContain("replaceChildren");

@@ -34,6 +34,9 @@ const SUPPORTER_KEYS = [
   "latestMonthKey",
 ];
 const MONTH_KEY_PATTERN = /^\\d{4}-(0[1-9]|1[0-2])$/;
+const PORTAL_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const CANONICAL_TIMESTAMP_PATTERN =
+  /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/;
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -58,6 +61,21 @@ function isNonNegativeInteger(value) {
 
 function isNonBlankString(value) {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function isCanonicalTimestamp(value) {
+  if (
+    typeof value !== "string" ||
+    !CANONICAL_TIMESTAMP_PATTERN.test(value)
+  ) {
+    return false;
+  }
+
+  try {
+    return new Date(value).toISOString() === value;
+  } catch {
+    return false;
+  }
 }
 
 function validateSupporterResponse(value) {
@@ -95,6 +113,99 @@ function validateSupporterResponse(value) {
   });
 }
 
+function validatePortalLinkResponse(value) {
+  if (!isRecord(value) || !hasExactKeys(value, ["portalUrl", "verifiedAt"])) {
+    throw new TypeError("invalid portal link response");
+  }
+  if (!isCanonicalTimestamp(value.verifiedAt)) {
+    throw new TypeError("invalid portal link timestamp");
+  }
+  if (typeof value.portalUrl !== "string") {
+    throw new TypeError("invalid portal link URL");
+  }
+
+  let portalUrl;
+  try {
+    portalUrl = new URL(value.portalUrl);
+  } catch {
+    throw new TypeError("invalid portal link URL");
+  }
+
+  const token = portalUrl.hash.startsWith("#")
+    ? portalUrl.hash.slice(1)
+    : "";
+  if (
+    portalUrl.protocol !== "https:" ||
+    portalUrl.username !== "" ||
+    portalUrl.password !== "" ||
+    portalUrl.pathname !== "/level" ||
+    portalUrl.search !== "" ||
+    portalUrl.hash === "" ||
+    !PORTAL_TOKEN_PATTERN.test(token)
+  ) {
+    throw new TypeError("invalid portal link URL");
+  }
+
+  return value.portalUrl;
+}
+
+function showPortalFailure(status, message) {
+  status.textContent = message;
+}
+
+function showPortalSuccess(status, portalUrl) {
+  const success = document.createElement("p");
+  const warning = document.createElement("p");
+  const secretUrl = document.createElement("code");
+
+  success.textContent = "ポータルURLを発行しました。";
+  warning.textContent =
+    "この秘密のURLは保存されません。今すぐコピーしてください。";
+  secretUrl.textContent = portalUrl;
+  status.replaceChildren(success, warning, secretUrl);
+}
+
+async function prepareSupporterPortalLink(supporterId, button, status) {
+  if (
+    !window.confirm(
+      "新しいポータルURLを発行します。以前のURLがある場合、以前のURLは現在のURLではなくなります。続行しますか？",
+    )
+  ) {
+    return;
+  }
+
+  button.disabled = true;
+  status.textContent = "ポータルURLを準備しています。";
+
+  try {
+    const response = await fetch("/api/portal-link", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ supporterId }),
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    if (response.status === 503) {
+      showPortalFailure(status, "ポータル連携が設定されていません。");
+      return;
+    }
+    if (!response.ok) {
+      throw new Error("portal link request failed");
+    }
+
+    const result = validatePortalLinkResponse(await response.json());
+    showPortalSuccess(status, result);
+  } catch {
+    showPortalFailure(status, "ポータルURLを準備できませんでした。");
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function renderSupporter(supporter) {
   const item = document.createElement("li");
   const name = document.createElement("h3");
@@ -102,13 +213,29 @@ function renderSupporter(supporter) {
   const entries = document.createElement("p");
   const supportStatus = document.createElement("p");
   const latestMonth = document.createElement("p");
+  const portalButton = document.createElement("button");
+  const portalStatus = document.createElement("p");
 
   name.textContent = supporter.displayName;
   level.textContent = \`Lv.\${supporter.currentLevel}\`;
   entries.textContent = \`\${supporter.nextLotteryEntryCount}口\`;
   supportStatus.textContent = supporter.supporting ? "支援中" : "支援停止";
   latestMonth.textContent = \`最新処理月: \${supporter.latestMonthKey ?? "未処理"}\`;
-  item.replaceChildren(name, level, entries, supportStatus, latestMonth);
+  portalButton.type = "button";
+  portalButton.textContent = "ポータルURLを発行・再発行";
+  portalStatus.setAttribute("role", "status");
+  portalButton.addEventListener("click", () => {
+    void prepareSupporterPortalLink(supporter.id, portalButton, portalStatus);
+  });
+  item.replaceChildren(
+    name,
+    level,
+    entries,
+    supportStatus,
+    latestMonth,
+    portalButton,
+    portalStatus,
+  );
   return item;
 }
 
