@@ -1,9 +1,13 @@
 export { CURRENT_SCHEMA_VERSION } from "./migrations.js";
 export { openLocalStore } from "./store.js";
 export type {
+  ApplyFanboxSupporterImportInput,
   CreateMigratedSupporterInput,
   CreateMigratedSupporterResult,
   CreateSupporterInput,
+  FanboxSupporterImportCreate,
+  FanboxSupporterImportRecord,
+  FanboxSupporterImportUpdate,
   LevelOperationKind,
   LevelOperationRecord,
   LevelTransitionOperationInput,

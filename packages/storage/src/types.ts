@@ -38,6 +38,29 @@ export type CreateSupporterInput = Readonly<{
   initialLevel?: number;
 }>;
 
+export type FanboxSupporterImportCreate = Readonly<{
+  fanboxRelationshipId: string;
+  displayName: string;
+}>;
+
+export type FanboxSupporterImportUpdate = Readonly<{
+  supporterId: string;
+  displayName?: string;
+  supporting?: boolean;
+}>;
+
+export type ApplyFanboxSupporterImportInput = Readonly<{
+  creates: readonly FanboxSupporterImportCreate[];
+  updates: readonly FanboxSupporterImportUpdate[];
+  presentSupporterCount: number;
+}>;
+
+export type FanboxSupporterImportRecord = Readonly<{
+  sequence: number;
+  importedAt: string;
+  presentSupporterCount: number;
+}>;
+
 export type CreateMigratedSupporterInput = Readonly<{
   fanboxRelationshipId: string;
   displayName: string;
@@ -100,6 +123,10 @@ export type OpenLocalStoreOptions = Readonly<{
 export interface LocalStore {
   close(): void;
   createSupporter(input: CreateSupporterInput): SupporterRecord;
+  applyFanboxSupporterImport(
+    input: ApplyFanboxSupporterImportInput,
+  ): FanboxSupporterImportRecord;
+  getLatestFanboxSupporterImport(): FanboxSupporterImportRecord | null;
   createMigratedSupporter(
     input: CreateMigratedSupporterInput,
   ): CreateMigratedSupporterResult;

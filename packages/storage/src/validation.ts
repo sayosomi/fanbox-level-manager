@@ -1,6 +1,9 @@
 import type {
+  ApplyFanboxSupporterImportInput,
   CreateMigratedSupporterInput,
   CreateSupporterInput,
+  FanboxSupporterImportCreate,
+  FanboxSupporterImportUpdate,
   LevelOperationKind,
   MonthlyState,
   SupporterProfilePatch,
@@ -11,6 +14,15 @@ const MONTH_KEY_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value) || Array.isArray(value)) {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 export function assertNonBlankString(
@@ -106,6 +118,101 @@ export function assertValidSupporterProfilePatch(
 
   if ("supporting" in patch) {
     assertBoolean(patch.supporting, "supporting");
+  }
+}
+
+function assertAllowedKeys(
+  value: Record<string, unknown>,
+  allowedKeys: readonly string[],
+  objectName: string,
+): void {
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.includes(key)) {
+      throw new TypeError(`unsupported ${objectName} field: ${key}`);
+    }
+  }
+}
+
+function assertArray(value: unknown, fieldName: string): asserts value is readonly unknown[] {
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${fieldName} must be an array`);
+  }
+}
+
+function assertValidFanboxSupporterImportCreate(
+  value: unknown,
+): asserts value is FanboxSupporterImportCreate {
+  if (!isPlainObject(value)) {
+    throw new TypeError("fanbox supporter import create must be an object");
+  }
+
+  assertNonBlankString(value.fanboxRelationshipId, "fanboxRelationshipId");
+  assertNonBlankString(value.displayName, "displayName");
+}
+
+function assertValidFanboxSupporterImportUpdate(
+  value: unknown,
+): asserts value is FanboxSupporterImportUpdate {
+  if (!isPlainObject(value)) {
+    throw new TypeError("fanbox supporter import update must be an object");
+  }
+
+  assertAllowedKeys(
+    value,
+    ["supporterId", "displayName", "supporting"],
+    "fanbox supporter import update",
+  );
+  assertNonBlankString(value.supporterId, "supporterId");
+
+  if (!("displayName" in value) && !("supporting" in value)) {
+    throw new TypeError(
+      "fanbox supporter import update must include displayName or supporting",
+    );
+  }
+  if ("displayName" in value) {
+    assertNonBlankString(value.displayName, "displayName");
+  }
+  if ("supporting" in value) {
+    assertBoolean(value.supporting, "supporting");
+  }
+}
+
+export function assertValidApplyFanboxSupporterImportInput(
+  input: unknown,
+): asserts input is ApplyFanboxSupporterImportInput {
+  if (!isPlainObject(input)) {
+    throw new TypeError("fanbox supporter import input must be an object");
+  }
+
+  assertArray(input.creates, "creates");
+  assertArray(input.updates, "updates");
+  if (
+    typeof input.presentSupporterCount !== "number" ||
+    !Number.isFinite(input.presentSupporterCount) ||
+    !Number.isInteger(input.presentSupporterCount) ||
+    input.presentSupporterCount < 0
+  ) {
+    throw new RangeError(
+      "presentSupporterCount must be a non-negative finite integer",
+    );
+  }
+
+  const createRelationshipIds = new Set<string>();
+  for (const create of input.creates) {
+    assertValidFanboxSupporterImportCreate(create);
+    if (createRelationshipIds.has(create.fanboxRelationshipId)) {
+      throw new TypeError("fanbox supporter import creates must not contain duplicate relationship IDs");
+    }
+    createRelationshipIds.add(create.fanboxRelationshipId);
+  }
+
+  const updateSupporterIds = new Set<string>();
+  for (const update of input.updates) {
+    assertValidFanboxSupporterImportUpdate(update);
+    if (updateSupporterIds.has(update.supporterId)) {
+      throw new TypeError("fanbox supporter import updates must not contain duplicate supporter IDs");
+    }
+    updateSupporterIds.add(update.supporterId);
   }
 }
 
