@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createSupporterListService } from "./index.js";
-import type { LocalStore, SupporterRecord } from "@sayosomi/storage";
+import type {
+  LocalStore,
+  SupporterPortalAccessRecord,
+  SupporterRecord,
+} from "@sayosomi/storage";
 
 function supporterRecord(overrides: Partial<SupporterRecord> = {}): SupporterRecord {
   return Object.freeze({
@@ -16,9 +20,14 @@ function supporterRecord(overrides: Partial<SupporterRecord> = {}): SupporterRec
   });
 }
 
-function storeReturning(records: readonly SupporterRecord[]): LocalStore {
+function storeReturning(
+  records: readonly SupporterRecord[],
+  accesses: ReadonlyMap<string, SupporterPortalAccessRecord> = new Map(),
+): LocalStore {
   return {
     listSupporters: () => records,
+    getSupporterPortalAccess: (supporterId: string) =>
+      accesses.get(supporterId) ?? null,
   } as unknown as LocalStore;
 }
 
@@ -46,6 +55,7 @@ describe("supporter list application service", () => {
       nextLotteryEntryCount: 3,
       supporting: false,
       latestMonthKey: "2026-09",
+      portalDeliveryState: "not_issued",
     });
     expect(item && Object.keys(item).sort()).toEqual([
       "currentLevel",
@@ -53,6 +63,7 @@ describe("supporter list application service", () => {
       "id",
       "latestMonthKey",
       "nextLotteryEntryCount",
+      "portalDeliveryState",
       "supporting",
     ]);
     for (const forbiddenField of [
@@ -63,8 +74,63 @@ describe("supporter list application service", () => {
       "monthlyPlusOneUsed",
       "lotteryParticipationOccurred",
       "operation",
+      "issuedAt",
+      "provisionedAt",
+      "sentAt",
     ]) {
       expect(item).not.toHaveProperty(forbiddenField);
+    }
+  });
+
+  it("projects all four portal delivery states without access details", () => {
+    const records = [
+      supporterRecord({ id: "not-issued" }),
+      supporterRecord({ id: "issued" }),
+      supporterRecord({ id: "provisioned" }),
+      supporterRecord({ id: "sent" }),
+    ];
+    const access = (id: string, provisionedAt: string | null, sentAt: string | null) =>
+      Object.freeze({
+        supporterId: id,
+        tokenHash: `${id}-token-hash`,
+        issuedAt: "2026-09-04T00:00:00.000Z",
+        provisionedAt,
+        sentAt,
+      });
+    const service = createSupporterListService(
+      storeReturning(
+        records,
+        new Map([
+          ["issued", access("issued", null, null)],
+          [
+            "provisioned",
+            access("provisioned", "2026-09-04T00:01:00.000Z", null),
+          ],
+          [
+            "sent",
+            access(
+              "sent",
+              "2026-09-04T00:01:00.000Z",
+              "2026-09-04T00:02:00.000Z",
+            ),
+          ],
+        ]),
+      ),
+    );
+
+    expect(service.listSupporters().map((item) => item.portalDeliveryState)).toEqual([
+      "not_issued",
+      "issued",
+      "provisioned",
+      "sent",
+    ]);
+    for (const item of service.listSupporters()) {
+      expect(Object.keys(item)).toHaveLength(7);
+      expect(item).not.toHaveProperty("tokenHash");
+      expect(item).not.toHaveProperty("issuedAt");
+      expect(item).not.toHaveProperty("provisionedAt");
+      expect(item).not.toHaveProperty("sentAt");
+      expect(item).not.toHaveProperty("access");
     }
   });
 
