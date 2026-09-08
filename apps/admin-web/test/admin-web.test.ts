@@ -4,9 +4,12 @@ import {
   type IncomingHttpHeaders,
   type Server,
 } from "node:http";
+import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FanboxPdfInspectionError,
+  FanboxSupporterImportBlockedError,
+  FanboxSupporterImportError,
   SupporterPortalDeliveryConflictError,
 } from "@sayosomi/application";
 import type {
@@ -14,6 +17,7 @@ import type {
   FanboxPdfInspection,
   FanboxPdfInspectionService,
   FanboxPdfSupporterComparison,
+  FanboxSupporterImportService,
   FanboxSupporterComparisonService,
   SupporterPortalDeliveryService,
   SupporterPortalLinkService,
@@ -319,6 +323,15 @@ const comparisonResult: FanboxPdfSupporterComparison = Object.freeze({
   ]),
 });
 
+const samplePdfImportResult = Object.freeze({
+  comparison: comparisonResult,
+  importRecord: Object.freeze({
+    sequence: 7,
+    importedAt: "2026-09-08T09:00:00.000Z",
+    presentSupporterCount: 3,
+  }),
+});
+
 function createPdfInspectionService(
   implementation: FanboxPdfInspectionService["inspectFanboxPdf"],
 ): FanboxPdfInspectionService {
@@ -329,6 +342,12 @@ function createPdfComparisonService(
   implementation: FanboxSupporterComparisonService["compareInspection"],
 ): FanboxSupporterComparisonService {
   return { compareInspection: implementation };
+}
+
+function createPdfImportService(
+  implementation: FanboxSupporterImportService["applyInspection"],
+): FanboxSupporterImportService {
+  return { applyInspection: implementation };
 }
 
 function expectCommonSecurityHeaders(headers: IncomingHttpHeaders): void {
@@ -892,6 +911,319 @@ describe("PDF inspection route", () => {
   });
 });
 
+describe("PDF import route", () => {
+  it.each(["GET", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])(
+    "returns 405 and Allow: POST for %s",
+    async (method) => {
+      const response = await request(method, "/api/fanbox-pdf/import");
+
+      expect(response.statusCode).toBe(405);
+      expect(response.headers.allow).toBe("POST");
+    },
+  );
+
+  it.each([undefined, "application/json", "application/pdfx"])(
+    "returns exact 415 for unsupported media type %j",
+    async (contentType) => {
+      const headers =
+        contentType === undefined ? {} : { "Content-Type": contentType };
+      const response = await request(
+        "POST",
+        "/api/fanbox-pdf/import",
+        new Uint8Array([1]),
+        headers,
+      );
+
+      expect(response.statusCode).toBe(415);
+      expect(response.body).toBe('{"error":"unsupported_media_type"}');
+    },
+  );
+
+  it("returns exact 400 for an empty PDF request", async () => {
+    const response = await request(
+      "POST",
+      "/api/fanbox-pdf/import",
+      "",
+      { "Content-Type": "application/pdf" },
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toBe('{"error":"invalid_request"}');
+  });
+
+  it("rejects a streamed body over 25 MiB without inspection or apply", async () => {
+    const inspect = vi.fn(async () => samplePdfInspection);
+    const apply = vi.fn(() => samplePdfImportResult);
+    const importServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      createPdfInspectionService(inspect),
+      undefined,
+      createPdfImportService(apply),
+    );
+    const importPort = await listenOnEphemeralPort(importServer);
+    const body = Buffer.alloc(25 * 1024 * 1024 + 1, 1);
+
+    try {
+      const response = await requestOnPort(
+        importPort,
+        "POST",
+        "/api/fanbox-pdf/import",
+        body,
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect(response.statusCode).toBe(413);
+      expect(response.body).toBe('{"error":"pdf_too_large"}');
+      expect(inspect).not.toHaveBeenCalled();
+      expect(apply).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(importServer);
+    }
+  });
+
+  it("returns import-unavailable before inspection when the import service is absent", async () => {
+    const inspect = vi.fn(async () => samplePdfInspection);
+    const importServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      createPdfInspectionService(inspect),
+    );
+    const importPort = await listenOnEphemeralPort(importServer);
+
+    try {
+      const response = await requestOnPort(
+        importPort,
+        "POST",
+        "/api/fanbox-pdf/import",
+        new Uint8Array([37, 80, 68, 70]),
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect(response.statusCode).toBe(500);
+      expect(response.body).toBe('{"error":"fanbox_import_unavailable"}');
+      expect(inspect).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(importServer);
+    }
+  });
+
+  it("returns inspection-unavailable without applying when inspection is absent", async () => {
+    const apply = vi.fn(() => samplePdfImportResult);
+    const importServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createPdfImportService(apply),
+    );
+    const importPort = await listenOnEphemeralPort(importServer);
+
+    try {
+      const response = await requestOnPort(
+        importPort,
+        "POST",
+        "/api/fanbox-pdf/import",
+        new Uint8Array([37, 80, 68, 70]),
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect(response.statusCode).toBe(500);
+      expect(response.body).toBe('{"error":"pdf_inspection_unavailable"}');
+      expect(apply).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(importServer);
+    }
+  });
+
+  it("inspects the exact uploaded bytes once and applies the exact inspection once", async () => {
+    const pdfBytes = new Uint8Array([37, 80, 68, 70, 0, 255, 9]);
+    const received: Uint8Array[] = [];
+    const inspect = vi.fn(async (data: Uint8Array) => {
+      received.push(data);
+      return samplePdfInspection;
+    });
+    const apply = vi.fn((inspection: FanboxPdfInspection) => {
+      expect(inspection).toBe(samplePdfInspection);
+      return samplePdfImportResult;
+    });
+    const importServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      createPdfInspectionService(inspect),
+      undefined,
+      createPdfImportService(apply),
+    );
+    const importPort = await listenOnEphemeralPort(importServer);
+
+    try {
+      const response = await requestOnPort(
+        importPort,
+        "POST",
+        "/api/fanbox-pdf/import",
+        pdfBytes,
+        { "Content-Type": "application/pdf; charset=binary" },
+      );
+
+      expect(inspect).toHaveBeenCalledTimes(1);
+      expect(received).toHaveLength(1);
+      expect([...received[0] ?? []]).toEqual([...pdfBytes]);
+      expect(apply).toHaveBeenCalledTimes(1);
+      expect(apply).toHaveBeenCalledWith(samplePdfInspection);
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toBe(
+        JSON.stringify({
+          importedAt: samplePdfImportResult.importRecord.importedAt,
+          presentSupporterCount:
+            samplePdfImportResult.importRecord.presentSupporterCount,
+        }),
+      );
+      expect(Object.keys(JSON.parse(response.body))).toEqual([
+        "importedAt",
+        "presentSupporterCount",
+      ]);
+      expect(response.body).not.toContain("sequence");
+      expect(response.body).not.toContain("internal-supporter-id");
+      expect(response.body).not.toContain("relationship_123");
+      expect(response.body).not.toContain("synthetic candidate");
+      expectCommonSecurityHeaders(response.headers);
+    } finally {
+      await closeServer(importServer);
+    }
+  });
+
+  it.each([
+    "empty_relationships",
+    "duplicate_relationship_id",
+    "new_display_name_unavailable",
+  ] as const)("maps blocked reason %s without diagnostics", async (reason) => {
+    const sensitiveMessage =
+      "private supporter id, display name, relationship, and source diagnostics";
+    const inspect = vi.fn(async () => samplePdfInspection);
+    const apply = vi.fn(() => {
+      throw new FanboxSupporterImportBlockedError(reason);
+    });
+    const importServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      createPdfInspectionService(inspect),
+      undefined,
+      createPdfImportService(apply),
+    );
+    const importPort = await listenOnEphemeralPort(importServer);
+
+    try {
+      const response = await requestOnPort(
+        importPort,
+        "POST",
+        "/api/fanbox-pdf/import",
+        new Uint8Array([37, 80, 68, 70]),
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect(response.statusCode).toBe(422);
+      expect(response.body).toBe(
+        JSON.stringify({ error: "fanbox_import_blocked", reason }),
+      );
+      expect(response.body).not.toContain(sensitiveMessage);
+      expect(response.body).not.toContain("internal-supporter-id");
+      expect(response.body).not.toContain("relationship_123");
+      expectCommonSecurityHeaders(response.headers);
+    } finally {
+      await closeServer(importServer);
+    }
+  });
+
+  it.each([
+    new FanboxSupporterImportError(),
+    new Error("private import storage and source diagnostics"),
+  ])("maps application and unexpected apply failures generically", async (error) => {
+    const inspect = vi.fn(async () => samplePdfInspection);
+    const apply = vi.fn(() => {
+      throw error;
+    });
+    const importServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      createPdfInspectionService(inspect),
+      undefined,
+      createPdfImportService(apply),
+    );
+    const importPort = await listenOnEphemeralPort(importServer);
+
+    try {
+      const response = await requestOnPort(
+        importPort,
+        "POST",
+        "/api/fanbox-pdf/import",
+        new Uint8Array([37, 80, 68, 70]),
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect(response.statusCode).toBe(500);
+      expect(response.body).toBe('{"error":"fanbox_import_failed"}');
+      expect(response.body).not.toContain("private import storage");
+      expect(response.body).not.toContain("source diagnostics");
+      expectCommonSecurityHeaders(response.headers);
+    } finally {
+      await closeServer(importServer);
+    }
+  });
+
+  it.each([
+    {
+      inspectionError: new FanboxPdfInspectionError("private invalid PDF"),
+      statusCode: 422,
+      body: '{"error":"invalid_pdf"}',
+    },
+    {
+      inspectionError: new Error("private inspection source diagnostics"),
+      statusCode: 500,
+      body: '{"error":"pdf_inspection_failed"}',
+    },
+  ])("does not apply when inspection fails", async ({
+    inspectionError,
+    statusCode,
+    body,
+  }) => {
+    const inspect = vi.fn(async () => {
+      throw inspectionError;
+    });
+    const apply = vi.fn(() => samplePdfImportResult);
+    const importServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      createPdfInspectionService(inspect),
+      undefined,
+      createPdfImportService(apply),
+    );
+    const importPort = await listenOnEphemeralPort(importServer);
+
+    try {
+      const response = await requestOnPort(
+        importPort,
+        "POST",
+        "/api/fanbox-pdf/import",
+        new Uint8Array([37, 80, 68, 70]),
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect(response.statusCode).toBe(statusCode);
+      expect(response.body).toBe(body);
+      expect(apply).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(importServer);
+    }
+  });
+});
+
 describe("portal link route", () => {
   it("passes the exact supporter ID to the injected service and returns exact success JSON", async () => {
     const result = Object.freeze({
@@ -1242,6 +1574,11 @@ describe("admin server configuration", () => {
       expect(suppliedStore).toBe(store);
       return comparisonService;
     });
+    const importService = createPdfImportService(() => samplePdfImportResult);
+    const createImportService = vi.fn((suppliedStore: LocalStore) => {
+      expect(suppliedStore).toBe(store);
+      return importService;
+    });
     const createListService = vi.fn((suppliedStore: LocalStore) => {
       expect(suppliedStore).toBe(store);
       return sampleSupporterListService;
@@ -1254,6 +1591,7 @@ describe("admin server configuration", () => {
         createSupporterPortalDeliveryService: createDeliveryService,
         createFanboxPdfInspectionService: createInspectionService,
         createFanboxSupporterComparisonService: createComparisonService,
+        createFanboxSupporterImportService: createImportService,
       });
       await new Promise<void>((resolve, reject) => {
         productionServer?.once("listening", () => resolve());
@@ -1280,6 +1618,7 @@ describe("admin server configuration", () => {
       expect(createDeliveryService).toHaveBeenCalledTimes(1);
       expect(createInspectionService).toHaveBeenCalledTimes(1);
       expect(createComparisonService).toHaveBeenCalledTimes(1);
+      expect(createImportService).toHaveBeenCalledTimes(1);
     } finally {
       if (productionServer !== undefined && productionServer.listening) {
         await closeServer(productionServer);
@@ -1520,6 +1859,9 @@ describe("admin server configuration", () => {
     expect(ADMIN_PAGE).toContain("FANBOX PDF確認");
     expect(ADMIN_PAGE).toContain('type="file" accept="application/pdf"');
     expect(ADMIN_PAGE).toContain("PDFを確認");
+    expect(ADMIN_PAGE).toContain(
+      '<button id="pdf-import-button" type="button" disabled>このPDFを支援者状態に反映</button>',
+    );
     expect(ADMIN_PAGE).toContain("pdf-inspection-status");
     expect(ADMIN_SCRIPT).toContain('fetch("/api/supporters", {');
     expect(ADMIN_SCRIPT).toContain('method: "GET"');
@@ -1531,6 +1873,9 @@ describe("admin server configuration", () => {
     expect(ADMIN_SCRIPT).toContain('hasExactKeys(value, ["supporters"])');
     expect(ADMIN_SCRIPT).toContain(
       'fetch("/api/fanbox-pdf/inspect", {',
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      'fetch("/api/fanbox-pdf/import", {',
     );
     expect(ADMIN_SCRIPT).toContain('method: "POST"');
     expect(ADMIN_SCRIPT).toContain('"Content-Type": "application/pdf"');
@@ -1629,7 +1974,26 @@ describe("admin server configuration", () => {
     expect(ADMIN_SCRIPT).toContain("確認するPDFファイルを選択してください。");
     expect(ADMIN_SCRIPT).toContain("PDFを確認しています。");
     expect(ADMIN_SCRIPT).toContain("PDFを確認できませんでした。");
-    expect(ADMIN_SCRIPT).not.toContain('addEventListener("change"');
+    expect(ADMIN_SCRIPT).toContain('addEventListener("change"');
+    expect(ADMIN_SCRIPT).toContain("PDF_IMPORT_BLOCKED_REASONS");
+    expect(ADMIN_SCRIPT).toContain(
+      'hasExactKeys(value, ["importedAt", "presentSupporterCount"])',
+    );
+    expect(ADMIN_SCRIPT).toContain("validatePdfImportResponse");
+    expect(ADMIN_SCRIPT).toContain("validatePdfImportBlockedResponse");
+    expect(ADMIN_SCRIPT).toContain("state.previewedFile !== state.selectedFile");
+    expect(ADMIN_SCRIPT).toContain("state.actionActive");
+    expect(ADMIN_SCRIPT).toContain("body: file");
+    expect(ADMIN_SCRIPT).toContain("支援者状態を反映しました。");
+    expect(ADMIN_SCRIPT).toContain("支援者情報がないため、反映できません。");
+    expect(ADMIN_SCRIPT).toContain(
+      "PDF内に重複した関係情報があるため、反映できません。",
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      "新規支援者の表示名を確認できないため、反映できません。",
+    );
+    expect(ADMIN_SCRIPT).toContain("await loadSupporters(listStatus, supporterList)");
+    expect(ADMIN_SCRIPT).not.toContain("fileInput.value = \"\"");
     expect(ADMIN_SCRIPT).toContain('"portalDeliveryState"');
     expect(ADMIN_SCRIPT).toContain("PORTAL_DELIVERY_STATES");
     for (const deliveryState of [
@@ -1711,6 +2075,244 @@ describe("admin server configuration", () => {
     }
     expect(ADMIN_SCRIPT).not.toContain("textContent = supporter.id");
     expect(ADMIN_PAGE).not.toContain("/tmp/fanbox-level-manager-admin.sqlite");
+  });
+
+  it("ties confirmation to the previewed File, locks actions, validates results, and refreshes after success", async () => {
+    type FakeListener = () => void;
+    type FakeResponse = Readonly<{
+      ok: boolean;
+      status: number;
+      json: () => Promise<unknown>;
+    }>;
+    type FetchCall = Readonly<{
+      url: string;
+      body: unknown;
+    }>;
+
+    class FakeElement {
+      readonly children: FakeElement[] = [];
+      readonly listeners = new Map<string, FakeListener>();
+      disabled = false;
+      files: readonly unknown[] = [];
+      textContent = "";
+
+      addEventListener(type: string, listener: FakeListener): void {
+        this.listeners.set(type, listener);
+      }
+
+      click(): void {
+        if (this.disabled) {
+          return;
+        }
+        this.listeners.get("click")?.();
+      }
+
+      dispatch(type: string): void {
+        this.listeners.get(type)?.();
+      }
+
+      replaceChildren(...children: FakeElement[]): void {
+        this.children.splice(0, this.children.length, ...children);
+      }
+
+      setAttribute(): void {}
+    }
+
+    class FakeInputElement extends FakeElement {}
+    class FakeButtonElement extends FakeElement {}
+
+    const elements = new Map<string, FakeElement>([
+      ["pdf-inspection-file", new FakeInputElement()],
+      ["pdf-inspection-button", new FakeButtonElement()],
+      ["pdf-import-button", new FakeButtonElement()],
+      ["pdf-inspection-status", new FakeElement()],
+      ["pdf-inspection-result", new FakeElement()],
+      ["list-status", new FakeElement()],
+      ["list", new FakeElement()],
+    ]);
+    const documentElement = { dataset: {} as Record<string, string> };
+    const fakeDocument = {
+      documentElement,
+      getElementById: (id: string): FakeElement | null =>
+        elements.get(id) ?? null,
+      createElement: (): FakeElement => new FakeElement(),
+    };
+    const inspectionResponseBody = {
+      pageCount: 1,
+      relationshipLinks: [
+        {
+          pageNumber: 1,
+          relationshipId: "synthetic_relationship",
+          displayNameCandidate: null,
+          rect: [0, 0, 10, 10],
+          textRuns: [],
+        },
+      ],
+      comparison: {
+        presentSupporters: [
+          {
+            status: "new",
+            relationshipId: "synthetic_relationship",
+            storedDisplayName: null,
+          },
+        ],
+        absentSupporters: [],
+      },
+    };
+    const fetchCalls: FetchCall[] = [];
+    const inspectionResolvers: Array<(response: FakeResponse) => void> = [];
+    const importResolvers: Array<(response: FakeResponse) => void> = [];
+    const response = (status: number, body: unknown): FakeResponse => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    });
+    const fetchMock = vi.fn(
+      (url: string, options: { body?: unknown } = {}): Promise<FakeResponse> => {
+        fetchCalls.push({ url, body: options.body });
+        if (url === "/api/supporters") {
+          return Promise.resolve(response(200, { supporters: [] }));
+        }
+        if (url === "/api/fanbox-pdf/inspect") {
+          return new Promise((resolve) => inspectionResolvers.push(resolve));
+        }
+        if (url === "/api/fanbox-pdf/import") {
+          return new Promise((resolve) => importResolvers.push(resolve));
+        }
+        return Promise.reject(new Error("unexpected synthetic request"));
+      },
+    );
+
+    runInNewContext(ADMIN_SCRIPT, {
+      Array,
+      Date,
+      document: fakeDocument,
+      Error,
+      fetch: fetchMock,
+      HTMLButtonElement: FakeButtonElement,
+      HTMLInputElement: FakeInputElement,
+      Number,
+      Object,
+      Set,
+      TypeError,
+      URL,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const fileInput = elements.get("pdf-inspection-file") as FakeInputElement;
+    const inspectionButton = elements.get(
+      "pdf-inspection-button",
+    ) as FakeButtonElement;
+    const importButton = elements.get("pdf-import-button") as FakeButtonElement;
+    const inspectionStatus = elements.get("pdf-inspection-status") as FakeElement;
+    const inspectionResult = elements.get("pdf-inspection-result") as FakeElement;
+    const previewedFile = { name: "synthetic-preview.pdf" };
+    const otherFile = { name: "synthetic-other.pdf" };
+
+    expect(importButton.disabled).toBe(true);
+    fileInput.files = [previewedFile];
+    fileInput.dispatch("change");
+    expect(importButton.disabled).toBe(true);
+
+    inspectionButton.click();
+    expect(fetchCalls.filter(({ url }) => url === "/api/fanbox-pdf/inspect")).toHaveLength(1);
+    expect(inspectionButton.disabled).toBe(true);
+    expect(importButton.disabled).toBe(true);
+    importButton.click();
+    inspectionButton.click();
+    expect(fetchCalls.filter(({ url }) => url === "/api/fanbox-pdf/inspect")).toHaveLength(1);
+
+    inspectionResolvers[0]?.(response(200, inspectionResponseBody));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(importButton.disabled).toBe(false);
+    expect(inspectionResult.children.length).toBeGreaterThan(0);
+
+    fileInput.files = [otherFile];
+    fileInput.dispatch("change");
+    expect(importButton.disabled).toBe(true);
+    expect(inspectionResult.children).toHaveLength(0);
+    fileInput.files = [];
+    fileInput.dispatch("change");
+    expect(importButton.disabled).toBe(true);
+    expect(inspectionStatus.textContent).toBe("");
+
+    fileInput.files = [previewedFile];
+    fileInput.dispatch("change");
+    inspectionButton.click();
+    inspectionResolvers[1]?.(response(200, inspectionResponseBody));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(importButton.disabled).toBe(false);
+
+    importButton.click();
+    expect(fetchCalls.filter(({ url }) => url === "/api/fanbox-pdf/import")).toHaveLength(1);
+    const firstImport = fetchCalls.find(({ url }) => url === "/api/fanbox-pdf/import");
+    expect(firstImport?.body).toBe(previewedFile);
+    expect(firstImport?.body).not.toBe(JSON.stringify(inspectionResponseBody));
+    expect(inspectionButton.disabled).toBe(true);
+    expect(importButton.disabled).toBe(true);
+    importButton.click();
+    expect(fetchCalls.filter(({ url }) => url === "/api/fanbox-pdf/import")).toHaveLength(1);
+    importResolvers[0]?.(
+      response(200, {
+        importedAt: "2026-09-08T09:00:00.000Z",
+        presentSupporterCount: 1,
+        unexpected: "private diagnostic",
+      }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(inspectionStatus.textContent).toBe(
+      "支援者状態を反映できませんでした。",
+    );
+    expect(inspectionResult.children.length).toBeGreaterThan(0);
+    expect(importButton.disabled).toBe(false);
+
+    importButton.click();
+    importResolvers[1]?.(
+      response(422, {
+        error: "fanbox_import_blocked",
+        reason: "unknown_reason",
+        supporterId: "internal-supporter-id",
+      }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(inspectionStatus.textContent).toBe(
+      "支援者状態を反映できませんでした。",
+    );
+    expect(inspectionResult.children.length).toBeGreaterThan(0);
+    expect(importButton.disabled).toBe(false);
+
+    importButton.click();
+    importResolvers[2]?.(
+      response(422, {
+        error: "fanbox_import_blocked",
+        reason: "duplicate_relationship_id",
+      }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(inspectionStatus.textContent).toBe(
+      "PDF内に重複した関係情報があるため、反映できません。",
+    );
+    expect(inspectionStatus.textContent).not.toContain(
+      "internal-supporter-id",
+    );
+    expect(inspectionResult.children.length).toBeGreaterThan(0);
+    expect(importButton.disabled).toBe(false);
+
+    importButton.click();
+    importResolvers[3]?.(
+      response(200, {
+        importedAt: "2026-09-08T09:00:00.000Z",
+        presentSupporterCount: 4,
+      }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(inspectionStatus.textContent).toBe(
+      "支援者状態を反映しました。支援者数: 4人、取込日時: 2026-09-08T09:00:00.000Z",
+    );
+    expect(inspectionResult.children).toHaveLength(0);
+    expect(importButton.disabled).toBe(true);
+    expect(fileInput.files[0]).toBe(previewedFile);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(2);
   });
 
   it("opens the original configured path and closes the production store once", async () => {
