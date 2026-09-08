@@ -98,3 +98,14 @@ export type {
   FanboxSupporterImportResult,
   FanboxSupporterImportService,
 } from "./fanbox-supporter-import-service.js";
+export {
+  MonthEndSourceConflictError,
+  MonthEndSourceUnavailableError,
+  createMonthEndProcessingService,
+} from "./month-end-processing-service.js";
+export type {
+  MonthEndProcessingResult,
+  MonthEndProcessingService,
+  MonthEndSource,
+  MonthEndSupporterResult,
+} from "./month-end-processing-service.js";
