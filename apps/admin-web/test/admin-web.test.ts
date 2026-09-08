@@ -2415,6 +2415,12 @@ describe("admin server configuration", () => {
   });
 
   it("keeps browser data private and uses the required safe fetch/render path", () => {
+    expect(ADMIN_PAGE).toContain("抽選結果登録");
+    expect(ADMIN_PAGE).toContain("抽選実施日時（日本時間）");
+    expect(ADMIN_PAGE).toContain(
+      '<input id="lottery-occurred-at" type="datetime-local" step="60">',
+    );
+    expect(ADMIN_PAGE).toContain("抽選結果を反映");
     expect(ADMIN_PAGE).toContain("支援者一覧");
     expect(ADMIN_PAGE).toContain("支援者一覧を読み込んでいます。");
     expect(ADMIN_PAGE).toContain("FANBOX PDF確認");
@@ -2583,6 +2589,17 @@ describe("admin server configuration", () => {
     expect(ADMIN_SCRIPT).toContain(
       "supporter.nextLotteryEntryCount !== supporter.currentLevel + 1",
     );
+    expect(ADMIN_SCRIPT).toContain('const LOTTERY_RESULT_OPTIONS = [');
+    expect(ADMIN_SCRIPT).toContain('{ value: "none", label: "不参加" }');
+    expect(ADMIN_SCRIPT).toContain('{ value: "win", label: "当選" }');
+    expect(ADMIN_SCRIPT).toContain('{ value: "loss", label: "落選" }');
+    expect(ADMIN_SCRIPT).toContain("serializeJapanDateTime");
+    expect(ADMIN_SCRIPT).toContain("JAPAN_TIME_OFFSET_MILLISECONDS");
+    expect(ADMIN_SCRIPT).toContain('fetch("/api/lottery-results", {');
+    expect(ADMIN_SCRIPT).toContain("isExactLotterySuccess");
+    expect(ADMIN_SCRIPT).toContain("isExactLotteryConflict");
+    expect(ADMIN_SCRIPT).toContain("抽選結果を反映できませんでした。");
+    expect(ADMIN_SCRIPT).toContain("支援者状態または処理月が変わっています。");
     expect(ADMIN_SCRIPT).toContain("MONTH_KEY_PATTERN");
     expect(ADMIN_SCRIPT).toContain("支援者はいません。");
     expect(ADMIN_SCRIPT).toContain("支援者一覧を読み込めませんでした。");
@@ -2651,6 +2668,410 @@ describe("admin server configuration", () => {
     }
     expect(ADMIN_SCRIPT).not.toContain("textContent = supporter.id");
     expect(ADMIN_PAGE).not.toContain("/tmp/fanbox-level-manager-admin.sqlite");
+  });
+
+  it("renders and submits settled lottery results with Japan-time validation", async () => {
+    type FakeListener = () => void;
+    type FakeResponse = Readonly<{
+      ok: boolean;
+      status: number;
+      json: () => Promise<unknown>;
+    }>;
+    type FetchCall = Readonly<{
+      url: string;
+      body: unknown;
+      options: Readonly<Record<string, unknown>>;
+    }>;
+
+    class FakeElement {
+      readonly children: FakeElement[] = [];
+      readonly listeners = new Map<string, FakeListener>();
+      readonly attributes = new Map<string, string>();
+      readonly dataset: Record<string, string> = {};
+      disabled = false;
+      files: readonly unknown[] = [];
+      tagName = "";
+      textContent = "";
+      type = "";
+      min = "";
+      step = "";
+      value = "";
+
+      addEventListener(type: string, listener: FakeListener): void {
+        this.listeners.set(type, listener);
+      }
+
+      click(): void {
+        if (this.disabled) {
+          return;
+        }
+        this.listeners.get("click")?.();
+      }
+
+      dispatch(type: string): void {
+        this.listeners.get(type)?.();
+      }
+
+      replaceChildren(...children: FakeElement[]): void {
+        this.children.splice(0, this.children.length, ...children);
+      }
+
+      setAttribute(name: string, value: string): void {
+        this.attributes.set(name, value);
+      }
+    }
+
+    class FakeInputElement extends FakeElement {}
+    class FakeButtonElement extends FakeElement {}
+
+    const elements = new Map<string, FakeElement>([
+      ["pdf-inspection-file", new FakeInputElement()],
+      ["pdf-inspection-button", new FakeButtonElement()],
+      ["pdf-import-button", new FakeButtonElement()],
+      ["pdf-inspection-status", new FakeElement()],
+      ["pdf-inspection-result", new FakeElement()],
+      ["list-status", new FakeElement()],
+      ["list", new FakeElement()],
+      ["lottery-occurred-at", new FakeInputElement()],
+      ["lottery-result-status", new FakeElement()],
+      ["lottery-participant-status", new FakeElement()],
+      ["lottery-participant-list", new FakeElement()],
+      ["lottery-result-button", new FakeButtonElement()],
+    ]);
+    const occurredAtInput = elements.get(
+      "lottery-occurred-at",
+    ) as FakeInputElement;
+    occurredAtInput.type = "datetime-local";
+    occurredAtInput.step = "60";
+    const documentElement = { dataset: {} as Record<string, string> };
+    const fakeDocument = {
+      documentElement,
+      getElementById: (id: string): FakeElement | null =>
+        elements.get(id) ?? null,
+      createElement: (tagName: string): FakeElement => {
+        const element = new FakeElement();
+        element.tagName = tagName;
+        return element;
+      },
+    };
+    const refreshedSupporters: readonly SupporterListItem[] = [
+      Object.freeze({
+        id: "internal-supporter-id",
+        displayName: "支援者A・更新後",
+        currentLevel: 4,
+        nextLotteryEntryCount: 5,
+        supporting: true,
+        latestMonthKey: "2026-09",
+        portalDeliveryState: "provisioned",
+      }),
+      Object.freeze({
+        id: "internal-supporter-id-2",
+        displayName: "支援者B・更新後",
+        currentLevel: 1,
+        nextLotteryEntryCount: 2,
+        supporting: false,
+        latestMonthKey: "2026-09",
+        portalDeliveryState: "not_issued",
+      }),
+    ];
+    const supporterBodies: (readonly SupporterListItem[])[] = [
+      sampleSupporters,
+      refreshedSupporters,
+      refreshedSupporters,
+      refreshedSupporters,
+      refreshedSupporters,
+      refreshedSupporters,
+    ];
+    const fetchCalls: FetchCall[] = [];
+    const lotteryResolvers: Array<(response: FakeResponse) => void> = [];
+    const confirmMock = vi.fn<(message: string) => boolean>(() => true);
+    const response = (status: number, body: unknown): FakeResponse => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    });
+    const fetchMock = vi.fn(
+      (
+        url: string,
+        options: Readonly<Record<string, unknown>> = {},
+      ): Promise<FakeResponse> => {
+        fetchCalls.push({ url, body: options.body, options });
+        if (url === "/api/supporters") {
+          const supporters = supporterBodies.shift() ?? refreshedSupporters;
+          return Promise.resolve(response(200, { supporters }));
+        }
+        if (url === "/api/lottery-results") {
+          return new Promise((resolve) => lotteryResolvers.push(resolve));
+        }
+        return Promise.reject(new Error("unexpected synthetic request"));
+      },
+    );
+
+    runInNewContext(ADMIN_SCRIPT, {
+      Array,
+      Date,
+      document: fakeDocument,
+      Error,
+      fetch: fetchMock,
+      HTMLButtonElement: FakeButtonElement,
+      HTMLInputElement: FakeInputElement,
+      Number,
+      Object,
+      Set,
+      TypeError,
+      URL,
+      window: {
+        confirm: confirmMock,
+      },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const participantList = elements.get(
+      "lottery-participant-list",
+    ) as FakeElement;
+    const resultStatus = elements.get(
+      "lottery-result-status",
+    ) as FakeElement;
+    const resultButton = elements.get(
+      "lottery-result-button",
+    ) as FakeButtonElement;
+    const rows = participantList.children;
+    expect(occurredAtInput.value).toBe("");
+    expect(occurredAtInput.type).toBe("datetime-local");
+    expect(occurredAtInput.step).toBe("60");
+    expect(resultButton.disabled).toBe(false);
+    expect(rows).toHaveLength(2);
+
+    const rowText = (element: FakeElement): string =>
+      [element.textContent, ...element.children.map(rowText)].join("");
+    expect(rowText(rows[0]!)).toContain("支援者A");
+    expect(rowText(rows[0]!)).toContain("現在のレベル: Lv.2");
+    expect(rowText(rows[0]!)).toContain("次回抽選口数: 3口");
+    expect(rowText(rows[0]!)).toContain("現在の支援状態: 支援中");
+    expect(rowText(rows[1]!)).toContain("支援者B");
+    expect(rowText(rows[1]!)).toContain("現在の支援状態: 支援停止");
+    expect(rowText(rows[0]!)).not.toContain("internal-supporter-id");
+    expect(rowText(rows[1]!)).not.toContain("internal-supporter-id-2");
+    const selects = rows.map((row) => row.children[4]!.children[1]!);
+    expect(selects.map((select) => select.children.map((option) => [
+      option.value,
+      option.textContent,
+    ]))).toEqual([
+      [
+        ["none", "不参加"],
+        ["win", "当選"],
+        ["loss", "落選"],
+      ],
+      [
+        ["none", "不参加"],
+        ["win", "当選"],
+        ["loss", "落選"],
+      ],
+    ]);
+    expect(selects.map((select) => select.value)).toEqual(["none", "none"]);
+    const visit = (element: FakeElement): void => {
+      for (const value of element.attributes.values()) {
+        expect(value).not.toContain("internal-supporter-id");
+      }
+      for (const value of Object.values(element.dataset)) {
+        expect(value).not.toContain("internal-supporter-id");
+      }
+      for (const child of element.children) {
+        visit(child);
+      }
+    };
+    visit(participantList);
+
+    resultButton.click();
+    expect(fetchCalls.filter(({ url }) => url === "/api/lottery-results")).toHaveLength(0);
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(resultStatus.textContent).toBe(
+      "抽選実施日時と参加者を確認してください。",
+    );
+
+    occurredAtInput.value = "2026-02-30T10:00";
+    selects[0]!.value = "win";
+    resultButton.click();
+    expect(fetchCalls.filter(({ url }) => url === "/api/lottery-results")).toHaveLength(0);
+
+    occurredAtInput.value = "2026-09-08T21:34";
+    selects[0]!.value = "none";
+    selects[1]!.value = "none";
+    resultButton.click();
+    expect(fetchCalls.filter(({ url }) => url === "/api/lottery-results")).toHaveLength(0);
+
+    selects[0]!.value = "win";
+    selects[1]!.value = "loss";
+    expect(occurredAtInput.disabled).toBe(false);
+    expect(resultButton.disabled).toBe(false);
+    expect(selects.map((select) => select.value)).toEqual(["win", "loss"]);
+    resultButton.click();
+    expect(resultStatus.textContent).toBe("抽選結果を反映しています。");
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(confirmMock.mock.calls[0]?.[0]).toContain("参加者2人");
+    expect(confirmMock.mock.calls[0]?.[0]).toContain("当選1人");
+    expect(confirmMock.mock.calls[0]?.[0]).toContain("落選1人");
+    expect(confirmMock.mock.calls[0]?.[0]).toContain("2026-09-08T21:34");
+    const firstLotteryCall = fetchCalls.find(
+      ({ url }) => url === "/api/lottery-results",
+    );
+    expect(firstLotteryCall?.body).toBe(
+      JSON.stringify({
+        participants: [
+          { supporterId: "internal-supporter-id", outcome: "win" },
+          { supporterId: "internal-supporter-id-2", outcome: "loss" },
+        ],
+        occurredAt: "2026-09-08T12:34:00.000Z",
+      }),
+    );
+    expect(firstLotteryCall?.options).toEqual({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: firstLotteryCall?.body,
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    expect(confirmMock.mock.invocationCallOrder[0]).toBeLessThan(
+      fetchMock.mock.invocationCallOrder[1] ?? Infinity,
+    );
+    expect(occurredAtInput.disabled).toBe(true);
+    expect(selects.every((select) => select.disabled)).toBe(true);
+    expect(resultButton.disabled).toBe(true);
+    resultButton.click();
+    expect(fetchCalls.filter(({ url }) => url === "/api/lottery-results")).toHaveLength(1);
+
+    lotteryResolvers[0]?.(response(200, { status: "ok" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(2);
+    expect(resultStatus.textContent).toBe("抽選結果を反映しました。");
+    expect(occurredAtInput.value).toBe("");
+    expect(participantList.children).toHaveLength(2);
+    expect(rowText(participantList.children[0]!)).toContain("支援者A・更新後");
+    expect(rowText(participantList.children[0]!)).toContain("現在のレベル: Lv.4");
+    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe("none");
+    expect(resultButton.disabled).toBe(false);
+
+    occurredAtInput.value = "2026-09-08T21:34";
+    participantList.children[0]!.children[4]!.children[1]!.value = "win";
+    confirmMock.mockImplementationOnce(() => false);
+    resultButton.click();
+    expect(fetchCalls.filter(({ url }) => url === "/api/lottery-results")).toHaveLength(1);
+    expect(occurredAtInput.value).toBe("2026-09-08T21:34");
+
+    confirmMock.mockImplementation(() => true);
+    resultButton.click();
+    lotteryResolvers[1]?.(
+      response(200, { status: "ok", privateDiagnostic: "synthetic-secret" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(resultStatus.textContent).toBe(
+      "抽選結果を反映できませんでした。入力内容を確認して再試行してください。",
+    );
+    expect(resultStatus.textContent).not.toContain("synthetic-secret");
+    expect(occurredAtInput.value).toBe("2026-09-08T21:34");
+    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
+      "win",
+    );
+    expect(resultButton.disabled).toBe(false);
+
+    resultButton.click();
+    lotteryResolvers[2]?.(
+      response(409, { error: "lottery_result_conflict" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(3);
+    expect(resultStatus.textContent).toBe(
+      "支援者状態または処理月が変わっています。参加者と時刻を確認してから再試行してください。",
+    );
+    expect(occurredAtInput.value).toBe("2026-09-08T21:34");
+    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
+      "none",
+    );
+
+    occurredAtInput.value = "2026-10-01T00:05";
+    participantList.children[0]!.children[4]!.children[1]!.value = "loss";
+    resultButton.click();
+    lotteryResolvers[3]?.(
+      response(409, {
+        error: "lottery_result_conflict",
+        privateDiagnostic: "synthetic-secret",
+      }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(resultStatus.textContent).toBe(
+      "抽選結果を反映できませんでした。入力内容を確認して再試行してください。",
+    );
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(3);
+    expect(occurredAtInput.value).toBe("2026-10-01T00:05");
+    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
+      "loss",
+    );
+
+    resultButton.click();
+    expect(fetchCalls.filter(({ url }) => url === "/api/lottery-results")).toHaveLength(5);
+    expect(JSON.parse(fetchCalls[fetchCalls.length - 1]!.body as string)).toEqual({
+      participants: [
+        { supporterId: "internal-supporter-id", outcome: "loss" },
+      ],
+      occurredAt: "2026-09-30T15:05:00.000Z",
+    });
+    lotteryResolvers[4]?.(response(200, { status: "ok" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(resultStatus.textContent).toBe("抽選結果を反映しました。");
+    expect(occurredAtInput.value).toBe("");
+
+    const participantStatus = elements.get(
+      "lottery-participant-status",
+    ) as FakeElement;
+    const emptyFetch = vi.fn(() =>
+      Promise.resolve(response(200, { supporters: [] })),
+    );
+    runInNewContext(ADMIN_SCRIPT, {
+      Array,
+      Date,
+      document: fakeDocument,
+      Error,
+      fetch: emptyFetch,
+      HTMLButtonElement: FakeButtonElement,
+      HTMLInputElement: FakeInputElement,
+      Number,
+      Object,
+      Set,
+      TypeError,
+      URL,
+      window: { confirm: confirmMock },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(resultButton.disabled).toBe(true);
+    expect(participantStatus.textContent).toBe(
+      "支援者がいないため、抽選結果を登録できません。",
+    );
+
+    const unavailableFetch = vi.fn(() =>
+      Promise.reject(new Error("synthetic unavailable response")),
+    );
+    runInNewContext(ADMIN_SCRIPT, {
+      Array,
+      Date,
+      document: fakeDocument,
+      Error,
+      fetch: unavailableFetch,
+      HTMLButtonElement: FakeButtonElement,
+      HTMLInputElement: FakeInputElement,
+      Number,
+      Object,
+      Set,
+      TypeError,
+      URL,
+      window: { confirm: confirmMock },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(resultButton.disabled).toBe(true);
+    expect(participantStatus.textContent).toBe(
+      "抽選結果登録を利用できません。支援者一覧を読み込めませんでした。",
+    );
   });
 
   it("ties confirmation to the previewed File, locks actions, validates results, and refreshes after success", async () => {

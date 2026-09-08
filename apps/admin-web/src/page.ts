@@ -29,6 +29,19 @@ export const ADMIN_PAGE = `<!doctype html>
         <p id="list-status" role="status">支援者一覧を読み込んでいます。</p>
         <ul id="list" aria-live="polite"></ul>
       </section>
+      <section aria-labelledby="lottery-result-heading">
+        <h2 id="lottery-result-heading">抽選結果登録</h2>
+        <p>
+          <label for="lottery-occurred-at">抽選実施日時（日本時間）</label>
+          <input id="lottery-occurred-at" type="datetime-local" step="60">
+        </p>
+        <p id="lottery-result-status" role="status" aria-live="polite"></p>
+        <p id="lottery-participant-status" role="status" aria-live="polite">
+          抽選対象の支援者を読み込んでいます。
+        </p>
+        <ul id="lottery-participant-list" aria-live="polite"></ul>
+        <button id="lottery-result-button" type="button" disabled>抽選結果を反映</button>
+      </section>
     </main>
     <script src="/app.js" defer></script>
   </body>
@@ -182,6 +195,274 @@ function validateSupporterResponse(value) {
 
     return supporter;
   });
+}
+
+const lotteryState = {
+  active: false,
+  loaded: false,
+  supporters: [],
+  controls: [],
+};
+let lotteryUi = null;
+const JAPAN_TIME_OFFSET_MILLISECONDS = 9 * 60 * 60 * 1000;
+const LOTTERY_RESULT_OPTIONS = [
+  { value: "none", label: "不参加" },
+  { value: "win", label: "当選" },
+  { value: "loss", label: "落選" },
+];
+
+function updateLotteryActionButtons() {
+  if (lotteryUi === null) {
+    return;
+  }
+
+  lotteryUi.occurredAtInput.disabled = lotteryState.active;
+  for (const control of lotteryState.controls) {
+    control.select.disabled = lotteryState.active;
+  }
+  lotteryUi.submitButton.disabled =
+    lotteryState.active ||
+    !lotteryState.loaded ||
+    lotteryState.supporters.length === 0;
+}
+
+function setLotteryParticipantState(message) {
+  if (lotteryUi === null) {
+    return;
+  }
+
+  lotteryUi.participantStatus.textContent = message;
+  lotteryUi.participantList.replaceChildren();
+}
+
+function renderLotteryParticipant(supporter) {
+  const item = document.createElement("li");
+  const name = document.createElement("h3");
+  const level = document.createElement("p");
+  const entries = document.createElement("p");
+  const supportStatus = document.createElement("p");
+  const resultLabel = document.createElement("label");
+  const resultLabelText = document.createElement("span");
+  const select = document.createElement("select");
+  const options = LOTTERY_RESULT_OPTIONS.map(({ value, label }) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    return option;
+  });
+
+  name.textContent = supporter.displayName;
+  level.textContent = \`現在のレベル: Lv.\${supporter.currentLevel}\`;
+  entries.textContent = \`次回抽選口数: \${supporter.nextLotteryEntryCount}口\`;
+  supportStatus.textContent = supporter.supporting
+    ? "現在の支援状態: 支援中"
+    : "現在の支援状態: 支援停止";
+  resultLabelText.textContent = "抽選結果";
+  resultLabel.replaceChildren(resultLabelText, select);
+  select.value = "none";
+  select.replaceChildren(...options);
+  select.value = "none";
+
+  const control = { supporter, select };
+  lotteryState.controls.push(control);
+  item.replaceChildren(name, level, entries, supportStatus, resultLabel);
+  return item;
+}
+
+function renderLotteryParticipants(supporters) {
+  if (lotteryUi === null) {
+    return;
+  }
+
+  lotteryState.controls = [];
+  if (supporters.length === 0) {
+    setLotteryParticipantState(
+      "支援者がいないため、抽選結果を登録できません。",
+    );
+    updateLotteryActionButtons();
+    return;
+  }
+
+  lotteryUi.participantStatus.textContent = "";
+  lotteryUi.participantList.replaceChildren(
+    ...supporters.map(renderLotteryParticipant),
+  );
+  updateLotteryActionButtons();
+}
+
+function prepareLotteryParticipantLoad() {
+  lotteryState.loaded = false;
+  lotteryState.supporters = [];
+  lotteryState.controls = [];
+  setLotteryParticipantState("抽選対象の支援者を読み込んでいます。");
+  updateLotteryActionButtons();
+}
+
+function serializeJapanDateTime(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const match = /^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2})$/.exec(value);
+  if (match === null) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const calendar = new Date(0);
+  calendar.setUTCFullYear(year, month - 1, day);
+  calendar.setUTCHours(hour, minute, 0, 0);
+  if (
+    calendar.getUTCFullYear() !== year ||
+    calendar.getUTCMonth() !== month - 1 ||
+    calendar.getUTCDate() !== day ||
+    calendar.getUTCHours() !== hour ||
+    calendar.getUTCMinutes() !== minute ||
+    calendar.getUTCSeconds() !== 0 ||
+    calendar.getUTCMilliseconds() !== 0
+  ) {
+    return null;
+  }
+
+  const occurredAt = new Date(
+    calendar.getTime() - JAPAN_TIME_OFFSET_MILLISECONDS,
+  );
+  if (Number.isNaN(occurredAt.getTime())) {
+    return null;
+  }
+
+  return occurredAt.toISOString();
+}
+
+function collectLotteryParticipants() {
+  const participants = [];
+  let winCount = 0;
+  let lossCount = 0;
+
+  for (const control of lotteryState.controls) {
+    const outcome = control.select.value;
+    if (outcome === "none") {
+      continue;
+    }
+    if (outcome !== "win" && outcome !== "loss") {
+      return null;
+    }
+
+    participants.push({
+      supporterId: control.supporter.id,
+      outcome,
+    });
+    if (outcome === "win") {
+      winCount += 1;
+    } else {
+      lossCount += 1;
+    }
+  }
+
+  return participants.length === 0
+    ? null
+    : { participants, winCount, lossCount };
+}
+
+function isExactLotterySuccess(value) {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["status"]) &&
+    value.status === "ok"
+  );
+}
+
+function isExactLotteryConflict(value) {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["error"]) &&
+    value.error === "lottery_result_conflict"
+  );
+}
+
+async function submitLotteryResults(listStatus, supporterList) {
+  if (
+    lotteryUi === null ||
+    lotteryState.active ||
+    !lotteryState.loaded ||
+    lotteryState.supporters.length === 0
+  ) {
+    return;
+  }
+
+  const occurredAtInput = lotteryUi.occurredAtInput.value;
+  const occurredAt = serializeJapanDateTime(occurredAtInput);
+  const selected = collectLotteryParticipants();
+  if (occurredAt === null || selected === null) {
+    lotteryUi.resultStatus.textContent =
+      "抽選実施日時と参加者を確認してください。";
+    return;
+  }
+
+  if (
+    !window.confirm(
+      \`参加者\${selected.participants.length}人（当選\${selected.winCount}人、落選\${selected.lossCount}人）を、抽選実施日時（日本時間）\${occurredAtInput}として反映します。抽選結果を適用しますか？\`,
+    )
+  ) {
+    return;
+  }
+
+  lotteryState.active = true;
+  updateLotteryActionButtons();
+  lotteryUi.resultStatus.textContent = "抽選結果を反映しています。";
+
+  try {
+    const response = await fetch("/api/lottery-results", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        participants: selected.participants,
+        occurredAt,
+      }),
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+
+    let responseBody;
+    try {
+      responseBody = await response.json();
+    } catch {
+      throw new Error("invalid lottery result response");
+    }
+
+    if (response.status === 409) {
+      if (!isExactLotteryConflict(responseBody)) {
+        throw new Error("invalid lottery result conflict");
+      }
+
+      await loadSupporters(listStatus, supporterList);
+      lotteryUi.resultStatus.textContent =
+        "支援者状態または処理月が変わっています。参加者と時刻を確認してから再試行してください。";
+      return;
+    }
+
+    if (response.status !== 200 || !isExactLotterySuccess(responseBody)) {
+      throw new Error("lottery result request failed");
+    }
+
+    lotteryUi.occurredAtInput.value = "";
+    await loadSupporters(listStatus, supporterList);
+    lotteryUi.resultStatus.textContent = "抽選結果を反映しました。";
+  } catch {
+    lotteryUi.resultStatus.textContent =
+      "抽選結果を反映できませんでした。入力内容を確認して再試行してください。";
+  } finally {
+    lotteryState.active = false;
+    updateLotteryActionButtons();
+  }
 }
 
 function validatePortalLinkResponse(value) {
@@ -1141,6 +1422,7 @@ function showListState(status, list, message) {
 
 async function loadSupporters(status, list) {
   showListState(status, list, "支援者一覧を読み込んでいます。");
+  prepareLotteryParticipantLoad();
 
   try {
     const response = await fetch("/api/supporters", {
@@ -1155,6 +1437,9 @@ async function loadSupporters(status, list) {
     }
 
     const supporters = validateSupporterResponse(await response.json());
+    lotteryState.supporters = supporters;
+    lotteryState.loaded = true;
+    renderLotteryParticipants(supporters);
     if (supporters.length === 0) {
       showListState(status, list, "支援者はいません。");
       return;
@@ -1164,6 +1449,9 @@ async function loadSupporters(status, list) {
     list.replaceChildren(...supporters.map(renderSupporter));
   } catch {
     showListState(status, list, "支援者一覧を読み込めませんでした。");
+    setLotteryParticipantState(
+      "抽選結果登録を利用できません。支援者一覧を読み込めませんでした。",
+    );
   }
 }
 
@@ -1175,6 +1463,34 @@ const pdfInspectionStatus = document.getElementById("pdf-inspection-status");
 const pdfInspectionResult = document.getElementById("pdf-inspection-result");
 const listStatus = document.getElementById("list-status");
 const supporterList = document.getElementById("list");
+const lotteryOccurredAtInput = document.getElementById("lottery-occurred-at");
+const lotteryResultStatus = document.getElementById("lottery-result-status");
+const lotteryParticipantStatus = document.getElementById(
+  "lottery-participant-status",
+);
+const lotteryParticipantList = document.getElementById(
+  "lottery-participant-list",
+);
+const lotteryResultButton = document.getElementById("lottery-result-button");
+if (
+  lotteryOccurredAtInput !== null &&
+  lotteryResultStatus !== null &&
+  lotteryParticipantStatus !== null &&
+  lotteryParticipantList !== null &&
+  lotteryResultButton !== null
+) {
+  lotteryUi = {
+    occurredAtInput: lotteryOccurredAtInput,
+    resultStatus: lotteryResultStatus,
+    participantStatus: lotteryParticipantStatus,
+    participantList: lotteryParticipantList,
+    submitButton: lotteryResultButton,
+  };
+  lotteryResultButton.addEventListener("click", () => {
+    void submitLotteryResults(listStatus, supporterList);
+  });
+  updateLotteryActionButtons();
+}
 if (
   pdfInspectionFile instanceof HTMLInputElement &&
   pdfInspectionButton instanceof HTMLButtonElement &&
@@ -1306,6 +1622,46 @@ h2 {
 
 #list p + p {
   margin-top: 0.35rem;
+}
+
+#lottery-participant-status,
+#lottery-result-status {
+  min-height: 1.5rem;
+}
+
+#lottery-participant-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+#lottery-participant-list li {
+  padding: 1rem 1.25rem;
+  border: 1px solid #cfd4dc;
+  border-radius: 0.5rem;
+  background: #ffffff;
+}
+
+#lottery-participant-list h3,
+#lottery-participant-list p {
+  margin: 0;
+}
+
+#lottery-participant-list p + p {
+  margin-top: 0.35rem;
+}
+
+#lottery-participant-list label {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.75rem;
+}
+
+#lottery-result-button {
+  margin-top: 1rem;
 }
 
 #pdf-inspection-button {
