@@ -72,3 +72,14 @@ export type {
   FanboxPdfInspectionService,
   FanboxPdfInspectionTextRun,
 } from "./fanbox-pdf-inspection-service.js";
+export {
+  FanboxSupporterComparisonError,
+  createFanboxSupporterComparisonService,
+} from "./fanbox-supporter-comparison-service.js";
+export type {
+  FanboxPdfAbsentSupporterComparison,
+  FanboxPdfPresentSupporterComparison,
+  FanboxPdfPresentSupporterStatus,
+  FanboxPdfSupporterComparison,
+  FanboxSupporterComparisonService,
+} from "./fanbox-supporter-comparison-service.js";
