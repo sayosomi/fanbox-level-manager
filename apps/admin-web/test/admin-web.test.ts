@@ -10,6 +10,8 @@ import {
   FanboxPdfInspectionError,
   FanboxSupporterImportBlockedError,
   FanboxSupporterImportError,
+  MonthEndSourceConflictError,
+  MonthEndSourceUnavailableError,
   SupporterPortalDeliveryConflictError,
 } from "@sayosomi/application";
 import type {
@@ -22,6 +24,7 @@ import type {
   FanboxSupporterImportService,
   FanboxSupporterComparisonService,
   LotteryLevelService,
+  MonthEndProcessingService,
   SupporterPortalDeliveryService,
   SupporterPortalLinkService,
   SupporterListItem,
@@ -370,6 +373,39 @@ function createLotteryLevelService(
   implementation: LotteryLevelService["recordLotteryResults"],
 ): LotteryLevelService {
   return { recordLotteryResults: implementation } as unknown as LotteryLevelService;
+}
+
+function createMonthEndAdminServer(
+  monthEndProcessingService?: MonthEndProcessingService,
+): Server {
+  return createAdminServer(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    monthEndProcessingService,
+  );
+}
+
+function createTestMonthEndService(
+  getMonthEndSource: MonthEndProcessingService["getMonthEndSource"] = () =>
+    null,
+  processMonthEnd: MonthEndProcessingService["processMonthEnd"] = () => ({
+    source: {
+      importSequence: 1,
+      importedAt: "synthetic-imported-at",
+      presentSupporterCount: 0,
+      localSupporterCount: 0,
+      supportingSupporterCount: 0,
+    },
+    supporters: [],
+  }),
+): MonthEndProcessingService {
+  return { getMonthEndSource, processMonthEnd };
 }
 
 function expectCommonSecurityHeaders(headers: IncomingHttpHeaders): void {
@@ -1054,6 +1090,363 @@ describe("lottery results route", () => {
       }
     } finally {
       await closeServer(resultServer);
+    }
+  });
+});
+
+describe("month-end routes", () => {
+  const sourceProjection = {
+    importSequence: 7,
+    importedAt: "synthetic-imported-at",
+    presentSupporterCount: 3,
+    localSupporterCount: 4,
+    supportingSupporterCount: 2,
+  };
+  const validBody = JSON.stringify({
+    monthKey: "2026-09",
+    expectedImportSequence: 7,
+  });
+
+  it("projects the available source with exact privacy-minimized keys and headers", async () => {
+    const source = {
+      ...sourceProjection,
+      supporterId: "synthetic-supporter-id",
+      fanboxRelationshipId: "synthetic-relationship-id",
+      displayName: "synthetic display name",
+      currentLevel: 9,
+      monthlyFlag: true,
+      operationId: "synthetic-operation-id",
+      localPath: "/synthetic/private.sqlite",
+      sql: "SELECT synthetic",
+    };
+    const getMonthEndSource = vi.fn(() => source);
+    const monthEndServer = createMonthEndAdminServer(
+      createTestMonthEndService(getMonthEndSource),
+    );
+    const monthEndPort = await listenOnEphemeralPort(monthEndServer);
+
+    try {
+      const response = await requestOnPort(
+        monthEndPort,
+        "GET",
+        "/api/month-end/source",
+      );
+      const payload = JSON.parse(response.body) as {
+        source: Record<string, unknown>;
+      };
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toBe(
+        "application/json; charset=UTF-8",
+      );
+      expectCommonSecurityHeaders(response.headers);
+      expect(Object.keys(payload)).toEqual(["source"]);
+      expect(Object.keys(payload.source)).toEqual([
+        "importSequence",
+        "importedAt",
+        "presentSupporterCount",
+        "localSupporterCount",
+        "supportingSupporterCount",
+      ]);
+      expect(response.body).toBe(
+        JSON.stringify({ source: sourceProjection }),
+      );
+      expect(response.body).not.toContain("synthetic-supporter-id");
+      expect(response.body).not.toContain("synthetic-relationship-id");
+      expect(response.body).not.toContain("synthetic display name");
+      expect(response.body).not.toContain("synthetic-operation-id");
+      expect(response.body).not.toContain("/synthetic/private.sqlite");
+      expect(response.body).not.toContain("SELECT synthetic");
+      expect(getMonthEndSource).toHaveBeenCalledTimes(1);
+    } finally {
+      await closeServer(monthEndServer);
+    }
+  });
+
+  it("returns an exact null source response", async () => {
+    const getMonthEndSource = vi.fn(() => null);
+    const monthEndServer = createMonthEndAdminServer(
+      createTestMonthEndService(getMonthEndSource),
+    );
+    const monthEndPort = await listenOnEphemeralPort(monthEndServer);
+
+    try {
+      const response = await requestOnPort(
+        monthEndPort,
+        "GET",
+        "/api/month-end/source",
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toBe('{"source":null}');
+      expect(getMonthEndSource).toHaveBeenCalledTimes(1);
+    } finally {
+      await closeServer(monthEndServer);
+    }
+  });
+
+  it("returns generic source-unavailable and source-failed responses", async () => {
+    const unavailable = await request(
+      "GET",
+      "/api/month-end/source",
+    );
+    const sourceError =
+      "SQL failed for /synthetic/private.sqlite synthetic-supporter-id";
+    const failedServer = createMonthEndAdminServer(
+      createTestMonthEndService(() => {
+        throw new Error(sourceError);
+      }),
+    );
+    const failedPort = await listenOnEphemeralPort(failedServer);
+
+    try {
+      const failed = await requestOnPort(
+        failedPort,
+        "GET",
+        "/api/month-end/source",
+      );
+
+      expect(unavailable.statusCode).toBe(500);
+      expect(unavailable.body).toBe('{"error":"month_end_unavailable"}');
+      expect(failed.statusCode).toBe(500);
+      expect(failed.body).toBe('{"error":"month_end_source_failed"}');
+      expect(failed.body).not.toContain(sourceError);
+      expect(failed.body).not.toContain("synthetic-supporter-id");
+      expect(failed.body).not.toContain("private.sqlite");
+      expect(failed.body).not.toContain("SQL");
+    } finally {
+      await closeServer(failedServer);
+    }
+  });
+
+  it.each(["POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])(
+    "returns 405 and Allow: GET without calling the source service for %s",
+    async (method) => {
+      const getMonthEndSource = vi.fn(() => sourceProjection);
+      const monthEndServer = createMonthEndAdminServer(
+        createTestMonthEndService(getMonthEndSource),
+      );
+      const monthEndPort = await listenOnEphemeralPort(monthEndServer);
+
+      try {
+        const response = await requestOnPort(
+          monthEndPort,
+          method,
+          "/api/month-end/source",
+        );
+
+        expect(response.statusCode).toBe(405);
+        expect(response.headers.allow).toBe("GET");
+        expect(getMonthEndSource).not.toHaveBeenCalled();
+      } finally {
+        await closeServer(monthEndServer);
+      }
+    },
+  );
+
+  it("delegates one exact valid process request without a Content-Type requirement", async () => {
+    const processMonthEnd = vi.fn(() => ({
+      source: sourceProjection,
+      supporters: [
+        {
+          supporterId: "synthetic-supporter-id",
+          supportingAtMonthEnd: true,
+          state: {
+            supporterId: "synthetic-supporter-id",
+            monthKey: "2026-09",
+            level: 9,
+            supporting: true,
+            updatedAt: "synthetic-updated-at",
+          },
+        },
+      ],
+    } as never));
+    const monthEndServer = createMonthEndAdminServer(
+      createTestMonthEndService(undefined, processMonthEnd),
+    );
+    const monthEndPort = await listenOnEphemeralPort(monthEndServer);
+
+    try {
+      const response = await requestOnPort(
+        monthEndPort,
+        "POST",
+        "/api/month-end/process",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toBe(
+        "application/json; charset=UTF-8",
+      );
+      expectCommonSecurityHeaders(response.headers);
+      expect(response.body).toBe('{"status":"ok"}');
+      expect(processMonthEnd).toHaveBeenCalledTimes(1);
+      expect(processMonthEnd).toHaveBeenCalledWith("2026-09", 7);
+      for (const value of [
+        "synthetic-supporter-id",
+        "synthetic-updated-at",
+        "2026-09",
+        "level",
+      ]) {
+        expect(response.body).not.toContain(value);
+      }
+    } finally {
+      await closeServer(monthEndServer);
+    }
+  });
+
+  it("rejects malformed and invalid process requests before calling the service", async () => {
+    const processMonthEnd = vi.fn(() => ({
+      source: sourceProjection,
+      supporters: [],
+    }));
+    const monthEndServer = createMonthEndAdminServer(
+      createTestMonthEndService(undefined, processMonthEnd),
+    );
+    const monthEndPort = await listenOnEphemeralPort(monthEndServer);
+    const invalidBodies = [
+      "{not-json",
+      "null",
+      "[]",
+      JSON.stringify({ monthKey: "2026-09" }),
+      JSON.stringify({ expectedImportSequence: 7 }),
+      JSON.stringify({
+        monthKey: "2026-09",
+        expectedImportSequence: 7,
+        extra: "synthetic",
+      }),
+      JSON.stringify({ monthKey: "2026-00", expectedImportSequence: 7 }),
+      JSON.stringify({ monthKey: "2026-13", expectedImportSequence: 7 }),
+      JSON.stringify({ monthKey: "2026-1", expectedImportSequence: 7 }),
+      JSON.stringify({ monthKey: "20260-09", expectedImportSequence: 7 }),
+      JSON.stringify({ monthKey: " 2026-09", expectedImportSequence: 7 }),
+      JSON.stringify({ monthKey: "2026-09 ", expectedImportSequence: 7 }),
+      JSON.stringify({ monthKey: "2026-09\n", expectedImportSequence: 7 }),
+      JSON.stringify({ monthKey: "2026-09", expectedImportSequence: "7" }),
+      JSON.stringify({ monthKey: "2026-09", expectedImportSequence: null }),
+      JSON.stringify({ monthKey: "2026-09", expectedImportSequence: 1.5 }),
+      JSON.stringify({ monthKey: "2026-09", expectedImportSequence: 0 }),
+      JSON.stringify({ monthKey: "2026-09", expectedImportSequence: -1 }),
+      '{"monthKey":"2026-09","expectedImportSequence":1e999}',
+      '{"monthKey":"2026-09","expectedImportSequence":9007199254740992}',
+    ];
+
+    try {
+      for (const body of invalidBodies) {
+        const response = await requestOnPort(
+          monthEndPort,
+          "POST",
+          "/api/month-end/process",
+          body,
+        );
+
+        expect(response.statusCode).toBe(400);
+        expect(response.headers["content-type"]).toBe(
+          "application/json; charset=UTF-8",
+        );
+        expectCommonSecurityHeaders(response.headers);
+        expect(response.body).toBe('{"error":"invalid_request"}');
+      }
+      expect(processMonthEnd).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(monthEndServer);
+    }
+  });
+
+  it("returns unavailable only after a valid process request", async () => {
+    const response = await request(
+      "POST",
+      "/api/month-end/process",
+      validBody,
+    );
+
+    expect(response.statusCode).toBe(500);
+    expect(response.body).toBe('{"error":"month_end_unavailable"}');
+  });
+
+  it.each(["GET", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])(
+    "returns 405 and Allow: POST without calling the process service for %s",
+    async (method) => {
+      const processMonthEnd = vi.fn(() => ({
+        source: sourceProjection,
+        supporters: [],
+      }));
+      const monthEndServer = createMonthEndAdminServer(
+        createTestMonthEndService(undefined, processMonthEnd),
+      );
+      const monthEndPort = await listenOnEphemeralPort(monthEndServer);
+
+      try {
+        const response = await requestOnPort(
+          monthEndPort,
+          method,
+          "/api/month-end/process",
+          validBody,
+        );
+
+        expect(response.statusCode).toBe(405);
+        expect(response.headers.allow).toBe("POST");
+        expect(processMonthEnd).not.toHaveBeenCalled();
+      } finally {
+        await closeServer(monthEndServer);
+      }
+    },
+  );
+
+  it("maps settled process conflicts and unexpected failures to generic responses", async () => {
+    const errors = [
+      new MonthEndSourceUnavailableError(),
+      new MonthEndSourceConflictError(),
+      new StaleMonthError("2026-08", "2026-09"),
+      new SupporterNotFoundError("synthetic-supporter-id"),
+      new Error(
+        "SQL failed for /synthetic/private.sqlite synthetic-supporter-id operation-id",
+      ),
+    ];
+
+    for (const error of errors) {
+      const monthEndServer = createMonthEndAdminServer(
+        createTestMonthEndService(undefined, () => {
+          throw error;
+        }),
+      );
+      const monthEndPort = await listenOnEphemeralPort(monthEndServer);
+
+      try {
+        const response = await requestOnPort(
+          monthEndPort,
+          "POST",
+          "/api/month-end/process",
+          validBody,
+        );
+
+        const expectedBody =
+          error instanceof Error &&
+          (error instanceof MonthEndSourceUnavailableError ||
+            error instanceof MonthEndSourceConflictError ||
+            error instanceof StaleMonthError ||
+            error instanceof SupporterNotFoundError)
+            ? '{"error":"month_end_conflict"}'
+            : '{"error":"month_end_failed"}';
+        expect(response.statusCode).toBe(
+          expectedBody === '{"error":"month_end_conflict"}' ? 409 : 500,
+        );
+        expect(response.body).toBe(expectedBody);
+        for (const value of [
+          "synthetic-supporter-id",
+          "synthetic-imported-at",
+          "2026-08",
+          "2026-09",
+          "operation-id",
+          "private.sqlite",
+          "SQL",
+          error.message,
+        ]) {
+          expect(response.body).not.toContain(value);
+        }
+      } finally {
+        await closeServer(monthEndServer);
+      }
     }
   });
 });
@@ -2126,6 +2519,26 @@ describe("admin server configuration", () => {
       expect(suppliedStore).toBe(store);
       return lotteryService;
     });
+    const monthEndSource = {
+      importSequence: 7,
+      importedAt: "synthetic-imported-at",
+      presentSupporterCount: 3,
+      localSupporterCount: 4,
+      supportingSupporterCount: 2,
+    };
+    const getMonthEndSource = vi.fn(() => monthEndSource);
+    const processMonthEnd = vi.fn(() => ({
+      source: monthEndSource,
+      supporters: [],
+    }));
+    const monthEndService = createTestMonthEndService(
+      getMonthEndSource,
+      processMonthEnd,
+    );
+    const createMonthEndService = vi.fn((suppliedStore: LocalStore) => {
+      expect(suppliedStore).toBe(store);
+      return monthEndService;
+    });
 
     try {
       productionServer = startProductionAdminServer({
@@ -2137,6 +2550,7 @@ describe("admin server configuration", () => {
         createFanboxSupporterImportService: createImportService,
         createExistingSupporterMigrationService: createMigrationService,
         createLotteryLevelService: createLotteryService,
+        createMonthEndProcessingService: createMonthEndService,
       });
       await new Promise<void>((resolve, reject) => {
         productionServer?.once("listening", () => resolve());
@@ -2155,10 +2569,30 @@ describe("admin server configuration", () => {
         "/api/portal-link",
         JSON.stringify({ supporterId: "internal-supporter-id" }),
       );
+      const sourceResponse = await requestOnPort(
+        productionPort,
+        "GET",
+        "/api/month-end/source",
+      );
+      const processResponse = await requestOnPort(
+        productionPort,
+        "POST",
+        "/api/month-end/process",
+        JSON.stringify({
+          monthKey: "2026-09",
+          expectedImportSequence: 7,
+        }),
+      );
 
       expect(listResponse.statusCode).toBe(200);
       expect(portalResponse.statusCode).toBe(503);
       expect(portalResponse.body).toBe('{"error":"portal_not_configured"}');
+      expect(sourceResponse.statusCode).toBe(200);
+      expect(sourceResponse.body).toBe(
+        JSON.stringify({ source: monthEndSource }),
+      );
+      expect(processResponse.statusCode).toBe(200);
+      expect(processResponse.body).toBe('{"status":"ok"}');
       expect(createListService).toHaveBeenCalledTimes(1);
       expect(createDeliveryService).toHaveBeenCalledTimes(1);
       expect(createInspectionService).toHaveBeenCalledTimes(1);
@@ -2166,6 +2600,11 @@ describe("admin server configuration", () => {
       expect(createImportService).toHaveBeenCalledTimes(1);
       expect(createMigrationService).toHaveBeenCalledTimes(1);
       expect(createLotteryService).toHaveBeenCalledTimes(1);
+      expect(createMonthEndService).toHaveBeenCalledTimes(1);
+      expect(createMonthEndService).toHaveBeenCalledWith(store);
+      expect(getMonthEndSource).toHaveBeenCalledTimes(1);
+      expect(processMonthEnd).toHaveBeenCalledTimes(1);
+      expect(processMonthEnd).toHaveBeenCalledWith("2026-09", 7);
     } finally {
       if (productionServer !== undefined && productionServer.listening) {
         await closeServer(productionServer);

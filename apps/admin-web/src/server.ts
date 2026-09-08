@@ -15,9 +15,12 @@ import {
   createExistingSupporterMigrationService,
   createFanboxSupporterImportService,
   createLotteryLevelService,
+  createMonthEndProcessingService,
   createSupporterPortalLinkService,
   createSupporterPortalDeliveryService,
   createSupporterListService,
+  MonthEndSourceConflictError,
+  MonthEndSourceUnavailableError,
   SupporterPortalDeliveryConflictError,
   type FanboxPdfInspection,
   type FanboxPdfInspectionService,
@@ -27,6 +30,7 @@ import {
   type FanboxPdfSupporterComparison,
   type ExistingSupporterMigrationService,
   type LotteryLevelService,
+  type MonthEndProcessingService,
   type SupporterPortalLinkService,
   type SupporterPortalDeliveryService,
   type SupporterListService,
@@ -79,6 +83,8 @@ const PORTAL_SENT_SUCCESS_BODY = JSON.stringify({
 const PORTAL_LINK_PATH = "/api/portal-link";
 const PORTAL_SENT_PATH = "/api/portal-link/sent";
 const LOTTERY_RESULTS_PATH = "/api/lottery-results";
+const MONTH_END_SOURCE_PATH = "/api/month-end/source";
+const MONTH_END_PROCESS_PATH = "/api/month-end/process";
 const PDF_INSPECTION_PATH = "/api/fanbox-pdf/inspect";
 const PDF_IMPORT_PATH = "/api/fanbox-pdf/import";
 const MAX_PDF_BODY_BYTES = 25 * 1024 * 1024;
@@ -126,6 +132,21 @@ const LOTTERY_RESULT_FAILED_BODY = JSON.stringify({
 const LOTTERY_RESULT_SUCCESS_BODY = JSON.stringify({
   status: "ok",
 });
+const MONTH_END_UNAVAILABLE_BODY = JSON.stringify({
+  error: "month_end_unavailable",
+});
+const MONTH_END_SOURCE_FAILED_BODY = JSON.stringify({
+  error: "month_end_source_failed",
+});
+const MONTH_END_CONFLICT_BODY = JSON.stringify({
+  error: "month_end_conflict",
+});
+const MONTH_END_FAILED_BODY = JSON.stringify({
+  error: "month_end_failed",
+});
+const MONTH_END_SUCCESS_BODY = JSON.stringify({
+  status: "ok",
+});
 const PDF_COMPARISON_UNAVAILABLE_BODY = JSON.stringify({
   error: "pdf_comparison_unavailable",
 });
@@ -154,6 +175,7 @@ export type ProductionAdminServerDependencies = Readonly<{
   createExistingSupporterMigrationService?:
     typeof createExistingSupporterMigrationService;
   createLotteryLevelService?: typeof createLotteryLevelService;
+  createMonthEndProcessingService?: typeof createMonthEndProcessingService;
 }>;
 
 export function parseAdminPort(value: string | undefined): number {
@@ -840,6 +862,129 @@ async function sendLotteryResults(
   sendPortalJson(response, 200, LOTTERY_RESULT_SUCCESS_BODY);
 }
 
+type MonthEndProcessRequest = Readonly<{
+  monthKey: string;
+  expectedImportSequence: number;
+}>;
+
+function parseMonthEndProcessRequest(
+  body: string,
+): MonthEndProcessRequest | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    return null;
+  }
+
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value)
+  ) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (
+    Object.keys(record).length !== 2 ||
+    !Object.hasOwn(record, "monthKey") ||
+    !Object.hasOwn(record, "expectedImportSequence") ||
+    typeof record.monthKey !== "string" ||
+    record.monthKey.length !== 7 ||
+    !/^[0-9]{4}-(?:0[1-9]|1[0-2])$/.test(record.monthKey) ||
+    typeof record.expectedImportSequence !== "number" ||
+    !Number.isSafeInteger(record.expectedImportSequence) ||
+    record.expectedImportSequence < 1
+  ) {
+    return null;
+  }
+
+  return {
+    monthKey: record.monthKey,
+    expectedImportSequence: record.expectedImportSequence,
+  };
+}
+
+function sendMonthEndSource(
+  response: ServerResponse,
+  monthEndProcessingService: MonthEndProcessingService | undefined,
+): void {
+  if (monthEndProcessingService === undefined) {
+    sendPortalJson(response, 500, MONTH_END_UNAVAILABLE_BODY);
+    return;
+  }
+
+  try {
+    const source = monthEndProcessingService.getMonthEndSource();
+    sendPortalJson(
+      response,
+      200,
+      JSON.stringify({
+        source:
+          source === null
+            ? null
+            : {
+                importSequence: source.importSequence,
+                importedAt: source.importedAt,
+                presentSupporterCount: source.presentSupporterCount,
+                localSupporterCount: source.localSupporterCount,
+                supportingSupporterCount: source.supportingSupporterCount,
+              },
+      }),
+    );
+  } catch {
+    sendPortalJson(response, 500, MONTH_END_SOURCE_FAILED_BODY);
+  }
+}
+
+async function sendMonthEndProcess(
+  request: IncomingMessage,
+  response: ServerResponse,
+  monthEndProcessingService: MonthEndProcessingService | undefined,
+): Promise<void> {
+  let body: string;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  const input = parseMonthEndProcessRequest(body);
+  if (input === null) {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  if (monthEndProcessingService === undefined) {
+    sendPortalJson(response, 500, MONTH_END_UNAVAILABLE_BODY);
+    return;
+  }
+
+  try {
+    monthEndProcessingService.processMonthEnd(
+      input.monthKey,
+      input.expectedImportSequence,
+    );
+  } catch (error: unknown) {
+    if (
+      error instanceof MonthEndSourceUnavailableError ||
+      error instanceof MonthEndSourceConflictError ||
+      error instanceof StaleMonthError ||
+      error instanceof SupporterNotFoundError
+    ) {
+      sendPortalJson(response, 409, MONTH_END_CONFLICT_BODY);
+      return;
+    }
+
+    sendPortalJson(response, 500, MONTH_END_FAILED_BODY);
+    return;
+  }
+
+  sendPortalJson(response, 200, MONTH_END_SUCCESS_BODY);
+}
+
 function sendSupporterList(
   response: ServerResponse,
   supporterListService: SupporterListService | undefined,
@@ -875,6 +1020,7 @@ export function createAdminServer(
   fanboxSupporterImportService?: FanboxSupporterImportService,
   existingSupporterMigrationService?: ExistingSupporterMigrationService,
   lotteryLevelService?: LotteryLevelService,
+  monthEndProcessingService?: MonthEndProcessingService,
 ): Server {
   return createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -887,6 +1033,8 @@ export function createAdminServer(
       requestPath === PORTAL_LINK_PATH ||
       requestPath === PORTAL_SENT_PATH ||
       requestPath === LOTTERY_RESULTS_PATH ||
+      requestPath === MONTH_END_SOURCE_PATH ||
+      requestPath === MONTH_END_PROCESS_PATH ||
       requestPath === PDF_INSPECTION_PATH ||
       requestPath === PDF_IMPORT_PATH ||
       requestPath === "/api/supporters/migrate-existing";
@@ -923,6 +1071,16 @@ export function createAdminServer(
       }
 
       void sendLotteryResults(request, response, lotteryLevelService);
+      return;
+    }
+
+    if (requestPath === MONTH_END_PROCESS_PATH) {
+      if (request.method !== "POST") {
+        sendPortalMethodNotAllowed(response);
+        return;
+      }
+
+      void sendMonthEndProcess(request, response, monthEndProcessingService);
       return;
     }
 
@@ -1005,6 +1163,9 @@ export function createAdminServer(
       case "/api/supporters":
         sendSupporterList(response, supporterListService);
         return;
+      case MONTH_END_SOURCE_PATH:
+        sendMonthEndSource(response, monthEndProcessingService);
+        return;
     }
   });
 }
@@ -1019,6 +1180,7 @@ export function startAdminServer(
   fanboxSupporterImportService?: FanboxSupporterImportService,
   existingSupporterMigrationService?: ExistingSupporterMigrationService,
   lotteryLevelService?: LotteryLevelService,
+  monthEndProcessingService?: MonthEndProcessingService,
 ): Server {
   validateListenPort(port);
   const server = createAdminServer(
@@ -1030,6 +1192,7 @@ export function startAdminServer(
     fanboxSupporterImportService,
     existingSupporterMigrationService,
     lotteryLevelService,
+    monthEndProcessingService,
   );
   server.listen(port, ADMIN_HOST);
   return server;
@@ -1094,6 +1257,10 @@ export function startProductionAdminServer(
     const createLotteryService =
       dependencies.createLotteryLevelService ?? createLotteryLevelService;
     const lotteryLevelService = createLotteryService(store);
+    const createMonthEndService =
+      dependencies.createMonthEndProcessingService ??
+      createMonthEndProcessingService;
+    const monthEndProcessingService = createMonthEndService(store);
     const createDeliveryService =
       dependencies.createSupporterPortalDeliveryService ??
       createSupporterPortalDeliveryService;
@@ -1134,6 +1301,7 @@ export function startProductionAdminServer(
       fanboxSupporterImportService,
       existingSupporterMigrationService,
       lotteryLevelService,
+      monthEndProcessingService,
     );
     server.once("close", closeStore);
 
