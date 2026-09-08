@@ -10,6 +10,9 @@ import {
   FanboxPdfInspectionError,
   createFanboxPdfInspectionService,
   createFanboxSupporterComparisonService,
+  FanboxSupporterImportBlockedError,
+  FanboxSupporterImportError,
+  createFanboxSupporterImportService,
   createSupporterPortalLinkService,
   createSupporterPortalDeliveryService,
   createSupporterListService,
@@ -17,6 +20,8 @@ import {
   type FanboxPdfInspection,
   type FanboxPdfInspectionService,
   type FanboxSupporterComparisonService,
+  type FanboxSupporterImportBlockedReason,
+  type FanboxSupporterImportService,
   type FanboxPdfSupporterComparison,
   type SupporterPortalLinkService,
   type SupporterPortalDeliveryService,
@@ -64,6 +69,7 @@ const PORTAL_SENT_SUCCESS_BODY = JSON.stringify({
 const PORTAL_LINK_PATH = "/api/portal-link";
 const PORTAL_SENT_PATH = "/api/portal-link/sent";
 const PDF_INSPECTION_PATH = "/api/fanbox-pdf/inspect";
+const PDF_IMPORT_PATH = "/api/fanbox-pdf/import";
 const MAX_PDF_BODY_BYTES = 25 * 1024 * 1024;
 const INCOMPLETE_PORTAL_CONFIGURATION_ERROR =
   "incomplete portal configuration";
@@ -79,12 +85,23 @@ const INVALID_PDF_BODY = JSON.stringify({ error: "invalid_pdf" });
 const PDF_INSPECTION_FAILED_BODY = JSON.stringify({
   error: "pdf_inspection_failed",
 });
+const FANBOX_IMPORT_UNAVAILABLE_BODY = JSON.stringify({
+  error: "fanbox_import_unavailable",
+});
+const FANBOX_IMPORT_FAILED_BODY = JSON.stringify({
+  error: "fanbox_import_failed",
+});
 const PDF_COMPARISON_UNAVAILABLE_BODY = JSON.stringify({
   error: "pdf_comparison_unavailable",
 });
 const PDF_COMPARISON_FAILED_BODY = JSON.stringify({
   error: "pdf_comparison_failed",
 });
+const FANBOX_IMPORT_BLOCKED_REASONS: ReadonlySet<string> = new Set([
+  "empty_relationships",
+  "duplicate_relationship_id",
+  "new_display_name_unavailable",
+]);
 
 class PdfRequestTooLargeError extends Error {}
 
@@ -97,6 +114,8 @@ export type ProductionAdminServerDependencies = Readonly<{
   createFanboxPdfInspectionService?: typeof createFanboxPdfInspectionService;
   createFanboxSupporterComparisonService?:
     typeof createFanboxSupporterComparisonService;
+  createFanboxSupporterImportService?:
+    typeof createFanboxSupporterImportService;
 }>;
 
 export function parseAdminPort(value: string | undefined): number {
@@ -467,6 +486,95 @@ async function sendPdfInspection(
   );
 }
 
+function isFanboxSupporterImportBlockedReason(
+  value: unknown,
+): value is FanboxSupporterImportBlockedReason {
+  return typeof value === "string" && FANBOX_IMPORT_BLOCKED_REASONS.has(value);
+}
+
+async function sendPdfImport(
+  request: IncomingMessage,
+  response: ServerResponse,
+  inspectionService: FanboxPdfInspectionService | undefined,
+  importService: FanboxSupporterImportService | undefined,
+): Promise<void> {
+  if (!hasPdfContentType(request)) {
+    request.resume();
+    sendPortalJson(response, 415, PDF_UNSUPPORTED_MEDIA_TYPE_BODY);
+    return;
+  }
+
+  let data: Uint8Array;
+  try {
+    data = await readPdfRequestBody(request);
+  } catch (error: unknown) {
+    if (error instanceof PdfRequestTooLargeError) {
+      sendPortalJson(response, 413, PDF_TOO_LARGE_BODY);
+      return;
+    }
+
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  if (inspectionService === undefined) {
+    sendPortalJson(response, 500, PDF_INSPECTION_UNAVAILABLE_BODY);
+    return;
+  }
+
+  if (importService === undefined) {
+    sendPortalJson(response, 500, FANBOX_IMPORT_UNAVAILABLE_BODY);
+    return;
+  }
+
+  let inspection: FanboxPdfInspection;
+  try {
+    inspection = await inspectionService.inspectFanboxPdf(data);
+  } catch (error: unknown) {
+    if (error instanceof FanboxPdfInspectionError) {
+      sendPortalJson(response, 422, INVALID_PDF_BODY);
+      return;
+    }
+
+    sendPortalJson(response, 500, PDF_INSPECTION_FAILED_BODY);
+    return;
+  }
+
+  try {
+    const result = importService.applyInspection(inspection);
+    sendPortalJson(
+      response,
+      200,
+      JSON.stringify({
+        importedAt: result.importRecord.importedAt,
+        presentSupporterCount: result.importRecord.presentSupporterCount,
+      }),
+    );
+  } catch (error: unknown) {
+    if (
+      error instanceof FanboxSupporterImportBlockedError &&
+      isFanboxSupporterImportBlockedReason(error.reason)
+    ) {
+      sendPortalJson(
+        response,
+        422,
+        JSON.stringify({
+          error: "fanbox_import_blocked",
+          reason: error.reason,
+        }),
+      );
+      return;
+    }
+
+    if (error instanceof FanboxSupporterImportError) {
+      sendPortalJson(response, 500, FANBOX_IMPORT_FAILED_BODY);
+      return;
+    }
+
+    sendPortalJson(response, 500, FANBOX_IMPORT_FAILED_BODY);
+  }
+}
+
 function sendSupporterList(
   response: ServerResponse,
   supporterListService: SupporterListService | undefined,
@@ -499,6 +607,7 @@ export function createAdminServer(
   supporterPortalDeliveryService?: SupporterPortalDeliveryService,
   fanboxPdfInspectionService?: FanboxPdfInspectionService,
   fanboxSupporterComparisonService?: FanboxSupporterComparisonService,
+  fanboxSupporterImportService?: FanboxSupporterImportService,
 ): Server {
   return createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -510,7 +619,8 @@ export function createAdminServer(
       requestPath === "/api/supporters" ||
       requestPath === PORTAL_LINK_PATH ||
       requestPath === PORTAL_SENT_PATH ||
-      requestPath === PDF_INSPECTION_PATH;
+      requestPath === PDF_INSPECTION_PATH ||
+      requestPath === PDF_IMPORT_PATH;
 
     if (!knownRoute) {
       sendNotFound(response);
@@ -548,6 +658,21 @@ export function createAdminServer(
         response,
         fanboxPdfInspectionService,
         fanboxSupporterComparisonService,
+      );
+      return;
+    }
+
+    if (requestPath === PDF_IMPORT_PATH) {
+      if (request.method !== "POST") {
+        sendPortalMethodNotAllowed(response);
+        return;
+      }
+
+      void sendPdfImport(
+        request,
+        response,
+        fanboxPdfInspectionService,
+        fanboxSupporterImportService,
       );
       return;
     }
@@ -598,6 +723,7 @@ export function startAdminServer(
   supporterPortalDeliveryService?: SupporterPortalDeliveryService,
   fanboxPdfInspectionService?: FanboxPdfInspectionService,
   fanboxSupporterComparisonService?: FanboxSupporterComparisonService,
+  fanboxSupporterImportService?: FanboxSupporterImportService,
 ): Server {
   validateListenPort(port);
   const server = createAdminServer(
@@ -606,6 +732,7 @@ export function startAdminServer(
     supporterPortalDeliveryService,
     fanboxPdfInspectionService,
     fanboxSupporterComparisonService,
+    fanboxSupporterImportService,
   );
   server.listen(port, ADMIN_HOST);
   return server;
@@ -675,6 +802,10 @@ export function startProductionAdminServer(
       dependencies.createFanboxSupporterComparisonService ??
       createFanboxSupporterComparisonService;
     const fanboxSupporterComparisonService = createComparisonService(store);
+    const createImportService =
+      dependencies.createFanboxSupporterImportService ??
+      createFanboxSupporterImportService;
+    const fanboxSupporterImportService = createImportService(store);
     let supporterPortalLinkService: SupporterPortalLinkService | undefined;
     if (portalConfiguration !== null) {
       const createPortalLinkService =
@@ -696,6 +827,7 @@ export function startProductionAdminServer(
       supporterPortalDeliveryService,
       fanboxPdfInspectionService,
       fanboxSupporterComparisonService,
+      fanboxSupporterImportService,
     );
     server.once("close", closeStore);
 

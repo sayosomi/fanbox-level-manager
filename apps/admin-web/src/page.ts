@@ -20,6 +20,7 @@ export const ADMIN_PAGE = `<!doctype html>
           <input id="pdf-inspection-file" type="file" accept="application/pdf">
         </p>
         <button id="pdf-inspection-button" type="button">PDFを確認</button>
+        <button id="pdf-import-button" type="button" disabled>このPDFを支援者状態に反映</button>
         <p id="pdf-inspection-status" role="status" aria-live="polite"></p>
         <div id="pdf-inspection-result" aria-live="polite"></div>
       </section>
@@ -60,6 +61,18 @@ const MONTH_KEY_PATTERN = /^\\d{4}-(0[1-9]|1[0-2])$/;
 const PORTAL_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const CANONICAL_TIMESTAMP_PATTERN =
   /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/;
+const PDF_IMPORT_BLOCKED_REASONS = new Set([
+  "empty_relationships",
+  "duplicate_relationship_id",
+  "new_display_name_unavailable",
+]);
+const PDF_IMPORT_BLOCKED_MESSAGES = {
+  empty_relationships: "支援者情報がないため、反映できません。",
+  duplicate_relationship_id:
+    "PDF内に重複した関係情報があるため、反映できません。",
+  new_display_name_unavailable:
+    "新規支援者の表示名を確認できないため、反映できません。",
+};
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -103,6 +116,36 @@ function isCanonicalTimestamp(value) {
   } catch {
     return false;
   }
+}
+
+function validatePdfImportResponse(value) {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["importedAt", "presentSupporterCount"]) ||
+    !isCanonicalTimestamp(value.importedAt) ||
+    !isNonNegativeInteger(value.presentSupporterCount)
+  ) {
+    throw new TypeError("invalid PDF import response");
+  }
+
+  return {
+    importedAt: value.importedAt,
+    presentSupporterCount: value.presentSupporterCount,
+  };
+}
+
+function validatePdfImportBlockedResponse(value) {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["error", "reason"]) ||
+    value.error !== "fanbox_import_blocked" ||
+    typeof value.reason !== "string" ||
+    !PDF_IMPORT_BLOCKED_REASONS.has(value.reason)
+  ) {
+    throw new TypeError("invalid PDF import blocked response");
+  }
+
+  return value.reason;
 }
 
 function validateSupporterResponse(value) {
@@ -491,16 +534,71 @@ function showPdfInspectionResult(status, result, inspection) {
   );
 }
 
-async function inspectSelectedPdf(fileInput, button, status, result) {
-  const file = fileInput.files?.[0];
-  if (file === undefined) {
-    status.textContent = "確認するPDFファイルを選択してください。";
-    result.replaceChildren();
+function updatePdfActionButtons(fileInput, inspectionButton, importButton, state) {
+  fileInput.disabled = state.actionActive;
+  inspectionButton.disabled = state.actionActive;
+  importButton.disabled =
+    state.actionActive ||
+    state.previewedFile === null ||
+    state.previewedFile !== state.selectedFile;
+}
+
+function invalidatePdfPreview(
+  fileInput,
+  inspectionButton,
+  importButton,
+  status,
+  result,
+  state,
+) {
+  state.selectedFile = fileInput.files?.[0] ?? null;
+  state.previewedFile = null;
+  result.replaceChildren();
+  status.textContent =
+    state.selectedFile === null ? "" : "PDFを確認してください。";
+  updatePdfActionButtons(
+    fileInput,
+    inspectionButton,
+    importButton,
+    state,
+  );
+}
+
+async function inspectSelectedPdf(
+  fileInput,
+  inspectionButton,
+  importButton,
+  status,
+  result,
+  state,
+) {
+  if (state.actionActive) {
     return;
   }
 
-  fileInput.disabled = true;
-  button.disabled = true;
+  const file = fileInput.files?.[0];
+  if (file === undefined) {
+    invalidatePdfPreview(
+      fileInput,
+      inspectionButton,
+      importButton,
+      status,
+      result,
+      state,
+    );
+    status.textContent = "確認するPDFファイルを選択してください。";
+    return;
+  }
+
+  state.selectedFile = file;
+  state.previewedFile = null;
+  state.actionActive = true;
+  updatePdfActionButtons(
+    fileInput,
+    inspectionButton,
+    importButton,
+    state,
+  );
   status.textContent = "PDFを確認しています。";
   result.replaceChildren();
 
@@ -520,18 +618,113 @@ async function inspectSelectedPdf(fileInput, button, status, result) {
       throw new Error("PDF inspection request failed");
     }
 
-    showPdfInspectionResult(
-      status,
-      result,
-      validatePdfInspectionResponse(await response.json()),
-    );
+    const inspection = validatePdfInspectionResponse(await response.json());
+    if (state.selectedFile !== file || fileInput.files?.[0] !== file) {
+      throw new Error("PDF selection changed during inspection");
+    }
+
+    showPdfInspectionResult(status, result, inspection);
+    state.previewedFile = file;
   } catch {
+    state.previewedFile = null;
     status.textContent = "PDFを確認できませんでした。";
     result.replaceChildren();
   } finally {
-    fileInput.disabled = false;
-    button.disabled = false;
-    fileInput.value = "";
+    state.actionActive = false;
+    updatePdfActionButtons(
+      fileInput,
+      inspectionButton,
+      importButton,
+      state,
+    );
+  }
+}
+
+async function importSelectedPdf(
+  fileInput,
+  inspectionButton,
+  importButton,
+  status,
+  result,
+  state,
+  listStatus,
+  supporterList,
+) {
+  if (
+    state.actionActive ||
+    state.previewedFile === null ||
+    state.previewedFile !== state.selectedFile
+  ) {
+    return;
+  }
+
+  const file = state.previewedFile;
+  if (fileInput.files?.[0] !== file) {
+    invalidatePdfPreview(
+      fileInput,
+      inspectionButton,
+      importButton,
+      status,
+      result,
+      state,
+    );
+    return;
+  }
+
+  state.actionActive = true;
+  updatePdfActionButtons(
+    fileInput,
+    inspectionButton,
+    importButton,
+    state,
+  );
+  status.textContent = "支援者状態を反映しています。";
+
+  try {
+    const response = await fetch("/api/fanbox-pdf/import", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/pdf",
+      },
+      body: file,
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    if (response.status === 422) {
+      const reason = validatePdfImportBlockedResponse(await response.json());
+      status.textContent = PDF_IMPORT_BLOCKED_MESSAGES[reason];
+      return;
+    }
+    if (!response.ok) {
+      throw new Error("PDF import request failed");
+    }
+
+    const importResult = validatePdfImportResponse(await response.json());
+    state.previewedFile = null;
+    result.replaceChildren();
+    status.textContent =
+      \`支援者状態を反映しました。支援者数: \${importResult.presentSupporterCount}人、取込日時: \${importResult.importedAt}\`;
+    updatePdfActionButtons(
+      fileInput,
+      inspectionButton,
+      importButton,
+      state,
+    );
+    if (listStatus !== null && supporterList !== null) {
+      await loadSupporters(listStatus, supporterList);
+    }
+  } catch {
+    status.textContent = "支援者状態を反映できませんでした。";
+  } finally {
+    state.actionActive = false;
+    updatePdfActionButtons(
+      fileInput,
+      inspectionButton,
+      importButton,
+      state,
+    );
   }
 }
 
@@ -735,26 +928,63 @@ async function loadSupporters(status, list) {
 document.documentElement.dataset.adminReady = "true";
 const pdfInspectionFile = document.getElementById("pdf-inspection-file");
 const pdfInspectionButton = document.getElementById("pdf-inspection-button");
+const pdfImportButton = document.getElementById("pdf-import-button");
 const pdfInspectionStatus = document.getElementById("pdf-inspection-status");
 const pdfInspectionResult = document.getElementById("pdf-inspection-result");
+const listStatus = document.getElementById("list-status");
+const supporterList = document.getElementById("list");
 if (
   pdfInspectionFile instanceof HTMLInputElement &&
   pdfInspectionButton instanceof HTMLButtonElement &&
+  pdfImportButton instanceof HTMLButtonElement &&
   pdfInspectionStatus !== null &&
   pdfInspectionResult !== null
 ) {
+  const pdfState = {
+    actionActive: false,
+    selectedFile: pdfInspectionFile.files?.[0] ?? null,
+    previewedFile: null,
+  };
+  pdfInspectionFile.addEventListener("change", () => {
+    invalidatePdfPreview(
+      pdfInspectionFile,
+      pdfInspectionButton,
+      pdfImportButton,
+      pdfInspectionStatus,
+      pdfInspectionResult,
+      pdfState,
+    );
+  });
   pdfInspectionButton.addEventListener("click", () => {
     void inspectSelectedPdf(
       pdfInspectionFile,
       pdfInspectionButton,
+      pdfImportButton,
       pdfInspectionStatus,
       pdfInspectionResult,
+      pdfState,
     );
   });
+  pdfImportButton.addEventListener("click", () => {
+    void importSelectedPdf(
+      pdfInspectionFile,
+      pdfInspectionButton,
+      pdfImportButton,
+      pdfInspectionStatus,
+      pdfInspectionResult,
+      pdfState,
+      listStatus,
+      supporterList,
+    );
+  });
+  updatePdfActionButtons(
+    pdfInspectionFile,
+    pdfInspectionButton,
+    pdfImportButton,
+    pdfState,
+  );
 }
 
-const listStatus = document.getElementById("list-status");
-const supporterList = document.getElementById("list");
 if (listStatus !== null && supporterList !== null) {
   void loadSupporters(listStatus, supporterList);
 }
@@ -834,6 +1064,10 @@ h2 {
 }
 
 #pdf-inspection-button {
+  margin-top: 0.25rem;
+}
+
+#pdf-import-button {
   margin-top: 0.25rem;
 }
 
