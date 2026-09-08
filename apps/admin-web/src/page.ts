@@ -206,6 +206,11 @@ function showPortalSuccess(status, portalUrl) {
 }
 
 const PDF_RELATIONSHIP_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+const PDF_PRESENT_SUPPORTER_STATUSES = new Set([
+  "new",
+  "continuing",
+  "returning",
+]);
 
 function isFiniteNumber(value) {
   return typeof value === "number" && Number.isFinite(value);
@@ -219,11 +224,23 @@ function isFiniteNumberTuple(value, length) {
   );
 }
 
+function isPdfPresentSupporterStatus(value) {
+  return typeof value === "string" && PDF_PRESENT_SUPPORTER_STATUSES.has(value);
+}
+
 function validatePdfInspectionResponse(value) {
-  if (!isRecord(value) || !hasExactKeys(value, ["pageCount", "relationshipLinks"])) {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["pageCount", "relationshipLinks", "comparison"])
+  ) {
     throw new TypeError("invalid PDF inspection response");
   }
-  if (!isNonNegativeInteger(value.pageCount) || !Array.isArray(value.relationshipLinks)) {
+  if (
+    !isNonNegativeInteger(value.pageCount) ||
+    !Array.isArray(value.relationshipLinks) ||
+    !isRecord(value.comparison) ||
+    !hasExactKeys(value.comparison, ["presentSupporters", "absentSupporters"])
+  ) {
     throw new TypeError("invalid PDF inspection response");
   }
 
@@ -282,21 +299,105 @@ function validatePdfInspectionResponse(value) {
     };
   });
 
+  if (
+    !Array.isArray(value.comparison.presentSupporters) ||
+    !Array.isArray(value.comparison.absentSupporters) ||
+    value.comparison.presentSupporters.length !== relationshipLinks.length
+  ) {
+    throw new TypeError("invalid PDF comparison");
+  }
+
+  const presentSupporters = value.comparison.presentSupporters.map(
+    (supporter, index) => {
+      const relationship = relationshipLinks[index];
+      if (
+        !isRecord(supporter) ||
+        !hasExactKeys(supporter, [
+          "status",
+          "relationshipId",
+          "storedDisplayName",
+        ]) ||
+        !isPdfPresentSupporterStatus(supporter.status) ||
+        typeof supporter.relationshipId !== "string" ||
+        relationship === undefined ||
+        supporter.relationshipId !== relationship.relationshipId
+      ) {
+        throw new TypeError("invalid PDF comparison supporter");
+      }
+
+      if (
+        supporter.status === "new" &&
+        supporter.storedDisplayName !== null
+      ) {
+        throw new TypeError("invalid PDF comparison supporter");
+      }
+      if (
+        (supporter.status === "continuing" ||
+          supporter.status === "returning") &&
+        !isNonBlankString(supporter.storedDisplayName)
+      ) {
+        throw new TypeError("invalid PDF comparison supporter");
+      }
+
+      return supporter;
+    },
+  );
+
+  const absentSupporters = value.comparison.absentSupporters.map(
+    (supporter) => {
+      if (
+        !isRecord(supporter) ||
+        !hasExactKeys(supporter, [
+          "status",
+          "relationshipId",
+          "storedDisplayName",
+          "wasSupporting",
+        ]) ||
+        supporter.status !== "absent" ||
+        typeof supporter.relationshipId !== "string" ||
+        supporter.relationshipId.length === 0 ||
+        !PDF_RELATIONSHIP_ID_PATTERN.test(supporter.relationshipId) ||
+        !isNonBlankString(supporter.storedDisplayName) ||
+        typeof supporter.wasSupporting !== "boolean"
+      ) {
+        throw new TypeError("invalid PDF absent supporter");
+      }
+
+      return supporter;
+    },
+  );
+
   return {
     pageCount: value.pageCount,
     relationshipLinks,
+    comparison: {
+      presentSupporters,
+      absentSupporters,
+    },
   };
 }
 
-function renderPdfInspectionRelationship(relationship, index) {
+function renderPdfInspectionRelationship(relationship, comparison, index) {
   const item = document.createElement("section");
   const heading = document.createElement("h3");
   const page = document.createElement("p");
+  const classification = document.createElement("p");
+  const storedName = document.createElement("p");
   const runs = document.createElement("ul");
   const runItems = [];
 
   heading.textContent = \`関係リンク \${index + 1}: \${relationship.relationshipId}\`;
   page.textContent = \`ページ: \${relationship.pageNumber}\`;
+  classification.textContent =
+    comparison.status === "new"
+      ? "分類: 新規"
+      : comparison.status === "continuing"
+        ? "分類: 継続"
+        : "分類: 復帰";
+  storedName.textContent =
+    comparison.status === "new"
+      ? "登録名: なし"
+      : \`登録名: \${comparison.storedDisplayName}\`;
   const displayName = document.createElement("p");
   displayName.textContent =
     relationship.displayNameCandidate === null
@@ -306,7 +407,7 @@ function renderPdfInspectionRelationship(relationship, index) {
   if (relationship.textRuns.length === 0) {
     const empty = document.createElement("p");
     empty.textContent = "重なるテキストはありません。";
-    item.replaceChildren(heading, page, displayName, empty);
+    item.replaceChildren(heading, page, classification, storedName, displayName, empty);
     return item;
   }
 
@@ -318,22 +419,75 @@ function renderPdfInspectionRelationship(relationship, index) {
   }
 
   runs.replaceChildren(...runItems);
-  item.replaceChildren(heading, page, displayName, runs);
+  item.replaceChildren(heading, page, classification, storedName, displayName, runs);
   return item;
 }
 
-function showPdfInspectionResult(status, result, inspection) {
-  status.textContent = \`ページ数: \${inspection.pageCount}、関係リンク数: \${inspection.relationshipLinks.length}\`;
+function renderPdfAbsentSupporters(absentSupporters) {
+  const section = document.createElement("section");
+  const heading = document.createElement("h3");
+  heading.textContent = "PDFにいないローカル支援者";
 
+  if (absentSupporters.length === 0) {
+    const empty = document.createElement("p");
+    empty.textContent = "PDFにいないローカル支援者はいません。";
+    section.replaceChildren(heading, empty);
+    return section;
+  }
+
+  const list = document.createElement("ul");
+  const items = absentSupporters.map((supporter) => {
+    const item = document.createElement("li");
+    const storedName = document.createElement("p");
+    const relationshipId = document.createElement("p");
+    const supportState = document.createElement("p");
+
+    storedName.textContent = \`登録名: \${supporter.storedDisplayName}\`;
+    relationshipId.textContent = \`関係ID: \${supporter.relationshipId}\`;
+    supportState.textContent = supporter.wasSupporting
+      ? "直前の支援状態: 支援中"
+      : "直前の支援状態: 非支援";
+    item.replaceChildren(storedName, relationshipId, supportState);
+    return item;
+  });
+
+  list.replaceChildren(...items);
+  section.replaceChildren(heading, list);
+  return section;
+}
+
+function showPdfInspectionResult(status, result, inspection) {
+  const counts = {
+    new: 0,
+    continuing: 0,
+    returning: 0,
+  };
+  for (const supporter of inspection.comparison.presentSupporters) {
+    counts[supporter.status] += 1;
+  }
+  status.textContent =
+    \`ページ数: \${inspection.pageCount}、関係リンク数: \${inspection.relationshipLinks.length}、新規: \${counts.new}、継続: \${counts.continuing}、復帰: \${counts.returning}、PDFにいない: \${inspection.comparison.absentSupporters.length}\`;
+
+  const relationshipEvidence = [];
   if (inspection.relationshipLinks.length === 0) {
     const empty = document.createElement("p");
     empty.textContent = "関係リンクはありません。";
-    result.replaceChildren(empty);
-    return;
+    relationshipEvidence.push(empty);
+  } else {
+    relationshipEvidence.push(
+      ...inspection.relationshipLinks.map((relationship, index) =>
+        renderPdfInspectionRelationship(
+          relationship,
+          inspection.comparison.presentSupporters[index],
+          index,
+        ),
+      ),
+    );
   }
 
   result.replaceChildren(
-    ...inspection.relationshipLinks.map(renderPdfInspectionRelationship),
+    ...relationshipEvidence,
+    renderPdfAbsentSupporters(inspection.comparison.absentSupporters),
   );
 }
 

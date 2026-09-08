@@ -13,6 +13,8 @@ import type {
   CreateSupporterPortalLinkServiceOptions,
   FanboxPdfInspection,
   FanboxPdfInspectionService,
+  FanboxPdfSupporterComparison,
+  FanboxSupporterComparisonService,
   SupporterPortalDeliveryService,
   SupporterPortalLinkService,
   SupporterListItem,
@@ -205,10 +207,128 @@ const samplePdfInspection: FanboxPdfInspection = Object.freeze({
   ]),
 });
 
+const samplePdfComparison: FanboxPdfSupporterComparison = Object.freeze({
+  presentSupporters: Object.freeze([
+    Object.freeze({
+      status: "continuing" as const,
+      relationshipId: "relationship_123",
+      displayNameCandidate: "synthetic candidate",
+      supporterId: "internal-supporter-id",
+      storedDisplayName: "Stored synthetic name",
+    }),
+  ]),
+  absentSupporters: Object.freeze([]),
+});
+
+const comparisonInspection: FanboxPdfInspection = Object.freeze({
+  pageCount: 2,
+  relationshipLinks: Object.freeze([
+    Object.freeze({
+      pageNumber: 1,
+      relationshipId: "new_relationship",
+      displayNameCandidate: "new synthetic candidate",
+      rect: Object.freeze([0, 0, 10, 10]) as readonly [
+        number,
+        number,
+        number,
+        number,
+      ],
+      textRuns: Object.freeze([]),
+    }),
+    Object.freeze({
+      pageNumber: 1,
+      relationshipId: "continuing_relationship",
+      displayNameCandidate: "continuing synthetic candidate",
+      rect: Object.freeze([10, 10, 20, 20]) as readonly [
+        number,
+        number,
+        number,
+        number,
+      ],
+      textRuns: Object.freeze([]),
+    }),
+    Object.freeze({
+      pageNumber: 2,
+      relationshipId: "returning_relationship",
+      displayNameCandidate: null,
+      rect: Object.freeze([20, 20, 30, 30]) as readonly [
+        number,
+        number,
+        number,
+        number,
+      ],
+      textRuns: Object.freeze([
+        Object.freeze({
+          text: "  returning raw run  ",
+          transform: Object.freeze([1, 0, 0, 1, 22, 25]) as readonly [
+            number,
+            number,
+            number,
+            number,
+            number,
+            number,
+          ],
+          width: 12,
+          height: 10,
+          hasEol: true,
+        }),
+      ]),
+    }),
+  ]),
+});
+
+const comparisonResult: FanboxPdfSupporterComparison = Object.freeze({
+  presentSupporters: Object.freeze([
+    Object.freeze({
+      status: "new" as const,
+      relationshipId: "new_relationship",
+      displayNameCandidate: "new synthetic candidate",
+      supporterId: null,
+      storedDisplayName: null,
+    }),
+    Object.freeze({
+      status: "continuing" as const,
+      relationshipId: "continuing_relationship",
+      displayNameCandidate: "continuing synthetic candidate",
+      supporterId: "internal-continuing-id",
+      storedDisplayName: "Continuing stored synthetic name",
+    }),
+    Object.freeze({
+      status: "returning" as const,
+      relationshipId: "returning_relationship",
+      displayNameCandidate: null,
+      supporterId: "internal-returning-id",
+      storedDisplayName: "Returning stored synthetic name",
+    }),
+  ]),
+  absentSupporters: Object.freeze([
+    Object.freeze({
+      status: "absent" as const,
+      supporterId: "internal-absent-supporting-id",
+      relationshipId: "absent_supporting_relationship",
+      storedDisplayName: "Absent supporting synthetic name",
+      wasSupporting: true,
+    }),
+    Object.freeze({
+      status: "absent" as const,
+      supporterId: "internal-absent-inactive-id",
+      relationshipId: "absent_inactive_relationship",
+      storedDisplayName: "Absent inactive synthetic name",
+      wasSupporting: false,
+    }),
+  ]),
+});
+
 function createPdfInspectionService(
   implementation: FanboxPdfInspectionService["inspectFanboxPdf"],
 ): FanboxPdfInspectionService {
   return { inspectFanboxPdf: implementation };
+}
+
+function createPdfComparisonService(
+  implementation: FanboxSupporterComparisonService["compareInspection"],
+): FanboxSupporterComparisonService {
+  return { compareInspection: implementation };
 }
 
 function expectCommonSecurityHeaders(headers: IncomingHttpHeaders): void {
@@ -398,6 +518,7 @@ describe("PDF inspection route", () => {
       undefined,
       undefined,
       service,
+      createPdfComparisonService(() => samplePdfComparison),
     );
     const inspectionPort = await listenOnEphemeralPort(inspectionServer);
     const pdfBytes = new Uint8Array([37, 80, 68, 70, 0, 255]);
@@ -418,9 +539,179 @@ describe("PDF inspection route", () => {
         "application/json; charset=UTF-8",
       );
       expectCommonSecurityHeaders(response.headers);
-      expect(response.body).toBe(JSON.stringify(samplePdfInspection));
+      expect(response.body).toBe(
+        JSON.stringify({
+          pageCount: samplePdfInspection.pageCount,
+          relationshipLinks: samplePdfInspection.relationshipLinks,
+          comparison: {
+            presentSupporters: [
+              {
+                status: "continuing",
+                relationshipId: "relationship_123",
+                storedDisplayName: "Stored synthetic name",
+              },
+            ],
+            absentSupporters: [],
+          },
+        }),
+      );
     } finally {
       await closeServer(inspectionServer);
+    }
+  });
+
+  it("compares one inspected PDF snapshot and returns the privacy-minimized composition", async () => {
+    const callOrder: string[] = [];
+    const received: Uint8Array[] = [];
+    const inspect = vi.fn(async (data: Uint8Array) => {
+      callOrder.push("inspect");
+      received.push(data);
+      return comparisonInspection;
+    });
+    const compare = vi.fn((inspection: FanboxPdfInspection) => {
+      callOrder.push("compare");
+      expect(inspection).toBe(comparisonInspection);
+      return comparisonResult;
+    });
+    const inspectionServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      createPdfInspectionService(inspect),
+      createPdfComparisonService(compare),
+    );
+    const inspectionPort = await listenOnEphemeralPort(inspectionServer);
+    const pdfBytes = new Uint8Array([37, 80, 68, 70, 11, 22, 33]);
+
+    try {
+      const response = await requestOnPort(
+        inspectionPort,
+        "POST",
+        "/api/fanbox-pdf/inspect",
+        pdfBytes,
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect([...received[0] ?? []]).toEqual([...pdfBytes]);
+      expect(callOrder).toEqual(["inspect", "compare"]);
+      expect(inspect).toHaveBeenCalledTimes(1);
+      expect(compare).toHaveBeenCalledTimes(1);
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.body) as Record<string, unknown>;
+      expect(Object.keys(body)).toEqual([
+        "pageCount",
+        "relationshipLinks",
+        "comparison",
+      ]);
+      expect(body.pageCount).toBe(comparisonInspection.pageCount);
+      expect(body.relationshipLinks).toEqual(
+        comparisonInspection.relationshipLinks,
+      );
+      expect(body.comparison).toEqual({
+        presentSupporters: [
+          {
+            status: "new",
+            relationshipId: "new_relationship",
+            storedDisplayName: null,
+          },
+          {
+            status: "continuing",
+            relationshipId: "continuing_relationship",
+            storedDisplayName: "Continuing stored synthetic name",
+          },
+          {
+            status: "returning",
+            relationshipId: "returning_relationship",
+            storedDisplayName: "Returning stored synthetic name",
+          },
+        ],
+        absentSupporters: [
+          {
+            status: "absent",
+            relationshipId: "absent_supporting_relationship",
+            storedDisplayName: "Absent supporting synthetic name",
+            wasSupporting: true,
+          },
+          {
+            status: "absent",
+            relationshipId: "absent_inactive_relationship",
+            storedDisplayName: "Absent inactive synthetic name",
+            wasSupporting: false,
+          },
+        ],
+      });
+      const comparisonBody = body.comparison as Record<string, unknown>;
+      for (const item of [
+        ...(comparisonBody.presentSupporters as unknown[]),
+        ...(comparisonBody.absentSupporters as unknown[]),
+      ]) {
+        expect(item).not.toHaveProperty("supporterId");
+      }
+      expect(JSON.stringify(body.comparison)).not.toContain(
+        "displayNameCandidate",
+      );
+      expect(response.body).not.toContain("internal-continuing-id");
+      expect(response.body).not.toContain("internal-returning-id");
+      expect(response.body).not.toContain("internal-absent-supporting-id");
+      expectCommonSecurityHeaders(response.headers);
+    } finally {
+      await closeServer(inspectionServer);
+    }
+  });
+
+  it("returns exact comparison-unavailable and comparison-failed responses without leaking details", async () => {
+    const unavailableInspect = vi.fn(async () => comparisonInspection);
+    const unavailableServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      createPdfInspectionService(unavailableInspect),
+    );
+    const unavailablePort = await listenOnEphemeralPort(unavailableServer);
+    const sensitiveFailure =
+      "private comparison path, supporter id, stored name, and diagnostics";
+    const failedInspect = vi.fn(async () => comparisonInspection);
+    const failedCompare = vi.fn(() => {
+      throw new Error(sensitiveFailure);
+    });
+    const failedServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      createPdfInspectionService(failedInspect),
+      createPdfComparisonService(failedCompare),
+    );
+    const failedPort = await listenOnEphemeralPort(failedServer);
+
+    try {
+      const unavailable = await requestOnPort(
+        unavailablePort,
+        "POST",
+        "/api/fanbox-pdf/inspect",
+        new Uint8Array([1, 2, 3]),
+        { "Content-Type": "application/pdf" },
+      );
+      const failed = await requestOnPort(
+        failedPort,
+        "POST",
+        "/api/fanbox-pdf/inspect",
+        new Uint8Array([4, 5, 6]),
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect(unavailable.statusCode).toBe(500);
+      expect(unavailable.body).toBe('{"error":"pdf_comparison_unavailable"}');
+      expect(unavailableInspect).not.toHaveBeenCalled();
+      expect(failed.statusCode).toBe(500);
+      expect(failed.body).toBe('{"error":"pdf_comparison_failed"}');
+      expect(failedInspect).toHaveBeenCalledTimes(1);
+      expect(failedCompare).toHaveBeenCalledTimes(1);
+      expect(failed.body).not.toContain(sensitiveFailure);
+      expect(failed.body).not.toContain("private comparison path");
+      expect(failed.body).not.toContain("supporter id");
+    } finally {
+      await closeServer(unavailableServer);
+      await closeServer(failedServer);
     }
   });
 
@@ -494,6 +785,59 @@ describe("PDF inspection route", () => {
     }
   });
 
+  it("does not compare invalid requests or failed inspections", async () => {
+    const invalidInspect = vi.fn(async () => samplePdfInspection);
+    const invalidCompare = vi.fn(() => samplePdfComparison);
+    const invalidServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      createPdfInspectionService(invalidInspect),
+      createPdfComparisonService(invalidCompare),
+    );
+    const invalidPort = await listenOnEphemeralPort(invalidServer);
+    const failedInspect = vi.fn(async () => {
+      throw new FanboxPdfInspectionError("private invalid PDF diagnostics");
+    });
+    const failedCompare = vi.fn(() => samplePdfComparison);
+    const failedServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      createPdfInspectionService(failedInspect),
+      createPdfComparisonService(failedCompare),
+    );
+    const failedPort = await listenOnEphemeralPort(failedServer);
+
+    try {
+      const invalid = await requestOnPort(
+        invalidPort,
+        "POST",
+        "/api/fanbox-pdf/inspect",
+        "",
+        { "Content-Type": "application/pdf" },
+      );
+      const failed = await requestOnPort(
+        failedPort,
+        "POST",
+        "/api/fanbox-pdf/inspect",
+        new Uint8Array([1, 2, 3]),
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect(invalid.statusCode).toBe(400);
+      expect(invalid.body).toBe('{"error":"invalid_request"}');
+      expect(invalidInspect).not.toHaveBeenCalled();
+      expect(invalidCompare).not.toHaveBeenCalled();
+      expect(failed.statusCode).toBe(422);
+      expect(failed.body).toBe('{"error":"invalid_pdf"}');
+      expect(failedCompare).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(invalidServer);
+      await closeServer(failedServer);
+    }
+  });
+
   it("returns exact unavailable, invalid-PDF, and unexpected-failure responses", async () => {
     const cases = [
       {
@@ -523,6 +867,7 @@ describe("PDF inspection route", () => {
         undefined,
         undefined,
         testCase.service,
+        createPdfComparisonService(() => samplePdfComparison),
       );
       const inspectionPort = await listenOnEphemeralPort(inspectionServer);
 
@@ -892,13 +1237,23 @@ describe("admin server configuration", () => {
       samplePdfInspection,
     );
     const createInspectionService = vi.fn(() => inspectionService);
+    const comparisonService = createPdfComparisonService(() => comparisonResult);
+    const createComparisonService = vi.fn((suppliedStore: LocalStore) => {
+      expect(suppliedStore).toBe(store);
+      return comparisonService;
+    });
+    const createListService = vi.fn((suppliedStore: LocalStore) => {
+      expect(suppliedStore).toBe(store);
+      return sampleSupporterListService;
+    });
 
     try {
       productionServer = startProductionAdminServer({
         openLocalStore: () => store,
-        createSupporterListService: () => sampleSupporterListService,
+        createSupporterListService: createListService,
         createSupporterPortalDeliveryService: createDeliveryService,
         createFanboxPdfInspectionService: createInspectionService,
+        createFanboxSupporterComparisonService: createComparisonService,
       });
       await new Promise<void>((resolve, reject) => {
         productionServer?.once("listening", () => resolve());
@@ -921,8 +1276,10 @@ describe("admin server configuration", () => {
       expect(listResponse.statusCode).toBe(200);
       expect(portalResponse.statusCode).toBe(503);
       expect(portalResponse.body).toBe('{"error":"portal_not_configured"}');
+      expect(createListService).toHaveBeenCalledTimes(1);
       expect(createDeliveryService).toHaveBeenCalledTimes(1);
       expect(createInspectionService).toHaveBeenCalledTimes(1);
+      expect(createComparisonService).toHaveBeenCalledTimes(1);
     } finally {
       if (productionServer !== undefined && productionServer.listening) {
         await closeServer(productionServer);
@@ -1180,7 +1537,39 @@ describe("admin server configuration", () => {
     expect(ADMIN_SCRIPT).toContain("body: file");
     expect(ADMIN_SCRIPT).toContain("PDF_RELATIONSHIP_ID_PATTERN");
     expect(ADMIN_SCRIPT).toContain(
-      'hasExactKeys(value, ["pageCount", "relationshipLinks"])',
+      'hasExactKeys(value, ["pageCount", "relationshipLinks", "comparison"])',
+    );
+    expect(ADMIN_SCRIPT).toContain("PDF_PRESENT_SUPPORTER_STATUSES");
+    expect(ADMIN_SCRIPT).toContain("isPdfPresentSupporterStatus");
+    expect(ADMIN_SCRIPT).toContain(
+      'hasExactKeys(value.comparison, ["presentSupporters", "absentSupporters"])',
+    );
+    const comparisonValidation = ADMIN_SCRIPT.slice(
+      ADMIN_SCRIPT.indexOf("const presentSupporters ="),
+      ADMIN_SCRIPT.indexOf("function renderPdfInspectionRelationship"),
+    );
+    expect(comparisonValidation).not.toContain("supporterId");
+    expect(ADMIN_SCRIPT).toContain(
+      "value.comparison.presentSupporters.length !== relationshipLinks.length",
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      'hasExactKeys(supporter, [\n          "status",\n          "relationshipId",\n          "storedDisplayName",\n        ])',
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      "supporter.relationshipId !== relationship.relationshipId",
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      'hasExactKeys(supporter, [\n          "status",\n          "relationshipId",\n          "storedDisplayName",\n          "wasSupporting",\n        ])',
+    );
+    expect(ADMIN_SCRIPT).toContain('supporter.status !== "absent"');
+    expect(ADMIN_SCRIPT).toContain(
+      'typeof supporter.wasSupporting !== "boolean"',
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      'supporter.status === "new" &&\n        supporter.storedDisplayName !== null',
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      '!isNonBlankString(supporter.storedDisplayName)',
     );
     expect(ADMIN_SCRIPT).toContain(
       'hasExactKeys(relationship, [\n        "pageNumber",\n        "relationshipId",\n        "displayNameCandidate",\n        "rect",\n        "textRuns",\n      ])',
@@ -1198,10 +1587,39 @@ describe("admin server configuration", () => {
       ": `表示名候補: ${relationship.displayNameCandidate}`;",
     );
     expect(ADMIN_SCRIPT).toContain(
-      "item.replaceChildren(heading, page, displayName, runs)",
+      "item.replaceChildren(heading, page, classification, storedName, displayName, runs)",
     );
     expect(ADMIN_SCRIPT).toContain(
-      "item.replaceChildren(heading, page, displayName, empty)",
+      "item.replaceChildren(heading, page, classification, storedName, displayName, empty)",
+    );
+    expect(ADMIN_SCRIPT).toContain('classification.textContent =');
+    expect(ADMIN_SCRIPT).toContain('"分類: 新規"');
+    expect(ADMIN_SCRIPT).toContain('"分類: 継続"');
+    expect(ADMIN_SCRIPT).toContain('"分類: 復帰"');
+    expect(ADMIN_SCRIPT).toContain('"登録名: なし"');
+    expect(ADMIN_SCRIPT).toContain(
+      "storedName.textContent =",
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      "`登録名: ${comparison.storedDisplayName}`",
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      "`ページ数: ${inspection.pageCount}、関係リンク数: ${inspection.relationshipLinks.length}、新規: ${counts.new}、継続: ${counts.continuing}、復帰: ${counts.returning}、PDFにいない: ${inspection.comparison.absentSupporters.length}`",
+    );
+    expect(ADMIN_SCRIPT).toContain("renderPdfAbsentSupporters");
+    expect(ADMIN_SCRIPT).toContain("PDFにいないローカル支援者");
+    expect(ADMIN_SCRIPT).toContain("PDFにいないローカル支援者はいません。");
+    expect(ADMIN_SCRIPT).toContain(
+      "`登録名: ${supporter.storedDisplayName}`",
+    );
+    expect(ADMIN_SCRIPT).toContain(
+      "`関係ID: ${supporter.relationshipId}`",
+    );
+    expect(ADMIN_SCRIPT).toContain("直前の支援状態: 支援中");
+    expect(ADMIN_SCRIPT).toContain("直前の支援状態: 非支援");
+    expect(ADMIN_SCRIPT).toContain("relationshipEvidence.push(empty)");
+    expect(ADMIN_SCRIPT).toContain(
+      "renderPdfAbsentSupporters(inspection.comparison.absentSupporters)",
     );
     expect(ADMIN_SCRIPT).toContain(
       'hasExactKeys(textRun, [\n          "text",\n          "transform",\n          "width",\n          "height",\n          "hasEol",\n        ])',
