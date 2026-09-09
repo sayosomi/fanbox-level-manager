@@ -245,8 +245,15 @@ failure does not roll back an already committed business update. The manual
 `今すぐバックアップを作成` action is the explicit recovery path after a
 post-update backup failure.
 
-The remaining encryption implementation details are deferred to a later
-implementation contract.
+The repository implements the backup pipeline with consistent SQLite snapshots,
+versioned authenticated backup encryption, macOS Keychain-backed
+encryption-key access, persisted human-selected backup destination, encrypted
+filesystem artifact writing, manual backup execution, and the required
+automatic backup triggers described above.
+
+Restoring or decrypting a backup into a live-database replacement is not yet
+implemented. Backup-key recovery, export, and rotation remain future/separate
+work.
 
 Every successful valid FANBOX PDF import requires portal integration to be
 available after PDF inspection and supporter comparison, before backup
@@ -266,20 +273,41 @@ automatic synchronization is no longer deferred.
 Month-end processing automatic synchronization is defined above and is no longer
 deferred.
 
-## Deferred implementation choices and non-goals
+## Current implementation status and remaining launch work
 
-This documentation/bootstrap slice does not choose or implement:
+The repository implements:
 
-- a JavaScript or TypeScript framework or runtime;
-- localhost HTTP serving;
-- the final physical SQLite or D1 schema;
-- PDF parsing;
-- Cloudflare Workers or D1 implementation;
-- authentication or token-hashing implementation details;
-- backup encryption implementation details;
-- GitHub Actions CI workflows; or
-- production Cloudflare accounts, resources, or custom domains.
+- the TypeScript/Node workspace/runtime and Mac-local localhost admin server/UI;
+- SQLite schema/migrations and storage/application layers;
+- FANBOX PDF extraction, comparison, import, and manual unexpected-identity
+  relink;
+- lottery and month-end workflows;
+- the Cloudflare Worker/D1 application, supporter token authentication/read API,
+  and `/level` supporter page;
+- local portal-link issue/reissue/sent-state flow;
+- automatic Cloudflare synchronization;
+- the encrypted backup pipeline and automatic triggers; and
+- GitHub Actions CI.
 
-Application source code, dependency manifests, migrations, schemas, CI
-workflows, Cloudflare configuration, deployment files, and unrelated tests are
-outside this issue.
+Repository implementation and external production provisioning are separate
+concerns. The Mac-local admin and supporter-facing Worker applications are
+implemented in repository code. The repository Worker configuration does not
+yet contain a real production D1 database binding ID, and repository
+documentation does not yet define the production Cloudflare resource, secret,
+or deployment procedure. Production Cloudflare provisioning and deployment
+therefore remain launch work.
+
+The Mac production CLI currently requires explicit `FANBOX_ADMIN_DB_PATH`. A
+permanent/default Mac database location and normal durable launch convention
+remain unsettled.
+
+Separate later work includes:
+
+- backup restore/live-database replacement;
+- backup-key recovery/export/rotation;
+- merging two already-existing supporter rows if that exceptional case is ever
+  required; and
+- Issue #82 dependency vulnerability remediation.
+
+Issue #82 is open and unresolved, and is currently deferred by explicit Human
+decision. It is not currently a product-work blocker.
