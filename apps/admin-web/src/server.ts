@@ -903,6 +903,7 @@ async function sendExistingSupporterMigration(
   migrationService: ExistingSupporterMigrationService | undefined,
   backupDestinationService: BackupDestinationService | undefined,
   backupExecutionService: BackupExecutionService | undefined,
+  supporterPortalSyncService: SupporterPortalSyncService | undefined,
 ): Promise<void> {
   let body: string;
   try {
@@ -923,6 +924,11 @@ async function sendExistingSupporterMigration(
     return;
   }
 
+  if (supporterPortalSyncService === undefined) {
+    sendPortalJson(response, 503, PORTAL_NOT_CONFIGURED_BODY);
+    return;
+  }
+
   if (
     !ensurePostMutationBackupReady(
       response,
@@ -933,8 +939,11 @@ async function sendExistingSupporterMigration(
     return;
   }
 
+  let result: ReturnType<
+    ExistingSupporterMigrationService["registerExistingSupporter"]
+  >;
   try {
-    migrationService.registerExistingSupporter({
+    result = migrationService.registerExistingSupporter({
       fanboxRelationshipId: input.fanboxRelationshipId,
       displayName: input.displayName,
       currentLevel: input.currentLevel,
@@ -952,6 +961,13 @@ async function sendExistingSupporterMigration(
   }
 
   if (!(await createPostMutationBackup(response, backupExecutionService))) {
+    return;
+  }
+
+  try {
+    await supporterPortalSyncService.syncSupporter(result.supporter.id);
+  } catch {
+    sendPortalJson(response, 502, PORTAL_SYNC_FAILED_AFTER_UPDATE_BODY);
     return;
   }
 
@@ -1538,6 +1554,7 @@ export function createAdminServer(
         existingSupporterMigrationService,
         backupDestinationService,
         backupExecutionService,
+        supporterPortalSyncService,
       );
       return;
     }

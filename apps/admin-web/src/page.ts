@@ -1658,6 +1658,24 @@ async function migrateExistingSupporter(
       }
       throw new Error("invalid existing supporter migration conflict");
     }
+    if (response.status === 503 && isExactPortalNotConfigured(responseBody)) {
+      status.textContent =
+        "ポータル連携を設定してから、旧管理レベルでの登録をもう一度実行してください。支援者はまだ登録されていません。";
+      return;
+    }
+    if (
+      response.status === 502 &&
+      isExactPortalSyncFailedAfterUpdate(responseBody)
+    ) {
+      control.succeeded = true;
+      if (listStatus !== null && supporterList !== null) {
+        await loadSupporters(listStatus, supporterList);
+      }
+      await refreshMonthEndSource(true);
+      status.textContent =
+        "支援者の登録はすでに完了しています。同じ支援者を再登録しないでください。暗号化された処理後バックアップは作成済みです。対象の支援者は一覧の「Cloudflareへ同期」を実行してください。";
+      return;
+    }
     if (response.status === 500 && isExactBackupFailedAfterUpdate(responseBody)) {
       control.succeeded = true;
       if (listStatus !== null && supporterList !== null) {
@@ -1665,7 +1683,7 @@ async function migrateExistingSupporter(
       }
       await refreshMonthEndSource(true);
       status.textContent =
-        "支援者の登録は完了しましたが、バックアップを作成できませんでした。同じ支援者を再登録しないでください。「今すぐバックアップを作成」を実行してください。";
+        "支援者の登録は完了しましたが、バックアップを作成できませんでした。同じ支援者を再登録しないでください。「今すぐバックアップを作成」を実行してください。Cloudflare自動同期は試行されていません。バックアップ復旧後に対象の支援者で「Cloudflareへ同期」を実行してください。";
       return;
     }
     if (!response.ok) {
