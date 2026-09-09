@@ -419,6 +419,21 @@ function createLotteryLevelService(
   return { recordLotteryResults: implementation } as unknown as LotteryLevelService;
 }
 
+function createPortalSyncService(
+  implementation: SupporterPortalSyncService["syncSupporter"] = async () => ({
+    verifiedAt: "2026-09-09T09:00:00.000Z",
+  }),
+): SupporterPortalSyncService {
+  return {
+    syncSupporter: vi.fn(implementation),
+    provisionSupporterPortalAccess: vi.fn(
+      async () => {
+        throw new Error("not used");
+      },
+    ),
+  };
+}
+
 function createMonthEndAdminServer(
   monthEndProcessingService?: MonthEndProcessingService,
   backupExecutionService?: BackupExecutionService,
@@ -1623,6 +1638,7 @@ describe("lottery results route", () => {
       undefined,
       createBackupDestinationService(),
       createBackupExecutionService(),
+      createPortalSyncService(),
     );
     const lotteryPort = await listenOnEphemeralPort(lotteryServer);
 
@@ -1656,6 +1672,7 @@ describe("lottery results route", () => {
 
   it("rejects invalid JSON envelopes before calling the lottery service", async () => {
     const recordLotteryResults = vi.fn();
+    const portalSyncService = createPortalSyncService();
     const lotteryServer = createAdminServer(
       undefined,
       undefined,
@@ -1665,6 +1682,10 @@ describe("lottery results route", () => {
       undefined,
       undefined,
       createLotteryLevelService(recordLotteryResults),
+      undefined,
+      undefined,
+      undefined,
+      portalSyncService,
     );
     const lotteryPort = await listenOnEphemeralPort(lotteryServer);
     const invalidBodies = [
@@ -1752,6 +1773,47 @@ describe("lottery results route", () => {
         expect(response.body).toBe('{"error":"invalid_request"}');
       }
       expect(recordLotteryResults).not.toHaveBeenCalled();
+      expect(portalSyncService.syncSupporter).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(lotteryServer);
+    }
+  });
+
+  it("requires portal configuration before backup readiness or mutation", async () => {
+    const recordLotteryResults = vi.fn();
+    const getBackupDestinationDirectory = vi.fn(() => "/synthetic/backup/");
+    const createBackup = vi.fn(async () => {});
+    const lotteryServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createLotteryLevelService(recordLotteryResults),
+      undefined,
+      {
+        getBackupDestinationDirectory,
+        selectBackupDestinationDirectory: vi.fn(async () => "/synthetic/backup/"),
+      },
+      createBackupExecutionService(createBackup),
+    );
+    const lotteryPort = await listenOnEphemeralPort(lotteryServer);
+
+    try {
+      const response = await requestOnPort(
+        lotteryPort,
+        "POST",
+        "/api/lottery-results",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(503);
+      expect(response.body).toBe('{"error":"portal_not_configured"}');
+      expect(getBackupDestinationDirectory).not.toHaveBeenCalled();
+      expect(recordLotteryResults).not.toHaveBeenCalled();
+      expect(createBackup).not.toHaveBeenCalled();
     } finally {
       await closeServer(lotteryServer);
     }
@@ -1773,6 +1835,9 @@ describe("lottery results route", () => {
       "/api/lottery-results",
       validBody,
     );
+    const conflictPortalSyncService = createPortalSyncService();
+    const stalePortalSyncService = createPortalSyncService();
+    const failurePortalSyncService = createPortalSyncService();
     const conflictServer = createAdminServer(
       undefined,
       undefined,
@@ -1787,6 +1852,7 @@ describe("lottery results route", () => {
       undefined,
       createBackupDestinationService(),
       createBackupExecutionService(),
+      conflictPortalSyncService,
     );
     const staleServer = createAdminServer(
       undefined,
@@ -1802,6 +1868,7 @@ describe("lottery results route", () => {
       undefined,
       createBackupDestinationService(),
       createBackupExecutionService(),
+      stalePortalSyncService,
     );
     const failureServer = createAdminServer(
       undefined,
@@ -1819,6 +1886,7 @@ describe("lottery results route", () => {
       undefined,
       createBackupDestinationService(),
       createBackupExecutionService(),
+      failurePortalSyncService,
     );
     const [conflictPort, stalePort, failurePort] = await Promise.all([
       listenOnEphemeralPort(conflictServer),
@@ -1854,6 +1922,9 @@ describe("lottery results route", () => {
       expect(stale.body).toBe('{"error":"lottery_result_conflict"}');
       expect(failure.statusCode).toBe(500);
       expect(failure.body).toBe('{"error":"lottery_result_failed"}');
+      expect(conflictPortalSyncService.syncSupporter).not.toHaveBeenCalled();
+      expect(stalePortalSyncService.syncSupporter).not.toHaveBeenCalled();
+      expect(failurePortalSyncService.syncSupporter).not.toHaveBeenCalled();
       for (const body of [
         unavailable.body,
         conflict.body,
@@ -1893,6 +1964,10 @@ describe("lottery results route", () => {
       await Promise.resolve();
       callOrder.push("backup-end");
     });
+    const portalSyncService = createPortalSyncService(async (supporterId) => {
+      callOrder.push(`sync:${supporterId}`);
+      return { verifiedAt: "2026-09-09T09:00:00.000Z" };
+    });
     const lotteryServer = createAdminServer(
       undefined,
       undefined,
@@ -1905,6 +1980,7 @@ describe("lottery results route", () => {
       undefined,
       backupDestinationService,
       backupExecutionService,
+      portalSyncService,
     );
     const lotteryPort = await listenOnEphemeralPort(lotteryServer);
 
@@ -1923,12 +1999,119 @@ describe("lottery results route", () => {
         "mutation",
         "backup-start",
         "backup-end",
+        "sync:  exact supporter id  ",
+        "sync:synthetic-supporter-2",
       ]);
       expect(
         backupDestinationService.getBackupDestinationDirectory,
       ).toHaveBeenCalledTimes(1);
       expect(recordLotteryResults).toHaveBeenCalledTimes(1);
       expect(backupExecutionService.createBackup).toHaveBeenCalledTimes(1);
+      expect(portalSyncService.syncSupporter).toHaveBeenCalledTimes(2);
+      expect(portalSyncService.syncSupporter).toHaveBeenNthCalledWith(
+        1,
+        "  exact supporter id  ",
+      );
+      expect(portalSyncService.syncSupporter).toHaveBeenNthCalledWith(
+        2,
+        "synthetic-supporter-2",
+      );
+      expect(portalSyncService.syncSupporter).not.toHaveBeenCalledWith(
+        "synthetic-non-participant",
+      );
+    } finally {
+      await closeServer(lotteryServer);
+    }
+  });
+
+  it("attempts every participant once and reports committed sync failure", async () => {
+    const callOrder: string[] = [];
+    const requestParticipants = [
+      { supporterId: "synthetic-first", outcome: "win" as const },
+      { supporterId: "synthetic-middle", outcome: "loss" as const },
+      { supporterId: "synthetic-last", outcome: "win" as const },
+    ];
+    const recordLotteryResults = vi.fn(() => {
+      callOrder.push("mutation");
+      return [];
+    });
+    const backupExecutionService = createBackupExecutionService(async () => {
+      callOrder.push("backup-start");
+      await Promise.resolve();
+      callOrder.push("backup-end");
+    });
+    const portalSyncService = createPortalSyncService(async (supporterId) => {
+      callOrder.push(`sync:${supporterId}`);
+      if (
+        supporterId === "synthetic-first" ||
+        supporterId === "synthetic-middle"
+      ) {
+        throw new Error(
+          "remote token hash, private path, and worker diagnostic details",
+        );
+      }
+      return { verifiedAt: "2026-09-09T09:00:00.000Z" };
+    });
+    const lotteryServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createLotteryLevelService(recordLotteryResults),
+      undefined,
+      createBackupDestinationService(),
+      backupExecutionService,
+      portalSyncService,
+    );
+    const lotteryPort = await listenOnEphemeralPort(lotteryServer);
+
+    try {
+      const response = await requestOnPort(
+        lotteryPort,
+        "POST",
+        "/api/lottery-results",
+        JSON.stringify({ participants: requestParticipants, occurredAt }),
+      );
+
+      expect(response.statusCode).toBe(502);
+      expect(response.body).toBe(
+        '{"error":"portal_sync_failed_after_update"}',
+      );
+      expect(callOrder).toEqual([
+        "mutation",
+        "backup-start",
+        "backup-end",
+        "sync:synthetic-first",
+        "sync:synthetic-middle",
+        "sync:synthetic-last",
+      ]);
+      expect(recordLotteryResults).toHaveBeenCalledTimes(1);
+      expect(backupExecutionService.createBackup).toHaveBeenCalledTimes(1);
+      expect(portalSyncService.syncSupporter).toHaveBeenCalledTimes(3);
+      expect(portalSyncService.syncSupporter).toHaveBeenNthCalledWith(
+        1,
+        "synthetic-first",
+      );
+      expect(portalSyncService.syncSupporter).toHaveBeenNthCalledWith(
+        2,
+        "synthetic-middle",
+      );
+      expect(portalSyncService.syncSupporter).toHaveBeenNthCalledWith(
+        3,
+        "synthetic-last",
+      );
+      for (const privateValue of [
+        "synthetic-first",
+        "synthetic-middle",
+        "synthetic-last",
+        "token hash",
+        "worker diagnostic",
+      ]) {
+        expect(response.body).not.toContain(privateValue);
+      }
     } finally {
       await closeServer(lotteryServer);
     }
@@ -1968,6 +2151,7 @@ describe("lottery results route", () => {
     body,
   }) => {
     const recordLotteryResults = vi.fn();
+    const portalSyncService = createPortalSyncService();
     const lotteryServer = createAdminServer(
       undefined,
       undefined,
@@ -1980,6 +2164,7 @@ describe("lottery results route", () => {
       undefined,
       destination,
       execution,
+      portalSyncService,
     );
     const lotteryPort = await listenOnEphemeralPort(lotteryServer);
 
@@ -1994,6 +2179,7 @@ describe("lottery results route", () => {
       expect(response.statusCode).toBe(statusCode);
       expect(response.body).toBe(body);
       expect(recordLotteryResults).not.toHaveBeenCalled();
+      expect(portalSyncService.syncSupporter).not.toHaveBeenCalled();
       if (execution !== undefined) {
         expect(execution.createBackup).not.toHaveBeenCalled();
       }
@@ -2007,6 +2193,7 @@ describe("lottery results route", () => {
       throw new SupporterNotFoundError("synthetic-supporter-id");
     });
     const backupExecutionService = createBackupExecutionService();
+    const portalSyncService = createPortalSyncService();
     const lotteryServer = createAdminServer(
       undefined,
       undefined,
@@ -2019,6 +2206,7 @@ describe("lottery results route", () => {
       undefined,
       createBackupDestinationService(),
       backupExecutionService,
+      portalSyncService,
     );
     const lotteryPort = await listenOnEphemeralPort(lotteryServer);
 
@@ -2033,6 +2221,7 @@ describe("lottery results route", () => {
       expect(response.statusCode).toBe(409);
       expect(response.body).toBe('{"error":"lottery_result_conflict"}');
       expect(backupExecutionService.createBackup).not.toHaveBeenCalled();
+      expect(portalSyncService.syncSupporter).not.toHaveBeenCalled();
     } finally {
       await closeServer(lotteryServer);
     }
@@ -2040,6 +2229,7 @@ describe("lottery results route", () => {
 
   it("reports a lottery post-backup failure without retrying the mutation", async () => {
     const recordLotteryResults = vi.fn();
+    const portalSyncService = createPortalSyncService();
     const createBackup = vi.fn(async () => {
       throw new Error("private backup failure");
     });
@@ -2055,6 +2245,7 @@ describe("lottery results route", () => {
       undefined,
       createBackupDestinationService(),
       createBackupExecutionService(createBackup),
+      portalSyncService,
     );
     const lotteryPort = await listenOnEphemeralPort(lotteryServer);
 
@@ -2070,6 +2261,7 @@ describe("lottery results route", () => {
       expect(response.body).toBe('{"error":"backup_failed_after_update"}');
       expect(recordLotteryResults).toHaveBeenCalledTimes(1);
       expect(createBackup).toHaveBeenCalledTimes(1);
+      expect(portalSyncService.syncSupporter).not.toHaveBeenCalled();
     } finally {
       await closeServer(lotteryServer);
     }
@@ -2100,6 +2292,7 @@ describe("lottery results route", () => {
       undefined,
       createBackupDestinationService(),
       createBackupExecutionService(),
+      createPortalSyncService(),
     );
     const resultPort = await listenOnEphemeralPort(resultServer);
 
@@ -5103,6 +5296,7 @@ describe("admin server configuration", () => {
       refreshedSupporters,
       refreshedSupporters,
       refreshedSupporters,
+      refreshedSupporters,
     ];
     const fetchCalls: FetchCall[] = [];
     const lotteryResolvers: Array<(response: FakeResponse) => void> = [];
@@ -5277,14 +5471,82 @@ describe("admin server configuration", () => {
 
     occurredAtInput.value = "2026-09-08T21:34";
     participantList.children[0]!.children[4]!.children[1]!.value = "win";
+    participantList.children[1]!.children[4]!.children[1]!.value = "loss";
+    resultButton.click();
+    lotteryResolvers[1]?.(response(503, { error: "portal_not_configured" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(2);
+    expect(resultStatus.textContent).toBe(
+      "ポータル連携を設定してから、抽選結果をもう一度反映してください。抽選結果はまだ反映されていません。",
+    );
+    expect(occurredAtInput.value).toBe("2026-09-08T21:34");
+    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
+      "win",
+    );
+    expect(participantList.children[1]!.children[4]!.children[1]!.value).toBe(
+      "loss",
+    );
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-sync")).toHaveLength(0);
+
+    resultButton.click();
+    lotteryResolvers[2]?.(
+      response(503, {
+        error: "portal_not_configured",
+        privateDiagnostic: "synthetic-secret",
+      }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(resultStatus.textContent).toBe(
+      "抽選結果を反映できませんでした。入力内容を確認して再試行してください。",
+    );
+    expect(occurredAtInput.value).toBe("2026-09-08T21:34");
+    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
+      "win",
+    );
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(2);
+
+    resultButton.click();
+    lotteryResolvers[3]?.(
+      response(502, { error: "portal_sync_failed_after_update" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(3);
+    expect(resultStatus.textContent).toBe(
+      "抽選結果はすでに反映されています。抽選結果を再登録しないでください。暗号化された処理後バックアップは作成済みです。対象の参加者は一覧の「Cloudflareへ同期」を実行してください。",
+    );
+    expect(occurredAtInput.value).toBe("");
+    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
+      "none",
+    );
+    expect(resultStatus.textContent).not.toContain("internal-supporter-id");
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-sync")).toHaveLength(0);
+
+    occurredAtInput.value = "2026-09-08T21:34";
+    participantList.children[0]!.children[4]!.children[1]!.value = "loss";
+    resultButton.click();
+    lotteryResolvers[4]?.(
+      response(200, { error: "portal_sync_failed_after_update" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(resultStatus.textContent).toBe(
+      "抽選結果を反映できませんでした。入力内容を確認して再試行してください。",
+    );
+    expect(occurredAtInput.value).toBe("2026-09-08T21:34");
+    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
+      "loss",
+    );
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(3);
+
+    occurredAtInput.value = "2026-09-08T21:34";
+    participantList.children[0]!.children[4]!.children[1]!.value = "win";
     confirmMock.mockImplementationOnce(() => false);
     resultButton.click();
-    expect(fetchCalls.filter(({ url }) => url === "/api/lottery-results")).toHaveLength(1);
+    expect(fetchCalls.filter(({ url }) => url === "/api/lottery-results")).toHaveLength(5);
     expect(occurredAtInput.value).toBe("2026-09-08T21:34");
 
     confirmMock.mockImplementation(() => true);
     resultButton.click();
-    lotteryResolvers[1]?.(
+    lotteryResolvers[5]?.(
       response(200, { status: "ok", privateDiagnostic: "synthetic-secret" }),
     );
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -5299,11 +5561,11 @@ describe("admin server configuration", () => {
     expect(resultButton.disabled).toBe(false);
 
     resultButton.click();
-    lotteryResolvers[2]?.(
+    lotteryResolvers[6]?.(
       response(409, { error: "lottery_result_conflict" }),
     );
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(3);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(4);
     expect(resultStatus.textContent).toBe(
       "支援者状態または処理月が変わっています。参加者と時刻を確認してから再試行してください。",
     );
@@ -5315,7 +5577,7 @@ describe("admin server configuration", () => {
     occurredAtInput.value = "2026-10-01T00:05";
     participantList.children[0]!.children[4]!.children[1]!.value = "loss";
     resultButton.click();
-    lotteryResolvers[3]?.(
+    lotteryResolvers[7]?.(
       response(409, {
         error: "lottery_result_conflict",
         privateDiagnostic: "synthetic-secret",
@@ -5325,21 +5587,21 @@ describe("admin server configuration", () => {
     expect(resultStatus.textContent).toBe(
       "抽選結果を反映できませんでした。入力内容を確認して再試行してください。",
     );
-    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(3);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(4);
     expect(occurredAtInput.value).toBe("2026-10-01T00:05");
     expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
       "loss",
     );
 
     resultButton.click();
-    expect(fetchCalls.filter(({ url }) => url === "/api/lottery-results")).toHaveLength(5);
+    expect(fetchCalls.filter(({ url }) => url === "/api/lottery-results")).toHaveLength(9);
     expect(JSON.parse(fetchCalls[fetchCalls.length - 1]!.body as string)).toEqual({
       participants: [
         { supporterId: "internal-supporter-id", outcome: "loss" },
       ],
       occurredAt: "2026-09-30T15:05:00.000Z",
     });
-    lotteryResolvers[4]?.(response(200, { status: "ok" }));
+    lotteryResolvers[8]?.(response(200, { status: "ok" }));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(resultStatus.textContent).toBe("抽選結果を反映しました。");
     expect(occurredAtInput.value).toBe("");
@@ -5347,27 +5609,27 @@ describe("admin server configuration", () => {
     occurredAtInput.value = "2026-09-08T21:34";
     participantList.children[0]!.children[4]!.children[1]!.value = "win";
     resultButton.click();
-    lotteryResolvers[5]?.(
+    lotteryResolvers[9]?.(
       response(409, { error: "backup_destination_required" }),
     );
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(resultStatus.textContent).toBe(
       "バックアップ先を選択してから、抽選結果をもう一度反映してください。",
     );
-    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(4);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(5);
     expect(occurredAtInput.value).toBe("2026-09-08T21:34");
     expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
       "win",
     );
 
     resultButton.click();
-    lotteryResolvers[6]?.(
+    lotteryResolvers[10]?.(
       response(500, { error: "backup_failed_after_update" }),
     );
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(5);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(6);
     expect(resultStatus.textContent).toBe(
-      "抽選結果は反映済みですが、バックアップを作成できませんでした。抽選結果を再登録しないでください。「今すぐバックアップを作成」を実行してください。",
+      "抽選結果は反映済みですが、バックアップを作成できませんでした。抽選結果を再登録しないでください。Cloudflare自動同期は試行されていません。「今すぐバックアップを作成」を実行し、復旧後に対象の参加者で「Cloudflareへ同期」を実行してください。",
     );
     expect(occurredAtInput.value).toBe("");
 

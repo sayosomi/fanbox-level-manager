@@ -948,6 +948,22 @@ function isExactLotteryConflict(value) {
   );
 }
 
+function isExactPortalNotConfigured(value) {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["error"]) &&
+    value.error === "portal_not_configured"
+  );
+}
+
+function isExactPortalSyncFailedAfterUpdate(value) {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["error"]) &&
+    value.error === "portal_sync_failed_after_update"
+  );
+}
+
 async function submitLotteryResults(listStatus, supporterList) {
   if (
     lotteryUi === null ||
@@ -1019,11 +1035,28 @@ async function submitLotteryResults(listStatus, supporterList) {
       return;
     }
 
+    if (response.status === 503 && isExactPortalNotConfigured(responseBody)) {
+      lotteryUi.resultStatus.textContent =
+        "ポータル連携を設定してから、抽選結果をもう一度反映してください。抽選結果はまだ反映されていません。";
+      return;
+    }
+
+    if (
+      response.status === 502 &&
+      isExactPortalSyncFailedAfterUpdate(responseBody)
+    ) {
+      lotteryUi.occurredAtInput.value = "";
+      await loadSupporters(listStatus, supporterList);
+      lotteryUi.resultStatus.textContent =
+        "抽選結果はすでに反映されています。抽選結果を再登録しないでください。暗号化された処理後バックアップは作成済みです。対象の参加者は一覧の「Cloudflareへ同期」を実行してください。";
+      return;
+    }
+
     if (response.status === 500 && isExactBackupFailedAfterUpdate(responseBody)) {
       lotteryUi.occurredAtInput.value = "";
       await loadSupporters(listStatus, supporterList);
       lotteryUi.resultStatus.textContent =
-        "抽選結果は反映済みですが、バックアップを作成できませんでした。抽選結果を再登録しないでください。「今すぐバックアップを作成」を実行してください。";
+        "抽選結果は反映済みですが、バックアップを作成できませんでした。抽選結果を再登録しないでください。Cloudflare自動同期は試行されていません。「今すぐバックアップを作成」を実行し、復旧後に対象の参加者で「Cloudflareへ同期」を実行してください。";
       return;
     }
 
