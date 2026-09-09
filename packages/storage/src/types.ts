@@ -84,6 +84,17 @@ export type CreateMigratedSupporterResult = Readonly<{
   operation: LevelOperationRecord;
 }>;
 
+export type AssignLegacyBaselineInput = Readonly<{
+  supporterId: string;
+  currentLevel: number;
+  monthKey: string;
+}>;
+
+export type AssignLegacyBaselineResult = Readonly<{
+  supporter: SupporterRecord;
+  operation: LevelOperationRecord;
+}>;
+
 export type SupporterProfilePatch = Readonly<{
   displayName?: string;
   supporting?: boolean;
@@ -153,6 +164,9 @@ export interface LocalStore {
   createMigratedSupporter(
     input: CreateMigratedSupporterInput,
   ): CreateMigratedSupporterResult;
+  assignLegacyBaseline(
+    input: AssignLegacyBaselineInput,
+  ): AssignLegacyBaselineResult;
   getSupporterById(id: string): SupporterRecord | null;
   getSupporterByRelationshipId(
     fanboxRelationshipId: string,

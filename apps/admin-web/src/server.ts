@@ -15,6 +15,7 @@ import {
   FanboxSupporterImportBlockedError,
   FanboxSupporterImportError,
   createExistingSupporterMigrationService,
+  createLegacyBaselineService,
   createFanboxSupporterImportService,
   createLotteryLevelService,
   createMonthEndProcessingService,
@@ -33,6 +34,7 @@ import {
   type FanboxSupporterImportService,
   type FanboxPdfSupporterComparison,
   type ExistingSupporterMigrationService,
+  type LegacyBaselineService,
   type LotteryLevelService,
   type MonthEndProcessingService,
   type SupporterPortalLinkService,
@@ -43,6 +45,7 @@ import {
 import {
   DuplicateFanboxRelationshipError,
   FanboxRelationshipNotFoundError,
+  LegacyBaselineNotEligibleError,
   openLocalStore,
   StaleMonthError,
   SupporterNotFoundError,
@@ -153,6 +156,18 @@ const EXISTING_SUPPORTER_MIGRATION_FAILED_BODY = JSON.stringify({
 const EXISTING_SUPPORTER_MIGRATION_SUCCESS_BODY = JSON.stringify({
   status: "ok",
 });
+const LEGACY_BASELINE_UNAVAILABLE_BODY = JSON.stringify({
+  error: "legacy_baseline_unavailable",
+});
+const LEGACY_BASELINE_CONFLICT_BODY = JSON.stringify({
+  error: "legacy_baseline_conflict",
+});
+const LEGACY_BASELINE_FAILED_BODY = JSON.stringify({
+  error: "legacy_baseline_failed",
+});
+const LEGACY_BASELINE_SUCCESS_BODY = JSON.stringify({
+  status: "ok",
+});
 const LOTTERY_LEVEL_UNAVAILABLE_BODY = JSON.stringify({
   error: "lottery_level_unavailable",
 });
@@ -241,6 +256,7 @@ export type ProductionAdminServerDependencies = Readonly<{
     typeof createFanboxIdentityRelinkService;
   createExistingSupporterMigrationService?:
     typeof createExistingSupporterMigrationService;
+  createLegacyBaselineService?: typeof createLegacyBaselineService;
   createLotteryLevelService?: typeof createLotteryLevelService;
   createMonthEndProcessingService?: typeof createMonthEndProcessingService;
   createBackupDestinationService?: typeof createBackupDestinationService;
@@ -1113,6 +1129,123 @@ async function sendExistingSupporterMigration(
   sendPortalJson(response, 200, EXISTING_SUPPORTER_MIGRATION_SUCCESS_BODY);
 }
 
+type LegacyBaselineRequest = Readonly<{
+  supporterId: string;
+  currentLevel: number;
+}>;
+
+function parseLegacyBaselineRequest(body: string): LegacyBaselineRequest | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    return null;
+  }
+
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value)
+  ) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (
+    Object.keys(record).length !== 2 ||
+    !Object.hasOwn(record, "supporterId") ||
+    !Object.hasOwn(record, "currentLevel") ||
+    typeof record.supporterId !== "string" ||
+    record.supporterId.trim().length === 0 ||
+    typeof record.currentLevel !== "number" ||
+    !Number.isFinite(record.currentLevel) ||
+    !Number.isInteger(record.currentLevel) ||
+    record.currentLevel < 0
+  ) {
+    return null;
+  }
+
+  return {
+    supporterId: record.supporterId,
+    currentLevel: record.currentLevel,
+  };
+}
+
+async function sendLegacyBaseline(
+  request: IncomingMessage,
+  response: ServerResponse,
+  legacyBaselineService: LegacyBaselineService | undefined,
+  backupDestinationService: BackupDestinationService | undefined,
+  backupExecutionService: BackupExecutionService | undefined,
+  supporterPortalSyncService: SupporterPortalSyncService | undefined,
+): Promise<void> {
+  let body: string;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  const input = parseLegacyBaselineRequest(body);
+  if (input === null) {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  if (legacyBaselineService === undefined) {
+    sendPortalJson(response, 500, LEGACY_BASELINE_UNAVAILABLE_BODY);
+    return;
+  }
+
+  if (supporterPortalSyncService === undefined) {
+    sendPortalJson(response, 503, PORTAL_NOT_CONFIGURED_BODY);
+    return;
+  }
+
+  if (
+    !ensurePostMutationBackupReady(
+      response,
+      backupDestinationService,
+      backupExecutionService,
+    )
+  ) {
+    return;
+  }
+
+  try {
+    legacyBaselineService.assignLegacyBaseline({
+      supporterId: input.supporterId,
+      currentLevel: input.currentLevel,
+      migratedAt: new Date(),
+    });
+  } catch (error: unknown) {
+    if (
+      error instanceof SupporterNotFoundError ||
+      error instanceof LegacyBaselineNotEligibleError
+    ) {
+      sendPortalJson(response, 409, LEGACY_BASELINE_CONFLICT_BODY);
+      return;
+    }
+
+    sendPortalJson(response, 500, LEGACY_BASELINE_FAILED_BODY);
+    return;
+  }
+
+  if (!(await createPostMutationBackup(response, backupExecutionService))) {
+    return;
+  }
+
+  try {
+    await supporterPortalSyncService.syncSupporter(input.supporterId);
+  } catch {
+    sendPortalJson(response, 502, PORTAL_SYNC_FAILED_AFTER_UPDATE_BODY);
+    return;
+  }
+
+  sendPortalJson(response, 200, LEGACY_BASELINE_SUCCESS_BODY);
+}
+
 type LotteryResultRequest = Readonly<{
   participants: readonly {
     supporterId: string;
@@ -1581,6 +1714,7 @@ export function createAdminServer(
   backupExecutionService?: BackupExecutionService,
   supporterPortalSyncService?: SupporterPortalSyncService,
   fanboxIdentityRelinkService?: FanboxIdentityRelinkService,
+  legacyBaselineService?: LegacyBaselineService,
 ): Server {
   return createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -1602,7 +1736,8 @@ export function createAdminServer(
       requestPath === BACKUP_DESTINATION_PATH ||
       requestPath === BACKUP_DESTINATION_SELECT_PATH ||
       requestPath === BACKUP_CREATE_PATH ||
-      requestPath === "/api/supporters/migrate-existing";
+      requestPath === "/api/supporters/migrate-existing" ||
+      requestPath === "/api/supporters/assign-legacy-baseline";
 
     if (!knownRoute) {
       sendNotFound(response);
@@ -1737,6 +1872,23 @@ export function createAdminServer(
       return;
     }
 
+    if (requestPath === "/api/supporters/assign-legacy-baseline") {
+      if (request.method !== "POST") {
+        sendPortalMethodNotAllowed(response);
+        return;
+      }
+
+      void sendLegacyBaseline(
+        request,
+        response,
+        legacyBaselineService,
+        backupDestinationService,
+        backupExecutionService,
+        supporterPortalSyncService,
+      );
+      return;
+    }
+
     if (requestPath === BACKUP_DESTINATION_SELECT_PATH) {
       if (request.method !== "POST") {
         sendPortalMethodNotAllowed(response);
@@ -1821,6 +1973,7 @@ export function startAdminServer(
   backupExecutionService?: BackupExecutionService,
   supporterPortalSyncService?: SupporterPortalSyncService,
   fanboxIdentityRelinkService?: FanboxIdentityRelinkService,
+  legacyBaselineService?: LegacyBaselineService,
 ): Server {
   validateListenPort(port);
   const server = createAdminServer(
@@ -1837,6 +1990,7 @@ export function startAdminServer(
     backupExecutionService,
     supporterPortalSyncService,
     fanboxIdentityRelinkService,
+    legacyBaselineService,
   );
   server.listen(port, ADMIN_HOST);
   return server;
@@ -1925,6 +2079,9 @@ export function startProductionAdminServer(
       dependencies.createExistingSupporterMigrationService ??
       createExistingSupporterMigrationService;
     const existingSupporterMigrationService = createMigrationService(store);
+    const createLegacyBaseline =
+      dependencies.createLegacyBaselineService ?? createLegacyBaselineService;
+    const legacyBaselineService = createLegacyBaseline(store);
     const createBackupService =
       dependencies.createBackupDestinationService ??
       createBackupDestinationService;
@@ -1968,6 +2125,7 @@ export function startProductionAdminServer(
       backupExecutionService,
       supporterPortalSyncService,
       fanboxIdentityRelinkService,
+      legacyBaselineService,
     );
     server.once("close", closeStore);
 

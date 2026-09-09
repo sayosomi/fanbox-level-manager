@@ -23,11 +23,13 @@ function supporterRecord(overrides: Partial<SupporterRecord> = {}): SupporterRec
 function storeReturning(
   records: readonly SupporterRecord[],
   accesses: ReadonlyMap<string, SupporterPortalAccessRecord> = new Map(),
+  operations: ReadonlyMap<string, readonly unknown[]> = new Map(),
 ): LocalStore {
   return {
     listSupporters: () => records,
     getSupporterPortalAccess: (supporterId: string) =>
       accesses.get(supporterId) ?? null,
+    listLevelOperations: (supporterId: string) => operations.get(supporterId) ?? [],
   } as unknown as LocalStore;
 }
 
@@ -55,6 +57,7 @@ describe("supporter list application service", () => {
       nextLotteryEntryCount: 3,
       supporting: false,
       latestMonthKey: "2026-09",
+      legacyBaselineEligible: false,
       portalDeliveryState: "not_issued",
     });
     expect(item && Object.keys(item).sort()).toEqual([
@@ -62,6 +65,7 @@ describe("supporter list application service", () => {
       "displayName",
       "id",
       "latestMonthKey",
+      "legacyBaselineEligible",
       "nextLotteryEntryCount",
       "portalDeliveryState",
       "supporting",
@@ -125,13 +129,37 @@ describe("supporter list application service", () => {
       "sent",
     ]);
     for (const item of service.listSupporters()) {
-      expect(Object.keys(item)).toHaveLength(7);
+      expect(Object.keys(item)).toHaveLength(8);
       expect(item).not.toHaveProperty("tokenHash");
       expect(item).not.toHaveProperty("issuedAt");
       expect(item).not.toHaveProperty("provisionedAt");
       expect(item).not.toHaveProperty("sentAt");
       expect(item).not.toHaveProperty("access");
     }
+  });
+
+  it("only marks a history-empty level-zero supporter eligible", () => {
+    const service = createSupporterListService(
+      storeReturning(
+        [
+          supporterRecord({ id: "eligible" }),
+          supporterRecord({ id: "nonzero", currentLevel: 1 }),
+          supporterRecord({ id: "processed", latestMonthKey: "2026-09" }),
+          supporterRecord({ id: "with-history" }),
+        ],
+        new Map(),
+        new Map([["with-history", [{ id: "operation" }]]]),
+      ),
+    );
+
+    expect(
+      service.listSupporters().map((item) => [item.id, item.legacyBaselineEligible]),
+    ).toEqual([
+      ["eligible", true],
+      ["nonzero", false],
+      ["processed", false],
+      ["with-history", false],
+    ]);
   });
 
   it("derives entry counts through the domain semantics", () => {

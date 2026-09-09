@@ -13,6 +13,7 @@ export type SupporterListItem = Readonly<{
   nextLotteryEntryCount: number;
   supporting: boolean;
   latestMonthKey: string | null;
+  legacyBaselineEligible: boolean;
   portalDeliveryState: SupporterPortalDeliveryState;
 }>;
 
@@ -22,6 +23,7 @@ export interface SupporterListService {
 
 function toSupporterListItem(
   record: SupporterRecord,
+  legacyBaselineEligible: boolean,
   portalDeliveryService: SupporterPortalDeliveryService,
 ): SupporterListItem {
   return Object.freeze({
@@ -31,6 +33,7 @@ function toSupporterListItem(
     nextLotteryEntryCount: entryCountForLevel(record.currentLevel),
     supporting: record.supporting,
     latestMonthKey: record.latestMonthKey,
+    legacyBaselineEligible,
     portalDeliveryState: portalDeliveryService.getSupporterPortalDeliveryState(
       record.id,
     ),
@@ -47,7 +50,17 @@ export function createSupporterListService(
       return Object.freeze(
         store
           .listSupporters()
-          .map((record) => toSupporterListItem(record, portalDeliveryService)),
+          .map((record) => {
+            const legacyBaselineEligible =
+              record.currentLevel === 0 &&
+              record.latestMonthKey === null &&
+              store.listLevelOperations(record.id).length === 0;
+            return toSupporterListItem(
+              record,
+              legacyBaselineEligible,
+              portalDeliveryService,
+            );
+          }),
       );
     },
   };

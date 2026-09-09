@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import {
   DuplicateFanboxRelationshipError,
   FanboxRelationshipNotFoundError,
+  LegacyBaselineNotEligibleError,
   PortalAccessNotIssuedError,
   PortalAccessNotProvisionedError,
   PortalTokenHashConflictError,
@@ -23,6 +24,8 @@ import {
   readUserVersion,
 } from "./migrations.js";
 import type {
+  AssignLegacyBaselineInput,
+  AssignLegacyBaselineResult,
   ApplyFanboxSupporterImportResult,
   ApplyFanboxSupporterImportInput,
   CreateMigratedSupporterInput,
@@ -45,6 +48,7 @@ import type {
 } from "./types.js";
 import {
   assertNonBlankString,
+  assertValidAssignLegacyBaselineInput,
   assertValidApplyFanboxSupporterImportInput,
   assertValidBackupDestinationDirectory,
   assertValidCreateMigratedSupporterInput,
@@ -578,6 +582,109 @@ class LocalStoreImplementation implements LocalStore {
 
       throw error;
     }
+  }
+
+  assignLegacyBaseline(
+    input: AssignLegacyBaselineInput,
+  ): AssignLegacyBaselineResult {
+    assertValidAssignLegacyBaselineInput(input);
+
+    const assign = this.database.transaction((): AssignLegacyBaselineResult => {
+      const supporterRow = this.database
+        .prepare(
+          `SELECT *
+           FROM supporters
+           WHERE id = ?`,
+        )
+        .get(input.supporterId) as SupporterRow | undefined;
+      if (supporterRow === undefined) {
+        throw new SupporterNotFoundError(input.supporterId);
+      }
+
+      const existingOperation = this.database
+        .prepare(
+          `SELECT 1
+           FROM level_operations
+           WHERE supporter_id = ?
+           LIMIT 1`,
+        )
+        .get(input.supporterId) as { 1: number } | undefined;
+      if (
+        supporterRow.current_level !== 0 ||
+        supporterRow.latest_month_key !== null ||
+        existingOperation !== undefined
+      ) {
+        throw new LegacyBaselineNotEligibleError(input.supporterId);
+      }
+
+      const timestamp = timestampFromClock(this.clock);
+      const updateResult = this.database
+        .prepare(
+          `UPDATE supporters
+           SET current_level = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(input.currentLevel, timestamp, input.supporterId);
+      if (updateResult.changes !== 1) {
+        throw new SupporterNotFoundError(input.supporterId);
+      }
+
+      const operationId = randomUUID();
+      this.database
+        .prepare(
+          `INSERT INTO level_operations (
+             id,
+             supporter_id,
+             month_key,
+             kind,
+             before_level,
+             after_level,
+             occurred_at,
+             supporting_at_month_end,
+             created_at
+           ) VALUES (?, ?, ?, 'initial_import', ?, ?, NULL, NULL, ?)`,
+        )
+        .run(
+          operationId,
+          input.supporterId,
+          input.monthKey,
+          input.currentLevel,
+          input.currentLevel,
+          timestamp,
+        );
+
+      const supporter = this.getSupporterById(input.supporterId);
+      if (supporter === null) {
+        throw new Error("assigned supporter could not be loaded");
+      }
+
+      const operation = this.database
+        .prepare(
+          `SELECT sequence,
+                  id,
+                  supporter_id,
+                  month_key,
+                  kind,
+                  before_level,
+                  after_level,
+                  occurred_at,
+                  supporting_at_month_end,
+                  created_at
+           FROM level_operations
+           WHERE id = ?`,
+        )
+        .get(operationId) as LevelOperationRow | undefined;
+      if (operation === undefined) {
+        throw new Error("assigned legacy baseline operation could not be loaded");
+      }
+
+      return Object.freeze({
+        supporter,
+        operation: toLevelOperationRecord(operation),
+      });
+    });
+
+    return assign();
   }
 
   private insertSupporterRow(values: SupporterInsertValues): void {
