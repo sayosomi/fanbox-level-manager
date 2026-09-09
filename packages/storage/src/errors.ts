@@ -8,6 +8,16 @@ export class SupporterNotFoundError extends Error {
   }
 }
 
+export class LegacyBaselineNotEligibleError extends Error {
+  readonly supporterId: string;
+
+  constructor(supporterId: string) {
+    super(`Supporter is not eligible for a legacy baseline: ${supporterId}`);
+    this.name = "LegacyBaselineNotEligibleError";
+    this.supporterId = supporterId;
+  }
+}
+
 export class DuplicateFanboxRelationshipError extends Error {
   readonly fanboxRelationshipId: string;
 

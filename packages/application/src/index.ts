@@ -13,6 +13,12 @@ export type {
   ExistingSupporterMigrationResult,
   ExistingSupporterMigrationService,
 } from "./existing-supporter-migration-service.js";
+export { createLegacyBaselineService } from "./legacy-baseline-service.js";
+export type {
+  LegacyBaselineInput,
+  LegacyBaselineResult,
+  LegacyBaselineService,
+} from "./legacy-baseline-service.js";
 export { createSupporterHistoryService } from "./supporter-history-service.js";
 export type {
   SupporterHistoryEntry,

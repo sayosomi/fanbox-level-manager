@@ -148,6 +148,13 @@ baseline history entry, for example:
 
 `システム移行時 Lv.7 / 旧管理方式による履歴`
 
+The preferred path is to enter the previous manual method's last notified level
+while the FANBOX PDF relationship is still classified as `new`. As a safe
+correction path immediately after an initial import, an already-created
+supporter may receive one legacy baseline only while its current level is 0,
+its latest month is unset, and it has no level history or monthly progression.
+This is a one-time baseline assignment, not general level editing.
+
 The previous manual method's last notified level is the migration source for
 the current level. After migration, the dedicated portal is the authoritative
 supporter-facing level display, and recurring monthly individual level

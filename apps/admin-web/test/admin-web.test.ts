@@ -20,6 +20,8 @@ import type {
   CreateSupporterPortalSyncServiceOptions,
   ExistingSupporterMigrationInput,
   ExistingSupporterMigrationService,
+  LegacyBaselineInput,
+  LegacyBaselineService,
   FanboxPdfInspection,
   FanboxPdfInspectionService,
   FanboxPdfSupporterComparison,
@@ -37,6 +39,7 @@ import type {
 import {
   DuplicateFanboxRelationshipError,
   FanboxRelationshipNotFoundError,
+  LegacyBaselineNotEligibleError,
   StaleMonthError,
   SupporterNotFoundError,
   type LocalStore,
@@ -239,6 +242,7 @@ const sampleSupporters: readonly SupporterListItem[] = Object.freeze([
     nextLotteryEntryCount: 3,
     supporting: true,
     latestMonthKey: "2026-09",
+    legacyBaselineEligible: false,
     portalDeliveryState: "provisioned",
   }),
   Object.freeze({
@@ -248,6 +252,7 @@ const sampleSupporters: readonly SupporterListItem[] = Object.freeze([
     nextLotteryEntryCount: 1,
     supporting: false,
     latestMonthKey: null,
+    legacyBaselineEligible: true,
     portalDeliveryState: "not_issued",
   }),
 ]);
@@ -2027,6 +2032,176 @@ describe("existing supporter migration route", () => {
       expect(syncService.syncSupporter).toHaveBeenCalledTimes(1);
     } finally {
       await closeServer(migrationServer);
+    }
+  });
+});
+
+describe("legacy baseline assignment route", () => {
+  const validBody = JSON.stringify({
+    supporterId: " opaque-supporter-id ",
+    currentLevel: 7,
+  });
+
+  function createLegacyBaselineTestService(
+    implementation: (input: LegacyBaselineInput) => void,
+  ): LegacyBaselineService {
+    return {
+      assignLegacyBaseline: (input) => {
+        implementation(input);
+        return {} as never;
+      },
+    };
+  }
+
+  it("validates, mutates once, backs up once, and syncs the exact opaque ID", async () => {
+    const callOrder: string[] = [];
+    const inputs: LegacyBaselineInput[] = [];
+    const backupDestinationService: BackupDestinationService = {
+      getBackupDestinationDirectory: vi.fn(() => {
+        callOrder.push("backup-readiness");
+        return "/synthetic/backup/";
+      }),
+      selectBackupDestinationDirectory: vi.fn(async () => "/synthetic/backup/"),
+    };
+    const assignLegacyBaseline = createLegacyBaselineTestService((input) => {
+      callOrder.push("mutation");
+      inputs.push(input);
+    });
+    const createBackup = vi.fn(async () => {
+      callOrder.push("backup");
+    });
+    const syncService = createPortalSyncService(async (supporterId) => {
+      callOrder.push("sync");
+      expect(supporterId).toBe(" opaque-supporter-id ");
+      return { verifiedAt: "2026-09-09T09:00:00.000Z" };
+    });
+    const server = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      backupDestinationService,
+      createBackupExecutionService(createBackup),
+      syncService,
+      undefined,
+      assignLegacyBaseline,
+    );
+    const port = await listenOnEphemeralPort(server);
+
+    try {
+      const response = await requestOnPort(
+        port,
+        "POST",
+        "/api/supporters/assign-legacy-baseline",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toBe('{"status":"ok"}');
+      expect(callOrder).toEqual(["backup-readiness", "mutation", "backup", "sync"]);
+      expect(inputs).toHaveLength(1);
+      expect(inputs[0]?.supporterId).toBe(" opaque-supporter-id ");
+      expect(inputs[0]?.currentLevel).toBe(7);
+      expect(inputs[0]?.migratedAt).toBeInstanceOf(Date);
+      expect(createBackup).toHaveBeenCalledTimes(1);
+      expect(syncService.syncSupporter).toHaveBeenCalledTimes(1);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it.each([
+    "{not-json",
+    JSON.stringify({ supporterId: "opaque-supporter-id" }),
+    JSON.stringify({ supporterId: "opaque-supporter-id", currentLevel: 1, extra: true }),
+    JSON.stringify({ supporterId: "   ", currentLevel: 1 }),
+    JSON.stringify({ supporterId: "opaque-supporter-id", currentLevel: -1 }),
+    JSON.stringify({ supporterId: "opaque-supporter-id", currentLevel: 1.5 }),
+    '{"supporterId":"opaque-supporter-id","currentLevel":1e999}',
+  ])("rejects invalid requests before readiness or mutation: %s", async (body) => {
+    const assignLegacyBaseline = vi.fn();
+    const getBackupDestinationDirectory = vi.fn(() => "/synthetic/backup/");
+    const server = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        getBackupDestinationDirectory,
+        selectBackupDestinationDirectory: vi.fn(async () => "/synthetic/backup/"),
+      },
+      createBackupExecutionService(),
+      createPortalSyncService(),
+      undefined,
+      createLegacyBaselineTestService(assignLegacyBaseline),
+    );
+    const port = await listenOnEphemeralPort(server);
+
+    try {
+      const response = await requestOnPort(
+        port,
+        "POST",
+        "/api/supporters/assign-legacy-baseline",
+        body,
+      );
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toBe('{"error":"invalid_request"}');
+      expect(assignLegacyBaseline).not.toHaveBeenCalled();
+      expect(getBackupDestinationDirectory).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("maps eligibility conflict and never runs committed follow-up work", async () => {
+    const assignLegacyBaseline = createLegacyBaselineTestService(() => {
+      throw new LegacyBaselineNotEligibleError("opaque-supporter-id");
+    });
+    const createBackup = vi.fn(async () => {});
+    const syncService = createPortalSyncService();
+    const server = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createBackupDestinationService(),
+      createBackupExecutionService(createBackup),
+      syncService,
+      undefined,
+      assignLegacyBaseline,
+    );
+    const port = await listenOnEphemeralPort(server);
+
+    try {
+      const response = await requestOnPort(
+        port,
+        "POST",
+        "/api/supporters/assign-legacy-baseline",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(409);
+      expect(response.body).toBe('{"error":"legacy_baseline_conflict"}');
+      expect(createBackup).not.toHaveBeenCalled();
+      expect(syncService.syncSupporter).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(server);
     }
   });
 });
@@ -5644,6 +5819,7 @@ describe("admin server configuration", () => {
                   nextLotteryEntryCount: 3,
                   supporting: false,
                   latestMonthKey: null,
+                  legacyBaselineEligible: false,
                   portalDeliveryState: "not_issued",
                 },
               ],
@@ -5726,6 +5902,178 @@ describe("admin server configuration", () => {
     syncResolvers[3]?.(response(200, { verifiedAt: "not-a-timestamp" }));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(syncStatus?.textContent).toBe("Cloudflareへ同期できませんでした。");
+  });
+
+  it("renders the eligible legacy-baseline control without exposing the opaque ID", async () => {
+    type FakeListener = () => void;
+    type FakeResponse = Readonly<{
+      ok: boolean;
+      status: number;
+      json: () => Promise<unknown>;
+    }>;
+
+    class FakeElement {
+      readonly children: FakeElement[] = [];
+      readonly listeners = new Map<string, FakeListener>();
+      readonly attributes = new Map<string, string>();
+      readonly dataset: Record<string, string> = {};
+      disabled = false;
+      min = "";
+      step = "";
+      tagName = "";
+      textContent = "";
+      type = "";
+      value = "";
+
+      addEventListener(type: string, listener: FakeListener): void {
+        this.listeners.set(type, listener);
+      }
+
+      click(): void {
+        if (!this.disabled) {
+          this.listeners.get("click")?.();
+        }
+      }
+
+      replaceChildren(...children: FakeElement[]): void {
+        this.children.splice(0, this.children.length, ...children);
+      }
+
+      setAttribute(name: string, value: string): void {
+        this.attributes.set(name, value);
+      }
+    }
+
+    class FakeInputElement extends FakeElement {}
+    class FakeButtonElement extends FakeElement {}
+    const elements = new Map<string, FakeElement>([
+      ["list-status", new FakeElement()],
+      ["list", new FakeElement()],
+    ]);
+    const baselineResolvers: Array<(response: FakeResponse) => void> = [];
+    const supporterBodies = [
+      {
+        supporters: [
+          {
+            id: "opaque-supporter-id",
+            displayName: "対象支援者",
+            currentLevel: 0,
+            nextLotteryEntryCount: 1,
+            supporting: true,
+            latestMonthKey: null,
+            legacyBaselineEligible: true,
+            portalDeliveryState: "not_issued",
+          },
+        ],
+      },
+      {
+        supporters: [
+          {
+            id: "opaque-supporter-id",
+            displayName: "対象支援者",
+            currentLevel: 0,
+            nextLotteryEntryCount: 1,
+            supporting: true,
+            latestMonthKey: null,
+            legacyBaselineEligible: false,
+            portalDeliveryState: "not_issued",
+          },
+        ],
+      },
+    ];
+    const fetchCalls: Array<{
+      url: string;
+      options: Readonly<Record<string, unknown>>;
+    }> = [];
+    const response = (status: number, body: unknown): FakeResponse => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    });
+    const fetchMock = vi.fn(
+      (
+        url: string,
+        options: Readonly<Record<string, unknown>> = {},
+      ): Promise<FakeResponse> => {
+        fetchCalls.push({ url, options });
+        if (url === "/api/supporters") {
+          return Promise.resolve(response(200, supporterBodies.shift()));
+        }
+        if (url === "/api/supporters/assign-legacy-baseline") {
+          return new Promise((resolve) => baselineResolvers.push(resolve));
+        }
+        return Promise.reject(new Error("unexpected synthetic request"));
+      },
+    );
+    const fakeDocument = {
+      documentElement: { dataset: {} as Record<string, string> },
+      getElementById: (id: string): FakeElement | null =>
+        elements.get(id) ?? null,
+      createElement: (tagName: string): FakeElement => {
+        const element = new FakeElement();
+        element.tagName = tagName;
+        return element;
+      },
+    };
+    const visibleText = (element: FakeElement): string =>
+      element.textContent + element.children.map(visibleText).join("");
+
+    runInNewContext(ADMIN_SCRIPT, {
+      Array,
+      Date,
+      document: fakeDocument,
+      Error,
+      fetch: fetchMock,
+      HTMLButtonElement: FakeButtonElement,
+      HTMLInputElement: FakeInputElement,
+      Map,
+      Number,
+      Object,
+      Set,
+      TypeError,
+      URL,
+      window: { confirm: vi.fn(() => true) },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const list = elements.get("list");
+    const row = list?.children[0];
+    const control = row?.children[row.children.length - 1];
+    const levelInput = control?.children[1];
+    const baselineButton = control?.children[2];
+    expect(levelInput?.value).toBe("");
+    expect(levelInput?.min).toBe("0");
+    expect(levelInput?.step).toBe("1");
+    expect(baselineButton?.textContent).toBe("旧管理レベルを設定");
+    expect(visibleText(list as FakeElement)).not.toContain("opaque-supporter-id");
+    expect(JSON.stringify(list)).not.toContain("opaque-supporter-id");
+    expect(JSON.stringify(levelInput?.dataset ?? {})).not.toContain(
+      "opaque-supporter-id",
+    );
+
+    if (levelInput === undefined || baselineButton === undefined) {
+      throw new Error("expected legacy baseline control");
+    }
+    levelInput.value = "0";
+    baselineButton.click();
+    baselineButton.click();
+    expect(baselineResolvers).toHaveLength(1);
+    expect(fetchCalls.at(-1)?.options).toMatchObject({
+      method: "POST",
+      body: JSON.stringify({
+        supporterId: "opaque-supporter-id",
+        currentLevel: 0,
+      }),
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+
+    baselineResolvers[0]?.(response(200, { status: "ok" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(visibleText(list as FakeElement)).not.toContain("旧管理レベルを設定");
   });
 
   it("implements the settled month-end browser contract", async () => {
@@ -6203,6 +6551,7 @@ describe("admin server configuration", () => {
         nextLotteryEntryCount: 5,
         supporting: true,
         latestMonthKey: "2026-09",
+        legacyBaselineEligible: false,
         portalDeliveryState: "provisioned",
       }),
       Object.freeze({
@@ -6212,6 +6561,7 @@ describe("admin server configuration", () => {
         nextLotteryEntryCount: 2,
         supporting: false,
         latestMonthKey: "2026-09",
+        legacyBaselineEligible: false,
         portalDeliveryState: "not_issued",
       }),
     ];

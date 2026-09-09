@@ -1,5 +1,6 @@
 import { isAbsolute } from "node:path";
 import type {
+  AssignLegacyBaselineInput,
   ApplyFanboxSupporterImportInput,
   CreateMigratedSupporterInput,
   CreateSupporterInput,
@@ -106,6 +107,23 @@ export function assertValidCreateMigratedSupporterInput(
   assertNonBlankString(input.fanboxRelationshipId, "fanboxRelationshipId");
   assertNonBlankString(input.displayName, "displayName");
   assertBoolean(input.supporting, "supporting");
+  assertValidLevel(input.currentLevel);
+  assertValidMonthKey(input.monthKey);
+}
+
+export function assertValidAssignLegacyBaselineInput(
+  input: unknown,
+): asserts input is AssignLegacyBaselineInput {
+  if (!isPlainObject(input)) {
+    throw new TypeError("assign legacy baseline input must be an object");
+  }
+
+  assertAllowedKeys(
+    input,
+    ["supporterId", "currentLevel", "monthKey"],
+    "assign legacy baseline input",
+  );
+  assertValidSupporterId(input.supporterId);
   assertValidLevel(input.currentLevel);
   assertValidMonthKey(input.monthKey);
 }

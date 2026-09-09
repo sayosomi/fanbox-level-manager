@@ -1,6 +1,8 @@
 export { CURRENT_SCHEMA_VERSION } from "./migrations.js";
 export { openLocalStore } from "./store.js";
 export type {
+  AssignLegacyBaselineInput,
+  AssignLegacyBaselineResult,
   ApplyFanboxSupporterImportResult,
   ApplyFanboxSupporterImportInput,
   CreateMigratedSupporterInput,
@@ -28,6 +30,7 @@ export type {
 export {
   DuplicateFanboxRelationshipError,
   FanboxRelationshipNotFoundError,
+  LegacyBaselineNotEligibleError,
   PortalAccessNotIssuedError,
   PortalAccessNotProvisionedError,
   PortalTokenHashConflictError,

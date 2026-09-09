@@ -78,6 +78,7 @@ const SUPPORTER_KEYS = [
   "nextLotteryEntryCount",
   "supporting",
   "latestMonthKey",
+  "legacyBaselineEligible",
   "portalDeliveryState",
 ];
 const PORTAL_DELIVERY_STATES = new Set([
@@ -765,6 +766,7 @@ function validateSupporterResponse(value) {
       !isNonNegativeInteger(supporter.nextLotteryEntryCount) ||
       supporter.nextLotteryEntryCount !== supporter.currentLevel + 1 ||
       typeof supporter.supporting !== "boolean" ||
+      typeof supporter.legacyBaselineEligible !== "boolean" ||
       !(
         supporter.latestMonthKey === null ||
         (typeof supporter.latestMonthKey === "string" &&
@@ -981,6 +983,40 @@ function isExactPortalSyncFailedAfterUpdate(value) {
     hasExactKeys(value, ["error"]) &&
     value.error === "portal_sync_failed_after_update"
   );
+}
+
+function isExactLegacyBaselineConflict(value) {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["error"]) &&
+    value.error === "legacy_baseline_conflict"
+  );
+}
+
+function isExactLegacyBaselineUnavailable(value) {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["error"]) &&
+    value.error === "legacy_baseline_unavailable"
+  );
+}
+
+function isExactLegacyBaselineFailed(value) {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["error"]) &&
+    value.error === "legacy_baseline_failed"
+  );
+}
+
+function validateLegacyBaselineResponse(value) {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["status"]) ||
+    value.status !== "ok"
+  ) {
+    throw new TypeError("invalid legacy baseline response");
+  }
 }
 
 async function submitLotteryResults(listStatus, supporterList) {
@@ -2231,7 +2267,166 @@ async function importSelectedPdf(
   }
 }
 
-function renderSupporter(supporter) {
+function parseLegacyBaselineLevel(value) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+
+  const level = Number(value);
+  return isNonNegativeInteger(level) ? level : null;
+}
+
+async function assignLegacyBaseline(
+  supporter,
+  levelInput,
+  button,
+  status,
+  listStatus,
+  supporterList,
+) {
+  if (button.disabled || !supporter.legacyBaselineEligible) {
+    return;
+  }
+
+  const currentLevel = parseLegacyBaselineLevel(levelInput.value);
+  if (currentLevel === null) {
+    status.textContent = "旧管理レベルは0以上の整数を入力してください。";
+    return;
+  }
+
+  if (
+    !window.confirm(
+      \`支援者「\${supporter.displayName}」に旧管理レベル \${currentLevel} を設定します。既存の支援者ID・ポータル状態を維持したまま、1回限りの初期履歴を作成します。続行しますか？\`,
+    )
+  ) {
+    return;
+  }
+
+  button.disabled = true;
+  status.textContent = "旧管理レベルを設定しています。";
+
+  try {
+    const response = await fetch("/api/supporters/assign-legacy-baseline", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        supporterId: supporter.id,
+        currentLevel,
+      }),
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    let responseBody;
+    try {
+      responseBody = await response.json();
+    } catch {
+      throw new Error("invalid legacy baseline response");
+    }
+
+    if (
+      response.status === 409 &&
+      isExactBackupDestinationRequired(responseBody)
+    ) {
+      markBackupDestinationUnavailable();
+      status.textContent =
+        "バックアップ先を選択してから、旧管理レベルを設定してください。支援者の状態は変更されていません。";
+      return;
+    }
+
+    if (response.status === 409) {
+      if (!isExactLegacyBaselineConflict(responseBody)) {
+        throw new Error("invalid legacy baseline conflict");
+      }
+      await loadSupporters(listStatus, supporterList);
+      listStatus.textContent =
+        "旧管理レベルを設定できませんでした。状態が変わっているため、支援者一覧を確認してください。";
+      return;
+    }
+
+    if (response.status === 503) {
+      if (!isExactPortalNotConfigured(responseBody)) {
+        throw new Error("invalid portal configuration response");
+      }
+      status.textContent =
+        "ポータル連携を設定してから、旧管理レベルを設定してください。支援者の状態は変更されていません。";
+      return;
+    }
+
+    if (
+      response.status === 500 &&
+      isExactBackupFailedAfterUpdate(responseBody)
+    ) {
+      await loadSupporters(listStatus, supporterList);
+      listStatus.textContent =
+        "旧管理レベルの設定は完了しています。同じ設定を再実行しないでください。処理後バックアップに失敗したため、「今すぐバックアップを作成」で復旧し、対象の支援者で「Cloudflareへ同期」を実行してください。";
+      return;
+    }
+
+    if (
+      response.status === 502 &&
+      isExactPortalSyncFailedAfterUpdate(responseBody)
+    ) {
+      await loadSupporters(listStatus, supporterList);
+      listStatus.textContent =
+        "旧管理レベルの設定と暗号化バックアップは完了しています。同じ設定を再実行しないでください。対象の支援者で「Cloudflareへ同期」を実行してください。";
+      return;
+    }
+
+    if (response.status === 500 && isExactLegacyBaselineUnavailable(responseBody)) {
+      throw new Error("legacy baseline service unavailable");
+    }
+    if (response.status === 500 && isExactLegacyBaselineFailed(responseBody)) {
+      throw new Error("legacy baseline failed");
+    }
+    if (response.status !== 200) {
+      throw new Error("legacy baseline request failed");
+    }
+
+    validateLegacyBaselineResponse(responseBody);
+    await loadSupporters(listStatus, supporterList);
+    listStatus.textContent = "旧管理レベルを設定しました。";
+  } catch {
+    status.textContent =
+      "旧管理レベルを設定できませんでした。入力内容と現在の状態を確認してください。";
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderLegacyBaselineControl(supporter, listStatus, supporterList) {
+  const control = document.createElement("div");
+  const label = document.createElement("label");
+  const levelInput = document.createElement("input");
+  const button = document.createElement("button");
+  const status = document.createElement("p");
+
+  label.textContent = "旧管理レベル";
+  levelInput.type = "number";
+  levelInput.min = "0";
+  levelInput.step = "1";
+  button.type = "button";
+  button.textContent = "旧管理レベルを設定";
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  button.addEventListener("click", () => {
+    void assignLegacyBaseline(
+      supporter,
+      levelInput,
+      button,
+      status,
+      listStatus,
+      supporterList,
+    );
+  });
+  control.replaceChildren(label, levelInput, button, status);
+  return control;
+}
+
+function renderSupporter(supporter, listStatus, supporterList) {
   const item = document.createElement("li");
   const name = document.createElement("h3");
   const level = document.createElement("p");
@@ -2245,6 +2440,9 @@ function renderSupporter(supporter) {
   const syncStatus = document.createElement("p");
   const sentButton = document.createElement("button");
   const sentStatus = document.createElement("p");
+  const legacyBaselineControl = supporter.legacyBaselineEligible
+    ? renderLegacyBaselineControl(supporter, listStatus, supporterList)
+    : null;
   let portalDeliveryState = supporter.portalDeliveryState;
   let portalOperationActive = false;
 
@@ -2443,6 +2641,7 @@ function renderSupporter(supporter) {
     syncStatus,
     sentButton,
     sentStatus,
+    ...(legacyBaselineControl === null ? [] : [legacyBaselineControl]),
   );
   return item;
 }
@@ -2478,7 +2677,11 @@ async function loadSupporters(status, list) {
     }
 
     status.textContent = "";
-    list.replaceChildren(...supporters.map(renderSupporter));
+    list.replaceChildren(
+      ...supporters.map((supporter) =>
+        renderSupporter(supporter, status, list),
+      ),
+    );
   } catch {
     showListState(status, list, "支援者一覧を読み込めませんでした。");
     setLotteryParticipantState(
