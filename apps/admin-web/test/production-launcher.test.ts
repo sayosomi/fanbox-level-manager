@@ -54,7 +54,7 @@ const serverPath = join(
   "apps/admin-web/dist/server.js",
 );
 const productionPortalOrigin =
-  "https://fanbox-level-portal.mitsube-github.workers.dev";
+  "https://fanbox-level-portal.sayosomi.workers.dev";
 const temporaryDirectories: string[] = [];
 const baseEnvironment: NodeJS.ProcessEnv = { ...process.env };
 delete baseEnvironment.FANBOX_ADMIN_DB_PATH;
