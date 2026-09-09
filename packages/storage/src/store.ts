@@ -300,12 +300,12 @@ class LocalStoreImplementation implements LocalStore {
 
   applyFanboxSupporterImport(
     input: ApplyFanboxSupporterImportInput,
-  ): ApplyFanboxSupporterImportResult & FanboxSupporterImportRecord {
+  ): ApplyFanboxSupporterImportResult {
     assertValidApplyFanboxSupporterImportInput(input);
     const timestamp = timestampFromClock(this.clock);
 
     const apply = this.database.transaction(
-      (): ApplyFanboxSupporterImportResult & FanboxSupporterImportRecord => {
+      (): ApplyFanboxSupporterImportResult => {
         const createdSupporterIds: string[] = [];
         for (const create of input.creates) {
           const id = randomUUID();
@@ -379,15 +379,7 @@ class LocalStoreImplementation implements LocalStore {
           importRecord,
           createdSupporterIds: Object.freeze([...createdSupporterIds]),
         };
-        Object.defineProperties(result, {
-          sequence: { value: importRecord.sequence },
-          importedAt: { value: importRecord.importedAt },
-          presentSupporterCount: { value: importRecord.presentSupporterCount },
-        });
-        return Object.freeze(
-          result as ApplyFanboxSupporterImportResult &
-            FanboxSupporterImportRecord,
-        );
+        return Object.freeze(result);
       },
     );
 

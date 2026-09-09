@@ -43,16 +43,8 @@ export type FanboxSupporterImportResult = Readonly<{
   affectedSupporterIds: readonly string[];
 }>;
 
-type FanboxSupporterImportServiceResult = Readonly<{
-  comparison: FanboxPdfSupporterComparison;
-  importRecord: FanboxSupporterImportRecord;
-  affectedSupporterIds?: readonly string[];
-}>;
-
 export interface FanboxSupporterImportService {
-  applyInspection(
-    inspection: FanboxPdfInspection,
-  ): FanboxSupporterImportServiceResult;
+  applyInspection(inspection: FanboxPdfInspection): FanboxSupporterImportResult;
 }
 
 type MutableImportUpdate = {

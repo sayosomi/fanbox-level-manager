@@ -385,6 +385,7 @@ const samplePdfImportResult = Object.freeze({
     importedAt: "2026-09-08T09:00:00.000Z",
     presentSupporterCount: 3,
   }),
+  affectedSupporterIds: Object.freeze([]),
 });
 
 function createPdfInspectionService(
@@ -994,6 +995,7 @@ describe("manual backup route", () => {
     const apply = vi.fn(() => ({
       comparison: returningOnlyComparison,
       importRecord: samplePdfImportResult.importRecord,
+      affectedSupporterIds: Object.freeze([]),
     }));
     const getBackupDestinationDirectory = vi.fn(() => "/synthetic/backup/");
     const createBackup = vi.fn(async () => {});
@@ -1047,6 +1049,7 @@ describe("manual backup route", () => {
     const apply = vi.fn(() => ({
       comparison: multipleNewComparison,
       importRecord: samplePdfImportResult.importRecord,
+      affectedSupporterIds: Object.freeze([]),
     }));
     const importServer = createAdminServer(
       undefined,

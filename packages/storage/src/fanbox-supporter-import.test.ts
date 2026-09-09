@@ -126,6 +126,13 @@ describe("FANBOX supporter import persistence", () => {
     expect(result.createdSupporterIds).not.toContain(existing.id);
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.createdSupporterIds)).toBe(true);
+    expect(Object.keys(result)).toEqual([
+      "importRecord",
+      "createdSupporterIds",
+    ]);
+    expect(result).not.toHaveProperty("sequence");
+    expect(result).not.toHaveProperty("importedAt");
+    expect(result).not.toHaveProperty("presentSupporterCount");
     expect(Object.isFrozen(receipt)).toBe(true);
     expect(created).toMatchObject({
       fanboxRelationshipId: "  exact relationship \u0301  ",

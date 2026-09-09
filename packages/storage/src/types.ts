@@ -140,7 +140,7 @@ export interface LocalStore {
   createSupporter(input: CreateSupporterInput): SupporterRecord;
   applyFanboxSupporterImport(
     input: ApplyFanboxSupporterImportInput,
-  ): ApplyFanboxSupporterImportResult & FanboxSupporterImportRecord;
+  ): ApplyFanboxSupporterImportResult;
   getLatestFanboxSupporterImport(): FanboxSupporterImportRecord | null;
   createMigratedSupporter(
     input: CreateMigratedSupporterInput,

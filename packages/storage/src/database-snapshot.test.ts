@@ -135,7 +135,7 @@ describe("local database snapshots", () => {
         },
       ],
       presentSupporterCount: 2,
-    });
+    }).importRecord;
     const transition = store.transitionMonthlyStateWithOperation(
       supporter.id,
       "2026-09",
