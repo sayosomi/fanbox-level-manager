@@ -170,13 +170,18 @@ is visible before the operation is confirmed.
 
 ## Local backups
 
-The live SQLite database remains on the Mac and is not operated directly inside
-an iCloud-synchronized folder. iCloud Drive contains encrypted database backup
-artifacts only, never the live database or unencrypted database backups.
+The live SQLite database remains local on the Mac and stays outside any
+synchronized backup folder. Encrypted backup artifacts are written to a backup
+directory selected by the human.
+
+Choosing a directory inside iCloud Drive works through ordinary filesystem
+access and requires no dedicated iCloud integration. Only encrypted backup
+artifacts may be written into the selected directory, never the live database or
+unencrypted database backups.
 
 Create an encrypted backup from a consistent SQLite snapshot and encrypt it
-before writing it to iCloud Drive. The decryption secret or private key must not
-be stored only beside the encrypted backups in iCloud.
+before writing it to the selected backup directory. The decryption secret or
+private key must not be stored only beside the encrypted backups.
 
 Required backup triggers are:
 
