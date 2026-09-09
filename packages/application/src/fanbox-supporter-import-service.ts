@@ -1,4 +1,5 @@
 import type {
+  ApplyFanboxSupporterImportResult,
   FanboxSupporterImportCreate,
   FanboxSupporterImportRecord,
   FanboxSupporterImportUpdate,
@@ -39,6 +40,7 @@ export class FanboxSupporterImportError extends Error {
 export type FanboxSupporterImportResult = Readonly<{
   comparison: FanboxPdfSupporterComparison;
   importRecord: FanboxSupporterImportRecord;
+  affectedSupporterIds: readonly string[];
 }>;
 
 export interface FanboxSupporterImportService {
@@ -138,6 +140,40 @@ function assertNoDuplicateRelationshipIds(
   }
 }
 
+function getValidatedCreatedSupporterIds(
+  storageResult: unknown,
+  plan: Readonly<{
+    creates: readonly FanboxSupporterImportCreate[];
+    updates: readonly FanboxSupporterImportUpdate[];
+  }>,
+): readonly string[] {
+  if (
+    typeof storageResult !== "object" ||
+    storageResult === null ||
+    !("createdSupporterIds" in storageResult) ||
+    !Array.isArray(storageResult.createdSupporterIds) ||
+    storageResult.createdSupporterIds.length !== plan.creates.length
+  ) {
+    throw new Error("storage result creation metadata is inconsistent");
+  }
+
+  const updateIds = new Set(plan.updates.map((update) => update.supporterId));
+  const createdIds = new Set<string>();
+  for (const createdId of storageResult.createdSupporterIds) {
+    if (
+      typeof createdId !== "string" ||
+      createdId.trim().length === 0 ||
+      createdIds.has(createdId) ||
+      updateIds.has(createdId)
+    ) {
+      throw new Error("storage result creation metadata is inconsistent");
+    }
+    createdIds.add(createdId);
+  }
+
+  return [...storageResult.createdSupporterIds];
+}
+
 export function createFanboxSupporterImportService(
   store: LocalStore,
 ): FanboxSupporterImportService {
@@ -157,9 +193,22 @@ export function createFanboxSupporterImportService(
           comparison,
           inspection.relationshipLinks.length,
         );
-        const importRecord = store.applyFanboxSupporterImport(plan);
+        const storageResult: ApplyFanboxSupporterImportResult =
+          store.applyFanboxSupporterImport(plan);
+        const createdSupporterIds = getValidatedCreatedSupporterIds(
+          storageResult,
+          plan,
+        );
+        const affectedSupporterIds = Object.freeze([
+          ...createdSupporterIds,
+          ...plan.updates.map((update) => update.supporterId),
+        ]);
 
-        return Object.freeze({ comparison, importRecord });
+        return Object.freeze({
+          comparison,
+          importRecord: storageResult.importRecord,
+          affectedSupporterIds,
+        });
       } catch (error: unknown) {
         if (error instanceof FanboxSupporterImportBlockedError) {
           throw error;

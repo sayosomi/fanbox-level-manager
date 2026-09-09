@@ -171,7 +171,7 @@ function saveImport(
     creates: [],
     updates: [],
     presentSupporterCount,
-  });
+  }).importRecord;
 }
 
 afterEach(() => {
