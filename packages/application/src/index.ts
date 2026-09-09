@@ -41,6 +41,14 @@ export type {
   SupporterPortalSnapshotService,
 } from "./supporter-portal-snapshot-service.js";
 export {
+  FanboxIdentityRelinkError,
+  createFanboxIdentityRelinkService,
+} from "./fanbox-identity-relink-service.js";
+export type {
+  FanboxIdentityRelinkInput,
+  FanboxIdentityRelinkService,
+} from "./fanbox-identity-relink-service.js";
+export {
   createSupporterPortalSyncService,
   SupporterPortalRemoteError,
 } from "./supporter-portal-sync-service.js";

@@ -9,6 +9,7 @@ export type {
   FanboxSupporterImportCreate,
   FanboxSupporterImportRecord,
   FanboxSupporterImportUpdate,
+  RelinkSupporterFanboxRelationshipInput,
   LevelOperationKind,
   LevelOperationRecord,
   LevelTransitionOperationInput,
@@ -26,6 +27,7 @@ export type {
 } from "./types.js";
 export {
   DuplicateFanboxRelationshipError,
+  FanboxRelationshipNotFoundError,
   PortalAccessNotIssuedError,
   PortalAccessNotProvisionedError,
   PortalTokenHashConflictError,

@@ -56,9 +56,13 @@ The intended workflow is:
 4. Imported relationship IDs are compared with local records to classify new,
    continuing, currently absent, and returning supporters.
 
-OCR and AI extraction are not the normal path. A manual identity merge/link
-escape hatch remains possible if a FANBOX relationship identity changes
-unexpectedly.
+OCR and AI extraction are not the normal path. When a current PDF relationship
+unexpectedly changes, the localhost admin may manually relink a `new` PDF
+relationship to an `absent` existing supporter. Relinking preserves the
+supporter's opaque identity, level and history, and portal state. Ordinary PDF
+import then re-inspects the current local state and remains authoritative for
+support-state and display-name changes. Merging two already-existing supporter
+rows remains a separate concern if it is ever needed.
 
 ## Data privacy boundary
 

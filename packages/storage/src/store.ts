@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import {
   DuplicateFanboxRelationshipError,
+  FanboxRelationshipNotFoundError,
   PortalAccessNotIssuedError,
   PortalAccessNotProvisionedError,
   PortalTokenHashConflictError,
@@ -36,6 +37,7 @@ import type {
   MonthlyStateTransition,
   MonthlyTransitionWithOperationResult,
   OpenLocalStoreOptions,
+  RelinkSupporterFanboxRelationshipInput,
   StoreClock,
   SupporterProfilePatch,
   SupporterPortalAccessRecord,
@@ -49,6 +51,7 @@ import {
   assertValidCreateSupporterInput,
   assertValidMonthKey,
   assertValidMonthlyTransitionWithOperationBatch,
+  assertValidRelinkSupporterFanboxRelationshipInput,
   assertValidSupporterId,
   assertValidSupporterProfilePatch,
   assertValidTransitionCallback,
@@ -187,11 +190,23 @@ function assertValidPortalTokenHash(value: unknown, fieldName: string): asserts 
 }
 
 function isUniqueConstraintError(error: unknown): boolean {
-  if (typeof error !== "object" || error === null || !("code" in error)) {
+  if (typeof error !== "object" || error === null) {
     return false;
   }
 
-  return error.code === "SQLITE_CONSTRAINT_UNIQUE";
+  const code = "code" in error ? error.code : undefined;
+  return code === "SQLITE_CONSTRAINT_UNIQUE";
+}
+
+function isUniqueConstraintDiagnostic(error: unknown): boolean {
+  return (
+    isUniqueConstraintError(error) ||
+    (typeof error === "object" &&
+      error !== null &&
+      "message" in error &&
+      typeof error.message === "string" &&
+      error.message.includes("UNIQUE constraint failed"))
+  );
 }
 
 function defaultClock(): Date {
@@ -384,6 +399,79 @@ class LocalStoreImplementation implements LocalStore {
     );
 
     return apply();
+  }
+
+  relinkSupporterFanboxRelationship(
+    input: RelinkSupporterFanboxRelationshipInput,
+  ): SupporterRecord {
+    assertValidRelinkSupporterFanboxRelationshipInput(input);
+
+    const relink = this.database.transaction((): SupporterRecord => {
+      const currentRow = this.database
+        .prepare(
+          `SELECT *
+           FROM supporters
+           WHERE fanbox_relationship_id = ?`,
+        )
+        .get(input.currentFanboxRelationshipId) as SupporterRow | undefined;
+      if (currentRow === undefined) {
+        throw new FanboxRelationshipNotFoundError(
+          input.currentFanboxRelationshipId,
+        );
+      }
+
+      const replacementOwner = this.database
+        .prepare(
+          `SELECT id
+           FROM supporters
+           WHERE fanbox_relationship_id = ?`,
+        )
+        .get(input.replacementFanboxRelationshipId) as
+        | { id: string }
+        | undefined;
+      if (replacementOwner !== undefined) {
+        throw new DuplicateFanboxRelationshipError(
+          input.replacementFanboxRelationshipId,
+        );
+      }
+
+      const timestamp = timestampFromClock(this.clock);
+      const result = this.database
+        .prepare(
+          `UPDATE supporters
+           SET fanbox_relationship_id = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(
+          input.replacementFanboxRelationshipId,
+          timestamp,
+          currentRow.id,
+        );
+      if (result.changes !== 1) {
+        throw new FanboxRelationshipNotFoundError(
+          input.currentFanboxRelationshipId,
+        );
+      }
+
+      const supporter = this.getSupporterById(currentRow.id);
+      if (supporter === null) {
+        throw new Error("relinked supporter could not be loaded");
+      }
+
+      return supporter;
+    });
+
+    try {
+      return relink();
+    } catch (error: unknown) {
+      if (isUniqueConstraintDiagnostic(error)) {
+        throw new DuplicateFanboxRelationshipError(
+          input.replacementFanboxRelationshipId,
+        );
+      }
+
+      throw error;
+    }
   }
 
   getLatestFanboxSupporterImport(): FanboxSupporterImportRecord | null {
