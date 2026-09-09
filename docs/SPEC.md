@@ -179,6 +179,14 @@ Manual backups and future automatic backups use the same selected directory,
 Keychain-backed key, consistent SQLite snapshot, authenticated encryption, and
 encrypted filesystem persistence pipeline.
 
+After the required encrypted post-update backup succeeds, a successful lottery
+result batch automatically synchronizes the exact affected participants to
+Cloudflare. Known missing portal configuration blocks the lottery-result
+mutation before it starts. If automatic synchronization fails after the local
+update is committed, the local mutation and completed backup are not rolled
+back or repeated. The manual per-supporter `Cloudflareへ同期` action is the
+explicit recovery path.
+
 The human-selected backup destination is persisted in the local Mac SQLite
 admin state so it survives localhost admin restarts. Browser storage and
 directory handles are not the source of truth for this setting.
@@ -218,6 +226,10 @@ post-update backup failure.
 
 The remaining encryption implementation details are deferred to a later
 implementation contract.
+
+Automatic synchronization after FANBOX PDF import, existing-supporter
+migration, and month-end processing remains separate later work unless settled
+by a later implementation contract.
 
 ## Deferred implementation choices and non-goals
 

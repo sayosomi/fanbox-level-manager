@@ -144,6 +144,9 @@ const LOTTERY_RESULT_CONFLICT_BODY = JSON.stringify({
 const LOTTERY_RESULT_FAILED_BODY = JSON.stringify({
   error: "lottery_result_failed",
 });
+const PORTAL_SYNC_FAILED_AFTER_UPDATE_BODY = JSON.stringify({
+  error: "portal_sync_failed_after_update",
+});
 const LOTTERY_RESULT_SUCCESS_BODY = JSON.stringify({
   status: "ok",
 });
@@ -1052,6 +1055,7 @@ async function sendLotteryResults(
   lotteryLevelService: LotteryLevelService | undefined,
   backupDestinationService: BackupDestinationService | undefined,
   backupExecutionService: BackupExecutionService | undefined,
+  supporterPortalSyncService: SupporterPortalSyncService | undefined,
 ): Promise<void> {
   let body: string;
   try {
@@ -1069,6 +1073,11 @@ async function sendLotteryResults(
 
   if (lotteryLevelService === undefined) {
     sendPortalJson(response, 500, LOTTERY_LEVEL_UNAVAILABLE_BODY);
+    return;
+  }
+
+  if (supporterPortalSyncService === undefined) {
+    sendPortalJson(response, 503, PORTAL_NOT_CONFIGURED_BODY);
     return;
   }
 
@@ -1098,6 +1107,20 @@ async function sendLotteryResults(
   }
 
   if (!(await createPostMutationBackup(response, backupExecutionService))) {
+    return;
+  }
+
+  let portalSyncFailed = false;
+  for (const participant of input.participants) {
+    try {
+      await supporterPortalSyncService.syncSupporter(participant.supporterId);
+    } catch {
+      portalSyncFailed = true;
+    }
+  }
+
+  if (portalSyncFailed) {
+    sendPortalJson(response, 502, PORTAL_SYNC_FAILED_AFTER_UPDATE_BODY);
     return;
   }
 
@@ -1450,6 +1473,7 @@ export function createAdminServer(
         lotteryLevelService,
         backupDestinationService,
         backupExecutionService,
+        supporterPortalSyncService,
       );
       return;
     }
