@@ -47,6 +47,8 @@ describe("supporter level page", () => {
     expect(html).toContain("<h1>抽選レベルの確認</h1>");
     expect(html).toContain('id="status"');
     expect(html).toContain('id="current-level"');
+    expect(html).toContain('<dt>確認ID</dt>');
+    expect(html).toContain('id="confirmation-id"');
     expect(html).toContain('id="next-lottery-entry-count"');
     expect(html).toContain('id="verified-at"');
     expect(html).toContain('id="history"');
@@ -104,6 +106,9 @@ describe("supporter level page", () => {
       'hash.startsWith("#") ? hash.slice(1) : hash',
     );
     expect(script).toContain("/^[A-Za-z0-9_-]{43}$/");
+    expect(script).toContain(
+      "/^[0-9A-F]{4}(?:-[0-9A-F]{4}){3}$/",
+    );
     expect(script).toContain('fetch("/api/my-level", {');
     expect(script).toContain('method: "POST"');
     expect(script).toContain('headers: { "Content-Type": "application/json" }');
@@ -131,6 +136,9 @@ describe("supporter level page", () => {
     const script = await assetAt("/level/app.js");
 
     expect(script).toContain('currentLevel.textContent = "Lv."');
+    expect(script).toContain(
+      "confirmationId.textContent = snapshot.confirmationId",
+    );
     expect(script).toContain(
       'nextLotteryEntryCount.textContent = snapshot.nextLotteryEntryCount + "口"',
     );

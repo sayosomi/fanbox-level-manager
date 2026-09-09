@@ -1,5 +1,6 @@
 import { entryCountForLevel } from "@sayosomi/domain";
 import type { LocalStore, SupporterRecord } from "@sayosomi/storage";
+import { deriveSupporterConfirmationId } from "./supporter-confirmation-id.js";
 import {
   createSupporterPortalDeliveryService,
   type SupporterPortalDeliveryService,
@@ -8,6 +9,7 @@ import {
 
 export type SupporterListItem = Readonly<{
   id: string;
+  confirmationId: string;
   displayName: string;
   currentLevel: number;
   nextLotteryEntryCount: number;
@@ -28,6 +30,7 @@ function toSupporterListItem(
 ): SupporterListItem {
   return Object.freeze({
     id: record.id,
+    confirmationId: deriveSupporterConfirmationId(record.id),
     displayName: record.displayName,
     currentLevel: record.currentLevel,
     nextLotteryEntryCount: entryCountForLevel(record.currentLevel),
