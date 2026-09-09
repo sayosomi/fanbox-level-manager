@@ -6,7 +6,7 @@ import type {
 
 export type LegacyBaselineInput = Readonly<{
   supporterId: string;
-  currentLevel: number;
+  currentEntryCount: number;
   migratedAt: Date;
 }>;
 
@@ -24,7 +24,7 @@ export function createLegacyBaselineService(
       const monthKey = monthKeyInTokyo(input.migratedAt);
       return store.assignLegacyBaseline({
         supporterId: input.supporterId,
-        currentLevel: input.currentLevel,
+        currentEntryCount: input.currentEntryCount,
         monthKey,
       });
     },

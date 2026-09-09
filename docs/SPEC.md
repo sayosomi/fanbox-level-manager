@@ -1,45 +1,45 @@
 # fanbox-level-manager product specification
 
 This document records the durable product requirements for the FANBOX supporter
-lottery-level benefit operated by Sayosomi Lab. Current implementation contracts
+lottery entry-count benefit operated by Sayosomi Lab. Current implementation contracts
 are tracked in this repository's GitHub Issues.
 
 ## Product purpose and surfaces
 
-The system replaces the creator's manual lottery-level administration with two
+The system replaces the creator's manual lottery-entry-count administration with two
 surfaces:
 
 1. A Mac-localhost admin web application used by the creator.
 2. A Cloudflare-hosted supporter page where each supporter can check their own
-   current lottery level and level history at any time.
+   current lottery entry count and entry-count history at any time.
 
 Admin smartphone support is not required.
 
-## Lottery-level rules
+## Lottery entry-count rules
 
-- A supporter's first support month starts at lottery level 0.
-- Level N gives the supporter N+1 entries in a lottery.
-- Each calendar month has one possible +1 level allowance. A lottery loss
-  increases the level by 1 only when that allowance has not already been used.
+- A supporter's first support month starts at 1 lottery entry.
+- An entry count of N gives the supporter N entries in a lottery.
+- Each calendar month has one possible +1 entry-count allowance. A lottery loss
+  increases the entry count by 1 only when that allowance has not already been used.
 - A supporter who did not participate in any lottery during a calendar month
   receives a +1 at month end only when they are present in the month-end FANBOX
   supporter list and that month's +1 allowance has not already been used.
-- A level can increase at most once per calendar month.
-- A win resets the level to 0 and does not itself consume the month's +1
+- An entry count can increase at most once per calendar month.
+- A win resets the entry count to 1 and does not itself consume the month's +1
   allowance.
-- In the same month, `win -> loss` can end at level 1 when no earlier +1
+- In the same month, `win -> loss` can end at 2 entries when no earlier +1
   occurred in that month.
-- In the same month, `loss -> win -> loss` ends at level 0: the first loss
-  already consumed that month's single +1 allowance, the win resets the level
-  to 0, and the later loss cannot add another +1.
+- In the same month, `loss -> win -> loss` ends at 1 entry: the first loss
+  already consumed that month's single +1 allowance, the win resets the entry
+  count to 1, and the later loss cannot add another +1.
 - Multiple losses in one month produce at most one +1.
-- Leaving FANBOX does not reset the level. Since 2025-09-30, a returning
-  supporter resumes their prior level.
+- Leaving FANBOX does not reset the entry count. Since 2025-09-30, a returning
+  supporter resumes their prior entry count.
 - A supporter who participated in no lottery and is not supporting at month end
   receives no month-end +1.
 - Leaving and rejoining within the same month is treated as continuous when the
   supporter is present again in the month-end list.
-- Supporter-only secondary sales do not affect lottery level.
+- Supporter-only secondary sales do not affect lottery entry count.
 - Calendar-month semantics use Japan time (`Asia/Tokyo`).
 
 ## FANBOX data acquisition
@@ -59,7 +59,7 @@ The intended workflow is:
 OCR and AI extraction are not the normal path. When a current PDF relationship
 unexpectedly changes, the localhost admin may manually relink a `new` PDF
 relationship to an `absent` existing supporter. Relinking preserves the
-supporter's opaque identity, level and history, and portal state. Ordinary PDF
+supporter's opaque identity, entry count and history, and portal state. Ordinary PDF
 import then re-inspects the current local state and remains authoritative for
 support-state and display-name changes. Merging two already-existing supporter
 rows remains a separate concern if it is ever needed.
@@ -86,8 +86,8 @@ Cloudflare receives and stores only the minimum opaque, supporter-facing, and
 operational data needed, such as:
 
 - opaque internal supporter ID;
-- current lottery level;
-- generic level-change or lottery history needed by the portal;
+- current lottery entry count;
+- generic entry-count or lottery history needed by the portal;
 - supporter-page authentication token hash; and
 - timestamps needed for display and synchronization.
 
@@ -126,48 +126,59 @@ opaque supporter ID already stored for the portal.
 The supporter page shows at least:
 
 - stable random-looking confirmation ID;
-- current lottery level;
-- the next-lottery entry count, derived as `level + 1`;
+- current lottery entry count;
 - final update time; and
-- level history.
+- entry-count history.
 
 The supporter-facing final update time is the latest successful Mac-to-Cloudflare
 synchronization or verification of the current state. It is not merely the last
-time the numeric level changed, so unchanged data can still show that it was
+time the numeric entry count changed, so unchanged data can still show that it was
 recently checked. Internal design may keep separate `changed_at` and
 `verified_at`-style timestamps if useful.
 
 Supporter-facing history uses generic reasons such as:
 
 - `当選`;
-- `抽選結果によるレベルアップ`;
-- `抽選不参加によるレベルアップ`; and
+- `抽選結果による口数増加`;
+- `抽選不参加による口数増加`; and
 - `旧管理方式による履歴`.
 
-A lottery participation with no level change may still need to remain in local
+A lottery participation with no entry-count change may still need to remain in local
 or operational state so monthly participation can be determined, even when it
-is not shown as a supporter-facing level-change event.
+is not shown as a supporter-facing entry-count-change event.
+
+The supporter sync payload sends the canonical `entryCount` directly. The
+authenticated portal read API returns exactly `confirmationId`, `entryCount`,
+`verifiedAt`, and `history`; each history item contains `id`, `monthKey`,
+`entryCount`, `reason`, `occurredAt`, and `recordedAt`.
 
 ## Existing-supporter migration
 
 Historical detail does not need to be reconstructed lottery by lottery.
 
-Migration may establish each existing supporter's current level with one
+The one-time data migration converts every legacy zero-based level value with
+`entry count = legacy level + 1`: 0 becomes 1, 1 becomes 2, and 14 becomes
+15. Existing supporter identities, history IDs/order/timestamps, portal access,
+and local admin metadata are retained; the conversion is not repeated on reopen.
+
+Migration may establish each existing supporter's current entry count with one
 baseline history entry, for example:
 
-`システム移行時 Lv.7 / 旧管理方式による履歴`
+`システム移行時 口数7 / 旧管理方式による履歴`
 
 The preferred path is to enter the previous manual method's last notified level
 while the FANBOX PDF relationship is still classified as `new`. As a safe
 correction path immediately after an initial import, an already-created
-supporter may receive one legacy baseline only while its current level is 0,
-its latest month is unset, and it has no level history or monthly progression.
-This is a one-time baseline assignment, not general level editing.
+supporter may receive one legacy baseline only while its current entry count is
+1, its latest month is unset, and it has no entry-count history or monthly
+progression. This is a one-time baseline assignment, not general entry-count
+editing.
 
 The previous manual method's last notified level is the migration source for
-the current level. After migration, the dedicated portal is the authoritative
-supporter-facing level display, and recurring monthly individual level
-notifications are no longer required.
+the current entry count during the one-time conversion. After migration, the
+dedicated portal is the authoritative supporter-facing entry-count display,
+and recurring monthly individual entry-count notifications are no longer
+required.
 
 Existing supporters each receive their personal portal URL once. New supporters
 receive one when registered. Exceptional lost-link handling uses token
@@ -187,7 +198,7 @@ The admin workflows support:
 
 - supporter list and identity management;
 - FANBOX PDF import and comparison;
-- lottery registration, participants, winners, and automatic level effects;
+- lottery registration, participants, winners, and automatic entry-count effects;
 - month-end processing using the latest imported supporter-list state;
 - Cloudflare synchronization;
 - portal-link issue/reissue and sent-state tracking; and

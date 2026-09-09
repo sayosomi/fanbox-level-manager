@@ -23,7 +23,7 @@ function validInput(overrides: Partial<{
   fanboxRelationshipId: string;
   displayName: string;
   supporting: boolean;
-  initialLevel: number;
+  initialEntryCount: number;
 }> = {}) {
   return {
     fanboxRelationshipId: "relationship-1",
@@ -40,18 +40,18 @@ afterEach(() => {
 });
 
 describe("supporter persistence", () => {
-  it("defaults new supporters to level 0 and preserves valid migration levels", () => {
+  it("defaults new supporters to one entry and preserves valid migration counts", () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const first = store.createSupporter(validInput());
     const migrated = store.createSupporter(
       validInput({
         fanboxRelationshipId: "relationship-2",
-        initialLevel: 7,
+        initialEntryCount: 7,
       }),
     );
 
-    expect(first.currentLevel).toBe(0);
-    expect(migrated.currentLevel).toBe(7);
+    expect(first.currentEntryCount).toBe(1);
+    expect(migrated.currentEntryCount).toBe(7);
     expect(first.id).not.toBe(migrated.id);
     expect(first.id).not.toHaveLength(0);
     expect(Object.isFrozen(first)).toBe(true);
@@ -72,12 +72,12 @@ describe("supporter persistence", () => {
       );
     }
 
-    for (const initialLevel of [-1, 1.5, Number.NaN, Infinity, -Infinity]) {
+    for (const initialEntryCount of [-1, 1.5, Number.NaN, Infinity, -Infinity]) {
       expect(() =>
         store.createSupporter(
           validInput({
-            fanboxRelationshipId: `relationship-${String(initialLevel)}`,
-            initialLevel,
+            fanboxRelationshipId: `relationship-${String(initialEntryCount)}`,
+            initialEntryCount,
           }),
         ),
       ).toThrow(RangeError);
@@ -99,7 +99,7 @@ describe("supporter persistence", () => {
   it("gets supporters by either identity and updates only allowed profile fields", () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const created = store.createSupporter(
-      validInput({ displayName: "Original", initialLevel: 4 }),
+      validInput({ displayName: "Original", initialEntryCount: 4 }),
     );
 
     expect(store.getSupporterById(created.id)).toEqual(created);
@@ -113,19 +113,19 @@ describe("supporter persistence", () => {
       displayName: "Renamed",
     });
     expect(renamed.displayName).toBe("Renamed");
-    expect(renamed.currentLevel).toBe(4);
+    expect(renamed.currentEntryCount).toBe(4);
 
     const inactive = store.updateSupporterProfile(created.id, {
       supporting: false,
     });
     expect(inactive.supporting).toBe(false);
-    expect(inactive.currentLevel).toBe(4);
+    expect(inactive.currentEntryCount).toBe(4);
     expect(store.getMonthlyState(created.id, "2026-09")).toBeNull();
 
     expect(() => store.updateSupporterProfile(created.id, {})).toThrow(TypeError);
     expect(() =>
       store.updateSupporterProfile(created.id, {
-        currentLevel: 9,
+        currentEntryCount: 9,
       } as never),
     ).toThrow(TypeError);
     expect(() =>
@@ -160,7 +160,7 @@ describe("supporter persistence", () => {
         fanboxRelationshipId: "relationship-complete",
         displayName: "Complete supporter",
         supporting: false,
-        initialLevel: 6,
+        initialEntryCount: 6,
       }),
     );
     store.transitionMonthlyState(created.id, "2026-09", (state) => state);
@@ -172,7 +172,7 @@ describe("supporter persistence", () => {
       id: created.id,
       fanboxRelationshipId: "relationship-complete",
       displayName: "Complete supporter",
-      currentLevel: 6,
+      currentEntryCount: 6,
       supporting: false,
       latestMonthKey: "2026-09",
       createdAt: "2026-09-04T00:00:00.000Z",
@@ -257,7 +257,7 @@ describe("supporter persistence", () => {
           fanboxRelationshipId: "relationship-file",
           displayName: "File supporter",
           supporting: false,
-          initialLevel: 3,
+          initialEntryCount: 3,
         }),
       );
       firstStore.close();

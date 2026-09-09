@@ -19,7 +19,7 @@ export type LotteryResultParticipantResult = Readonly<{
   state: MonthlyStateRecord;
 }>;
 
-export interface LotteryLevelService {
+export interface LotteryEntryCountService {
   recordLotteryLoss(
     supporterId: string,
     occurredAt: Date,
@@ -90,9 +90,9 @@ function assertValidLotteryResultParticipants(
   }
 }
 
-export function createLotteryLevelService(
+export function createLotteryEntryCountService(
   store: LocalStore,
-): LotteryLevelService {
+): LotteryEntryCountService {
   return {
     recordLotteryLoss(supporterId, occurredAt) {
       const monthKey = monthKeyInTokyo(occurredAt);

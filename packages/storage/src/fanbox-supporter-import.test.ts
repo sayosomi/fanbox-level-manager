@@ -77,7 +77,7 @@ describe("FANBOX supporter import persistence", () => {
     expect(store.getLatestFanboxSupporterImport()).toBeNull();
   });
 
-  it("preserves exact strings, creates level-zero supporters, combines profile updates, and uses one timestamp", () => {
+  it("preserves exact strings, creates one-entry supporters, combines profile updates, and uses one timestamp", () => {
     const clock = vi.fn(fixedDate);
     const store = openStore(clock);
     clock.mockClear();
@@ -85,7 +85,7 @@ describe("FANBOX supporter import persistence", () => {
       fanboxRelationshipId: "existing-relationship",
       displayName: "Original name",
       supporting: true,
-      initialLevel: 4,
+      initialEntryCount: 4,
     });
     clock.mockClear();
     const beforeExisting = store.getSupporterById(existing.id);
@@ -137,7 +137,7 @@ describe("FANBOX supporter import persistence", () => {
     expect(created).toMatchObject({
       fanboxRelationshipId: "  exact relationship \u0301  ",
       displayName: "  Exact display name \u0301  ",
-      currentLevel: 0,
+      currentEntryCount: 1,
       supporting: true,
       latestMonthKey: null,
       createdAt: receipt.importedAt,
@@ -175,7 +175,7 @@ describe("FANBOX supporter import persistence", () => {
     expect(created).toMatchObject({
       fanboxRelationshipId: "create-only-relationship",
       displayName: "Create-only supporter",
-      currentLevel: 0,
+      currentEntryCount: 1,
       supporting: true,
       latestMonthKey: null,
     });
@@ -208,14 +208,14 @@ describe("FANBOX supporter import persistence", () => {
       expect.objectContaining({
         fanboxRelationshipId: "first-create",
         displayName: "First create",
-        currentLevel: 0,
+        currentEntryCount: 1,
         supporting: true,
         latestMonthKey: null,
       }),
       expect.objectContaining({
         fanboxRelationshipId: "second-create",
         displayName: "Second create",
-        currentLevel: 0,
+        currentEntryCount: 1,
         supporting: true,
         latestMonthKey: null,
       }),
@@ -228,16 +228,16 @@ describe("FANBOX supporter import persistence", () => {
       fanboxRelationshipId: "unchanged-relationship",
       displayName: "Unchanged fields",
       supporting: true,
-      initialLevel: 6,
+      initialEntryCount: 6,
     });
     store.transitionMonthlyState(existing.id, "2026-09", (state) => ({
       ...state,
-      level: 8,
-      monthlyPlusOneUsed: true,
+      entryCount: 8,
+      monthlyEntryCountIncrementUsed: true,
     }));
     const before = store.getSupporterById(existing.id);
     const beforeMonthlyState = store.getMonthlyState(existing.id, "2026-09");
-    const beforeHistory = store.listLevelOperations(existing.id);
+    const beforeHistory = store.listEntryCountOperations(existing.id);
 
     const result = store.applyFanboxSupporterImport({
       creates: [],
@@ -253,7 +253,7 @@ describe("FANBOX supporter import persistence", () => {
     expect(store.getMonthlyState(existing.id, "2026-09")).toEqual(
       beforeMonthlyState,
     );
-    expect(store.listLevelOperations(existing.id)).toEqual(beforeHistory);
+    expect(store.listEntryCountOperations(existing.id)).toEqual(beforeHistory);
   });
 
   it("records successful no-op imports and returns the latest receipt in sequence order", () => {

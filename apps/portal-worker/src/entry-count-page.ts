@@ -1,25 +1,25 @@
-const LEVEL_PAGE_PATH = "/level";
-const LEVEL_PAGE_SCRIPT_PATH = "/level/app.js";
-const LEVEL_PAGE_STYLE_PATH = "/level/style.css";
+const ENTRY_COUNT_PAGE_PATH = "/level";
+const ENTRY_COUNT_PAGE_SCRIPT_PATH = "/level/app.js";
+const ENTRY_COUNT_PAGE_STYLE_PATH = "/level/style.css";
 
-const LEVEL_PAGE_PATHS = new Set([
-  LEVEL_PAGE_PATH,
-  LEVEL_PAGE_SCRIPT_PATH,
-  LEVEL_PAGE_STYLE_PATH,
+const ENTRY_COUNT_PAGE_PATHS = new Set([
+  ENTRY_COUNT_PAGE_PATH,
+  ENTRY_COUNT_PAGE_SCRIPT_PATH,
+  ENTRY_COUNT_PAGE_STYLE_PATH,
 ]);
 
-const LEVEL_PAGE_HTML = `<!doctype html>
+const ENTRY_COUNT_PAGE_HTML = `<!doctype html>
 <html lang="ja">
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>抽選レベルの確認</title>
+    <title>抽選口数の確認</title>
     <link rel="stylesheet" href="/level/style.css">
     <script src="/level/app.js" defer></script>
   </head>
   <body>
     <main class="page-shell">
-      <h1>抽選レベルの確認</h1>
+      <h1>抽選口数の確認</h1>
       <p id="status" class="status" role="status" aria-live="polite">読み込み中です。</p>
 
       <section aria-labelledby="summary-heading">
@@ -30,12 +30,8 @@ const LEVEL_PAGE_HTML = `<!doctype html>
             <dd id="confirmation-id">—</dd>
           </div>
           <div class="summary-item">
-            <dt>現在のレベル</dt>
-            <dd id="current-level">—</dd>
-          </div>
-          <div class="summary-item">
-            <dt>次回抽選の口数</dt>
-            <dd id="next-lottery-entry-count">—</dd>
+            <dt>現在の口数</dt>
+            <dd id="entry-count">—</dd>
           </div>
           <div class="summary-item">
             <dt>最終更新</dt>
@@ -45,46 +41,37 @@ const LEVEL_PAGE_HTML = `<!doctype html>
       </section>
 
       <section aria-labelledby="history-heading">
-        <h2 id="history-heading">レベル履歴</h2>
+        <h2 id="history-heading">口数履歴</h2>
         <div id="history" class="history-list" aria-live="polite"></div>
       </section>
     </main>
   </body>
 </html>`;
 
-const LEVEL_PAGE_SCRIPT = String.raw`(() => {
+const ENTRY_COUNT_PAGE_SCRIPT = String.raw`(() => {
   "use strict";
 
   const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
   const CONFIRMATION_ID_PATTERN = /^[0-9A-F]{4}(?:-[0-9A-F]{4}){3}$/;
-  const SNAPSHOT_KEYS = [
-    "confirmationId",
-    "currentLevel",
-    "nextLotteryEntryCount",
-    "verifiedAt",
-    "history",
-  ];
+  const SNAPSHOT_KEYS = ["confirmationId", "entryCount", "verifiedAt", "history"];
   const HISTORY_KEYS = [
     "id",
     "monthKey",
-    "level",
+    "entryCount",
     "reason",
     "occurredAt",
     "recordedAt",
   ];
   const HISTORY_REASONS = new Set([
     "当選",
-    "抽選結果によるレベルアップ",
-    "抽選不参加によるレベルアップ",
+    "抽選結果による口数増加",
+    "抽選不参加による口数増加",
     "旧管理方式による履歴",
   ]);
 
   const status = document.getElementById("status");
   const confirmationId = document.getElementById("confirmation-id");
-  const currentLevel = document.getElementById("current-level");
-  const nextLotteryEntryCount = document.getElementById(
-    "next-lottery-entry-count",
-  );
+  const entryCount = document.getElementById("entry-count");
   const verifiedAt = document.getElementById("verified-at");
   const historyContainer = document.getElementById("history");
 
@@ -100,12 +87,12 @@ const LEVEL_PAGE_SCRIPT = String.raw`(() => {
     return typeof value === "object" && value !== null && !Array.isArray(value);
   }
 
-  function isValidLevel(value) {
+  function isValidEntryCount(value) {
     return (
       typeof value === "number" &&
       Number.isFinite(value) &&
       Number.isInteger(value) &&
-      value >= 0
+      value >= 1
     );
   }
 
@@ -135,7 +122,7 @@ const LEVEL_PAGE_SCRIPT = String.raw`(() => {
       !isNonblankString(value.id) ||
       typeof value.monthKey !== "string" ||
       !/^\d{4}-(0[1-9]|1[0-2])$/.test(value.monthKey) ||
-      !isValidLevel(value.level) ||
+      !isValidEntryCount(value.entryCount) ||
       typeof value.reason !== "string" ||
       !HISTORY_REASONS.has(value.reason) ||
       !isCanonicalTimestamp(value.recordedAt)
@@ -149,7 +136,7 @@ const LEVEL_PAGE_SCRIPT = String.raw`(() => {
     }
 
     const requiresOccurredAt =
-      value.reason === "当選" || value.reason === "抽選結果によるレベルアップ";
+      value.reason === "当選" || value.reason === "抽選結果による口数増加";
     if ((occurredAt !== null) !== requiresOccurredAt) {
       return null;
     }
@@ -157,7 +144,7 @@ const LEVEL_PAGE_SCRIPT = String.raw`(() => {
     return {
       id: value.id,
       monthKey: value.monthKey,
-      level: value.level,
+      entryCount: value.entryCount,
       reason: value.reason,
       occurredAt,
       recordedAt: value.recordedAt,
@@ -170,9 +157,7 @@ const LEVEL_PAGE_SCRIPT = String.raw`(() => {
       !hasExactKeys(value, SNAPSHOT_KEYS) ||
       typeof value.confirmationId !== "string" ||
       !CONFIRMATION_ID_PATTERN.test(value.confirmationId) ||
-      !isValidLevel(value.currentLevel) ||
-      !isValidLevel(value.nextLotteryEntryCount) ||
-      value.nextLotteryEntryCount !== value.currentLevel + 1 ||
+      !isValidEntryCount(value.entryCount) ||
       !isCanonicalTimestamp(value.verifiedAt) ||
       !Array.isArray(value.history)
     ) {
@@ -190,8 +175,7 @@ const LEVEL_PAGE_SCRIPT = String.raw`(() => {
 
     return {
       confirmationId: value.confirmationId,
-      currentLevel: value.currentLevel,
-      nextLotteryEntryCount: value.nextLotteryEntryCount,
+      entryCount: value.entryCount,
       verifiedAt: value.verifiedAt,
       history,
     };
@@ -246,11 +230,11 @@ const LEVEL_PAGE_SCRIPT = String.raw`(() => {
         reason.className = "history-reason";
         reason.textContent = entry.reason;
 
-        const level = document.createElement("span");
-        level.className = "history-level";
-        level.textContent = "Lv." + entry.level;
+        const entryCount = document.createElement("span");
+        entryCount.className = "history-entry-count";
+        entryCount.textContent = entry.entryCount + "口";
 
-        row.append(month, reason, level);
+        row.append(month, reason, entryCount);
         historyNodes.push(row);
       }
     }
@@ -262,8 +246,7 @@ const LEVEL_PAGE_SCRIPT = String.raw`(() => {
     const finalUpdate = formatVerifiedAt(snapshot.verifiedAt);
 
     if (
-      !(currentLevel instanceof HTMLElement) ||
-      !(nextLotteryEntryCount instanceof HTMLElement) ||
+      !(entryCount instanceof HTMLElement) ||
       !(verifiedAt instanceof HTMLElement) ||
       !(confirmationId instanceof HTMLElement)
     ) {
@@ -271,14 +254,13 @@ const LEVEL_PAGE_SCRIPT = String.raw`(() => {
     }
 
     confirmationId.textContent = snapshot.confirmationId;
-    currentLevel.textContent = "Lv." + snapshot.currentLevel;
-    nextLotteryEntryCount.textContent = snapshot.nextLotteryEntryCount + "口";
+    entryCount.textContent = snapshot.entryCount + "口";
     verifiedAt.textContent = finalUpdate;
     renderHistory(snapshot.history);
     showStatus("情報を確認しました。");
   }
 
-  async function loadLevel() {
+  async function loadEntryCount() {
     const hash = window.location.hash;
     const rawToken = hash.startsWith("#") ? hash.slice(1) : hash;
     if (!TOKEN_PATTERN.test(rawToken)) {
@@ -318,10 +300,10 @@ const LEVEL_PAGE_SCRIPT = String.raw`(() => {
     }
   }
 
-  void loadLevel();
+  void loadEntryCount();
 })();`;
 
-const LEVEL_PAGE_STYLE = `:root {
+const ENTRY_COUNT_PAGE_STYLE = `:root {
   color-scheme: light;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   background: #f5f5f3;
@@ -422,7 +404,7 @@ dd {
 }
 
 .history-month,
-.history-level {
+.history-entry-count {
   font-variant-numeric: tabular-nums;
 }
 
@@ -432,7 +414,7 @@ dd {
   color: #555555;
 }
 
-.history-level {
+.history-entry-count {
   font-weight: 700;
 }
 
@@ -466,11 +448,11 @@ function staticResponse(
   return new Response(body, { status: 200, headers });
 }
 
-export function isLevelPagePath(pathname: string): boolean {
-  return LEVEL_PAGE_PATHS.has(pathname);
+export function isEntryCountPagePath(pathname: string): boolean {
+  return ENTRY_COUNT_PAGE_PATHS.has(pathname);
 }
 
-export function handleLevelPageRequest(request: Request): Response {
+export function handleEntryCountPageRequest(request: Request): Response {
   if (request.method !== "GET") {
     return new Response("Method Not Allowed", {
       status: 405,
@@ -479,19 +461,19 @@ export function handleLevelPageRequest(request: Request): Response {
   }
 
   switch (new URL(request.url).pathname) {
-    case LEVEL_PAGE_PATH:
-      return staticResponse(LEVEL_PAGE_HTML, "text/html; charset=UTF-8", {
+    case ENTRY_COUNT_PAGE_PATH:
+      return staticResponse(ENTRY_COUNT_PAGE_HTML, "text/html; charset=UTF-8", {
         "Referrer-Policy": "no-referrer",
         "Content-Security-Policy":
           "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
       });
-    case LEVEL_PAGE_SCRIPT_PATH:
+    case ENTRY_COUNT_PAGE_SCRIPT_PATH:
       return staticResponse(
-        LEVEL_PAGE_SCRIPT,
+        ENTRY_COUNT_PAGE_SCRIPT,
         "application/javascript; charset=UTF-8",
       );
-    case LEVEL_PAGE_STYLE_PATH:
-      return staticResponse(LEVEL_PAGE_STYLE, "text/css; charset=UTF-8");
+    case ENTRY_COUNT_PAGE_STYLE_PATH:
+      return staticResponse(ENTRY_COUNT_PAGE_STYLE, "text/css; charset=UTF-8");
     default:
       return new Response(null, { status: 404 });
   }

@@ -27,7 +27,7 @@ async function assetAt(path: string): Promise<string> {
   return (await responseAt(path)).text();
 }
 
-describe("supporter level page", () => {
+describe("supporter entry-count page", () => {
   it("serves the protected static page with the required structure and headers", async () => {
     const response = await responseAt("/level");
     const html = await response.text();
@@ -43,13 +43,12 @@ describe("supporter level page", () => {
       "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'",
     );
     expect(html).toContain('<html lang="ja">');
-    expect(html).toContain("<title>抽選レベルの確認</title>");
-    expect(html).toContain("<h1>抽選レベルの確認</h1>");
+    expect(html).toContain("<title>抽選口数の確認</title>");
+    expect(html).toContain("<h1>抽選口数の確認</h1>");
     expect(html).toContain('id="status"');
-    expect(html).toContain('id="current-level"');
+    expect(html).toContain('id="entry-count"');
     expect(html).toContain('<dt>確認ID</dt>');
     expect(html).toContain('id="confirmation-id"');
-    expect(html).toContain('id="next-lottery-entry-count"');
     expect(html).toContain('id="verified-at"');
     expect(html).toContain('id="history"');
     expect(html).toContain('<link rel="stylesheet" href="/level/style.css">');
@@ -135,12 +134,9 @@ describe("supporter level page", () => {
   it("validates and renders the supporter snapshot using safe APIs", async () => {
     const script = await assetAt("/level/app.js");
 
-    expect(script).toContain('currentLevel.textContent = "Lv."');
+    expect(script).toContain('entryCount.textContent = snapshot.entryCount + "口"');
     expect(script).toContain(
       "confirmationId.textContent = snapshot.confirmationId",
-    );
-    expect(script).toContain(
-      'nextLotteryEntryCount.textContent = snapshot.nextLotteryEntryCount + "口"',
     );
     expect(script).toContain('timeZone: "Asia/Tokyo"');
     expect(script).toContain('new Intl.DateTimeFormat("ja-JP"');
@@ -148,13 +144,14 @@ describe("supporter level page", () => {
     expect(script).not.toContain("history.sort");
     expect(script).toContain("表示できる履歴はありません。");
     expect(script).toContain("当選");
-    expect(script).toContain("抽選結果によるレベルアップ");
-    expect(script).toContain("抽選不参加によるレベルアップ");
+    expect(script).toContain("抽選結果による口数増加");
+    expect(script).toContain("抽選不参加による口数増加");
     expect(script).toContain("旧管理方式による履歴");
     expect(script).toContain("Number.isFinite");
     expect(script).toContain("Number.isInteger");
     expect(script).toContain("toISOString() === value");
-    expect(script).toContain("nextLotteryEntryCount !== value.currentLevel + 1");
+    expect(script).not.toContain("nextLotteryEntryCount");
+    expect(script).not.toContain("currentLevel");
     expect(script).toContain("hasExactKeys(value, SNAPSHOT_KEYS)");
     expect(script).toContain("hasExactKeys(value, HISTORY_KEYS)");
     expect(script).toContain("historyContainer.replaceChildren");

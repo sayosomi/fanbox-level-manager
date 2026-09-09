@@ -1,18 +1,18 @@
 import {
-  handleLevelPageRequest,
-  isLevelPagePath,
-} from "./level-page.js";
+  handleEntryCountPageRequest,
+  isEntryCountPagePath,
+} from "./entry-count-page.js";
 
 const SYNC_ROUTE = "/api/admin/sync-supporter";
 const SET_SUPPORTER_TOKEN_ROUTE = "/api/admin/set-supporter-token";
-const MY_LEVEL_ROUTE = "/api/my-level";
+const MY_ENTRY_COUNT_ROUTE = "/api/my-level";
 const MAX_HISTORY_ENTRIES = 400;
 const HISTORY_INSERT_CHUNK_SIZE = 12;
 
 const HISTORY_REASONS = [
   "当選",
-  "抽選結果によるレベルアップ",
-  "抽選不参加によるレベルアップ",
+  "抽選結果による口数増加",
+  "抽選不参加による口数増加",
   "旧管理方式による履歴",
 ] as const;
 
@@ -32,7 +32,7 @@ export type PortalWorker = Readonly<{
 type SyncHistoryEntry = Readonly<{
   id: string;
   monthKey: string;
-  level: number;
+  entryCount: number;
   reason: HistoryReason;
   occurredAt: string | null;
   recordedAt: string;
@@ -40,7 +40,7 @@ type SyncHistoryEntry = Readonly<{
 
 type SyncRequest = Readonly<{
   supporterId: string;
-  currentLevel: number;
+  entryCount: number;
   history: readonly SyncHistoryEntry[];
 }>;
 
@@ -51,14 +51,14 @@ type SetSupporterTokenRequest = Readonly<{
 
 type SupporterReadRow = Readonly<{
   supporter_id: string;
-  current_level: number;
+  current_entry_count: number;
   verified_at: string;
 }>;
 
 type HistoryReadRow = Readonly<{
   entry_id: string;
   month_key: string;
-  level: number;
+  entry_count: number;
   reason: HistoryReason;
   occurred_at: string | null;
   recorded_at: string;
@@ -109,12 +109,12 @@ function isNonblankString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function isValidLevel(value: unknown): value is number {
+function isValidEntryCount(value: unknown): value is number {
   return (
     typeof value === "number" &&
     Number.isFinite(value) &&
     Number.isInteger(value) &&
-    value >= 0
+    value >= 1
   );
 }
 
@@ -150,14 +150,14 @@ function validateHistoryEntry(value: unknown): SyncHistoryEntry | null {
     !hasExactKeys(value, [
       "id",
       "monthKey",
-      "level",
+      "entryCount",
       "reason",
       "occurredAt",
       "recordedAt",
     ]) ||
     !isNonblankString(value.id) ||
     !isValidMonthKey(value.monthKey) ||
-    !isValidLevel(value.level) ||
+    !isValidEntryCount(value.entryCount) ||
     !isHistoryReason(value.reason) ||
     !isCanonicalTimestamp(value.recordedAt)
   ) {
@@ -170,7 +170,7 @@ function validateHistoryEntry(value: unknown): SyncHistoryEntry | null {
   }
 
   const requiresOccurredAt =
-    value.reason === "当選" || value.reason === "抽選結果によるレベルアップ";
+    value.reason === "当選" || value.reason === "抽選結果による口数増加";
   if ((occurredAt !== null) !== requiresOccurredAt) {
     return null;
   }
@@ -178,7 +178,7 @@ function validateHistoryEntry(value: unknown): SyncHistoryEntry | null {
   return {
     id: value.id,
     monthKey: value.monthKey,
-    level: value.level,
+    entryCount: value.entryCount,
     reason: value.reason,
     occurredAt,
     recordedAt: value.recordedAt,
@@ -188,9 +188,9 @@ function validateHistoryEntry(value: unknown): SyncHistoryEntry | null {
 function validateSyncRequest(value: unknown): RequestValidation {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["supporterId", "currentLevel", "history"]) ||
+    !hasExactKeys(value, ["supporterId", "entryCount", "history"]) ||
     !isNonblankString(value.supporterId) ||
-    !isValidLevel(value.currentLevel) ||
+    !isValidEntryCount(value.entryCount) ||
     !Array.isArray(value.history)
   ) {
     return { kind: "invalid" };
@@ -216,7 +216,7 @@ function validateSyncRequest(value: unknown): RequestValidation {
     kind: "valid",
     value: {
       supporterId: value.supporterId,
-      currentLevel: value.currentLevel,
+      entryCount: value.entryCount,
       history,
     },
   };
@@ -241,7 +241,7 @@ function validateSetSupporterTokenRequest(
   };
 }
 
-function validateMyLevelRequest(value: unknown): string | null {
+function validateMyEntryCountRequest(value: unknown): string | null {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, ["token"]) ||
@@ -347,7 +347,7 @@ function createHistoryInsertStatement(
       entry.id,
       positionOffset + index,
       entry.monthKey,
-      entry.level,
+      entry.entryCount,
       entry.reason,
       entry.occurredAt,
       entry.recordedAt,
@@ -361,7 +361,7 @@ function createHistoryInsertStatement(
         entry_id,
         position,
         month_key,
-        level,
+        entry_count,
         reason,
         occurred_at,
         recorded_at
@@ -380,19 +380,19 @@ function synchronizationStatements(
       .prepare(
         `INSERT INTO portal_supporters (
           supporter_id,
-          current_level,
+          current_entry_count,
           verified_at,
           created_at,
           updated_at
         ) VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(supporter_id) DO UPDATE SET
-          current_level = excluded.current_level,
+          current_entry_count = excluded.current_entry_count,
           verified_at = excluded.verified_at,
           updated_at = excluded.updated_at`,
       )
       .bind(
         snapshot.supporterId,
-        snapshot.currentLevel,
+        snapshot.entryCount,
         verifiedAt,
         verifiedAt,
         verifiedAt,
@@ -426,14 +426,14 @@ async function handleRequest(
   clock: PortalClock,
 ): Promise<Response> {
   const url = new URL(request.url);
-  if (isLevelPagePath(url.pathname)) {
-    return handleLevelPageRequest(request);
+  if (isEntryCountPagePath(url.pathname)) {
+    return handleEntryCountPageRequest(request);
   }
 
   if (
     url.pathname !== SYNC_ROUTE &&
     url.pathname !== SET_SUPPORTER_TOKEN_ROUTE &&
-    url.pathname !== MY_LEVEL_ROUTE
+    url.pathname !== MY_ENTRY_COUNT_ROUTE
   ) {
     return errorResponse(404, "not_found");
   }
@@ -442,8 +442,8 @@ async function handleRequest(
     return errorResponse(405, "method_not_allowed", { Allow: "POST" });
   }
 
-  if (url.pathname === MY_LEVEL_ROUTE) {
-    return handleMyLevelRequest(request, env);
+  if (url.pathname === MY_ENTRY_COUNT_ROUTE) {
+    return handleMyEntryCountRequest(request, env);
   }
 
   if (url.pathname === SET_SUPPORTER_TOKEN_ROUTE) {
@@ -556,7 +556,7 @@ async function handleSetSupporterTokenRequest(
   return jsonResponse({ status: "ok" }, 200);
 }
 
-async function handleMyLevelRequest(
+async function handleMyEntryCountRequest(
   request: Request,
   env: PortalEnv,
 ): Promise<Response> {
@@ -567,7 +567,7 @@ async function handleMyLevelRequest(
     return errorResponse(400, "invalid_request");
   }
 
-  const token = validateMyLevelRequest(requestBody);
+  const token = validateMyEntryCountRequest(requestBody);
   if (token === null) {
     return errorResponse(400, "invalid_request");
   }
@@ -579,7 +579,7 @@ async function handleMyLevelRequest(
         .prepare(
           `SELECT
              s.supporter_id,
-             s.current_level,
+             s.current_entry_count,
              s.verified_at
            FROM portal_supporters AS s
            JOIN portal_access_tokens AS t
@@ -592,7 +592,7 @@ async function handleMyLevelRequest(
           `SELECT
              h.entry_id,
              h.month_key,
-             h.level,
+             h.entry_count,
              h.reason,
              h.occurred_at,
              h.recorded_at
@@ -619,13 +619,12 @@ async function handleMyLevelRequest(
     return jsonResponse(
       {
         confirmationId: await deriveSupporterConfirmationId(supporter.supporter_id),
-        currentLevel: supporter.current_level,
-        nextLotteryEntryCount: supporter.current_level + 1,
+        entryCount: supporter.current_entry_count,
         verifiedAt: supporter.verified_at,
         history: history.map((entry) => ({
           id: entry.entry_id,
           monthKey: entry.month_key,
-          level: entry.level,
+          entryCount: entry.entry_count,
           reason: entry.reason,
           occurredAt: entry.occurred_at,
           recordedAt: entry.recorded_at,

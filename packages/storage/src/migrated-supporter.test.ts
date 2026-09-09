@@ -39,7 +39,7 @@ function validInput(
     fanboxRelationshipId: "relationship-1",
     displayName: "Supporter",
     supporting: true,
-    currentLevel: 0,
+    currentEntryCount: 1,
     monthKey: "2026-09",
     ...overrides,
   };
@@ -54,16 +54,16 @@ afterEach(() => {
 describe("migrated supporter persistence", () => {
   it("persists a level-zero baseline without monthly state", () => {
     const store = openStore();
-    const input = validInput({ currentLevel: 0 });
+    const input = validInput({ currentEntryCount: 1 });
 
     const result = store.createMigratedSupporter(input);
-    const operations = store.listLevelOperations(result.supporter.id);
+    const operations = store.listEntryCountOperations(result.supporter.id);
 
     expect(result.supporter).toMatchObject({
       fanboxRelationshipId: input.fanboxRelationshipId,
       displayName: input.displayName,
       supporting: true,
-      currentLevel: 0,
+      currentEntryCount: 1,
       latestMonthKey: null,
     });
     expect(operations).toHaveLength(1);
@@ -71,8 +71,8 @@ describe("migrated supporter persistence", () => {
       supporterId: result.supporter.id,
       kind: "initial_import",
       monthKey: input.monthKey,
-      beforeLevel: 0,
-      afterLevel: 0,
+      beforeEntryCount: 1,
+      afterEntryCount: 1,
       occurredAt: null,
       supportingAtMonthEnd: null,
     });
@@ -81,22 +81,22 @@ describe("migrated supporter persistence", () => {
 
   it("persists a nonzero baseline as the migrated level and shares one timestamp", () => {
     const store = openStore();
-    const input = validInput({ currentLevel: 7 });
+    const input = validInput({ currentEntryCount: 7 });
     const fixedTimestamp = fixedClock().toISOString();
 
     const result = store.createMigratedSupporter(input);
 
-    expect(result.supporter.currentLevel).toBe(7);
+    expect(result.supporter.currentEntryCount).toBe(7);
     expect(result.supporter.latestMonthKey).toBeNull();
     expect(result.operation).toMatchObject({
       kind: "initial_import",
-      beforeLevel: 7,
-      afterLevel: 7,
+      beforeEntryCount: 7,
+      afterEntryCount: 7,
       createdAt: fixedTimestamp,
     });
     expect(result.supporter.createdAt).toBe(fixedTimestamp);
     expect(result.supporter.updatedAt).toBe(fixedTimestamp);
-    expect(store.listLevelOperations(result.supporter.id)).toEqual([
+    expect(store.listEntryCountOperations(result.supporter.id)).toEqual([
       result.operation,
     ]);
   });
@@ -125,7 +125,7 @@ describe("migrated supporter persistence", () => {
         validInput({
           fanboxRelationshipId: `relationship-supporting-${index}`,
           supporting,
-          currentLevel: 7,
+          currentEntryCount: 7,
         }),
       );
 
@@ -136,16 +136,16 @@ describe("migrated supporter persistence", () => {
 
   it("returns an immutable result and immutable records", () => {
     const store = openStore();
-    const result = store.createMigratedSupporter(validInput({ currentLevel: 7 }));
+    const result = store.createMigratedSupporter(validInput({ currentEntryCount: 7 }));
 
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.supporter)).toBe(true);
     expect(Object.isFrozen(result.operation)).toBe(true);
     expect(() => {
-      (result.supporter as unknown as { currentLevel: number }).currentLevel = 8;
+      (result.supporter as unknown as { currentEntryCount: number }).currentEntryCount = 8;
     }).toThrow(TypeError);
     expect(() => {
-      (result.operation as unknown as { afterLevel: number }).afterLevel = 8;
+      (result.operation as unknown as { afterEntryCount: number }).afterEntryCount = 8;
     }).toThrow(TypeError);
   });
 
@@ -155,26 +155,26 @@ describe("migrated supporter persistence", () => {
       fanboxRelationshipId: "ordinary-relationship",
       displayName: "Ordinary supporter",
       supporting: true,
-      initialLevel: 7,
+      initialEntryCount: 7,
     });
 
-    expect(store.listLevelOperations(supporter.id)).toEqual([]);
+    expect(store.listEntryCountOperations(supporter.id)).toEqual([]);
     expect(supporter.latestMonthKey).toBeNull();
   });
 
   it("rejects duplicate relationship IDs without changing existing history", () => {
     const store = openStore();
-    const input = validInput({ currentLevel: 7 });
+    const input = validInput({ currentEntryCount: 7 });
     const first = store.createMigratedSupporter(input);
     const beforeSupporter = store.getSupporterById(first.supporter.id);
-    const beforeOperations = store.listLevelOperations(first.supporter.id);
+    const beforeOperations = store.listEntryCountOperations(first.supporter.id);
 
     expect(() =>
       store.createMigratedSupporter({
         ...input,
         displayName: "Changed name",
         supporting: false,
-        currentLevel: 2,
+        currentEntryCount: 2,
       }),
     ).toThrow(DuplicateFanboxRelationshipError);
 
@@ -182,7 +182,7 @@ describe("migrated supporter persistence", () => {
     expect(store.getSupporterByRelationshipId(input.fanboxRelationshipId)).toEqual(
       beforeSupporter,
     );
-    expect(store.listLevelOperations(first.supporter.id)).toEqual(beforeOperations);
+    expect(store.listEntryCountOperations(first.supporter.id)).toEqual(beforeOperations);
   });
 
   it("rejects invalid relationship IDs before persistence", () => {
@@ -222,11 +222,11 @@ describe("migrated supporter persistence", () => {
   it("rejects invalid current levels before persistence", () => {
     const store = openStore();
 
-    for (const [index, currentLevel] of [-1, 1.5, Number.NaN, Infinity, -Infinity].entries()) {
+    for (const [index, currentEntryCount] of [-1, 1.5, Number.NaN, Infinity, -Infinity].entries()) {
       const fanboxRelationshipId = `invalid-level-${index}`;
       expect(() =>
         store.createMigratedSupporter(
-          validInput({ fanboxRelationshipId, currentLevel }),
+          validInput({ fanboxRelationshipId, currentEntryCount }),
         ),
       ).toThrow(RangeError);
       expect(store.getSupporterByRelationshipId(fanboxRelationshipId)).toBeNull();
@@ -257,7 +257,7 @@ describe("migrated supporter persistence", () => {
     const store = openStore();
     databaseOf(store).exec(`
       CREATE TRIGGER reject_initial_import
-      BEFORE INSERT ON level_operations
+      BEFORE INSERT ON entry_count_operations
       WHEN NEW.kind = 'initial_import'
       BEGIN
         SELECT RAISE(ABORT, 'initial import rejected for test');
@@ -271,7 +271,7 @@ describe("migrated supporter persistence", () => {
 
   it("seeds same-month monthly state freshly after migration", () => {
     const store = openStore();
-    const migrated = store.createMigratedSupporter(validInput({ currentLevel: 7 }));
+    const migrated = store.createMigratedSupporter(validInput({ currentEntryCount: 7 }));
     let received: MonthlyState | undefined;
 
     const result = store.transitionMonthlyState(
@@ -281,21 +281,21 @@ describe("migrated supporter persistence", () => {
         received = state;
         return {
           ...state,
-          level: state.level + 1,
-          monthlyPlusOneUsed: true,
+          entryCount: state.entryCount + 1,
+          monthlyEntryCountIncrementUsed: true,
           lotteryParticipationOccurred: true,
         };
       },
     );
 
     expect(received).toEqual({
-      level: 7,
-      monthlyPlusOneUsed: false,
+      entryCount: 7,
+      monthlyEntryCountIncrementUsed: false,
       lotteryParticipationOccurred: false,
     });
     expect(result).toMatchObject({
-      level: 8,
-      monthlyPlusOneUsed: true,
+      entryCount: 8,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     });
     expect(store.getMonthlyState(migrated.supporter.id, "2026-09")).toEqual(

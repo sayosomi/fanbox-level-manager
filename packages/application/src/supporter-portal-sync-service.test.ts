@@ -7,7 +7,7 @@ import {
 } from "@sayosomi/storage";
 import type { LocalStore } from "@sayosomi/storage";
 import {
-  createLotteryLevelService,
+  createLotteryEntryCountService,
   createSupporterPortalAccessService,
   createSupporterPortalSyncService,
   SupporterPortalRemoteError,
@@ -45,13 +45,13 @@ function fixedClock(): Date {
 function createSupporter(
   store: LocalStore,
   relationshipId: string,
-  initialLevel = 0,
+  initialEntryCount = 1,
 ): ReturnType<LocalStore["createSupporter"]> {
   return store.createSupporter({
     fanboxRelationshipId: relationshipId,
     displayName: "Local-only supporter name",
     supporting: true,
-    initialLevel,
+    initialEntryCount,
   });
 }
 
@@ -215,7 +215,7 @@ describe("syncSupporter", () => {
   it("serializes the existing privacy-safe snapshot to the exact Worker request", async () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const supporter = createSupporter(store, "sync-contract", 2);
-    const lotteryService = createLotteryLevelService(store);
+    const lotteryService = createLotteryEntryCountService(store);
     lotteryService.recordLotteryLoss(
       supporter.id,
       new Date("2026-09-04T00:00:00.000Z"),
@@ -245,19 +245,19 @@ describe("syncSupporter", () => {
 
     const body = requestBody(request);
     expect(Object.keys(body).sort()).toEqual([
-      "currentLevel",
+      "entryCount",
       "history",
       "supporterId",
     ]);
     expect(body).toEqual({
       supporterId: supporter.id,
-      currentLevel: 3,
+      entryCount: 3,
       history: [
         {
           id: expect.any(String),
           monthKey: "2026-09",
-          level: 3,
-          reason: "抽選結果によるレベルアップ",
+          entryCount: 3,
+          reason: "抽選結果による口数増加",
           occurredAt: "2026-09-04T00:00:00.000Z",
           recordedAt: "2026-09-04T00:00:00.000Z",
         },
@@ -268,8 +268,8 @@ describe("syncSupporter", () => {
       throw new Error("expected one serialized history entry");
     }
     expect(Object.keys(history[0]).sort()).toEqual([
+      "entryCount",
       "id",
-      "level",
       "monthKey",
       "occurredAt",
       "reason",
@@ -283,7 +283,7 @@ describe("syncSupporter", () => {
       "email",
       "memo",
       "kind",
-      "beforeLevel",
+      "beforeEntryCount",
       "supportingAtMonthEnd",
       "rawToken",
       "tokenHash",
@@ -301,7 +301,7 @@ describe("syncSupporter", () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const supporter = createSupporter(store, "sync-success");
     const beforeSupporter = store.getSupporterById(supporter.id);
-    const beforeOperations = store.listLevelOperations(supporter.id);
+    const beforeOperations = store.listEntryCountOperations(supporter.id);
     const fake = createFakeFetch();
     const service = createService(store, fake.fetch);
 
@@ -311,7 +311,7 @@ describe("syncSupporter", () => {
     expect(Object.keys(result)).toEqual(["verifiedAt"]);
     expect(Object.isFrozen(result)).toBe(true);
     expect(store.getSupporterById(supporter.id)).toEqual(beforeSupporter);
-    expect(store.listLevelOperations(supporter.id)).toEqual(beforeOperations);
+    expect(store.listEntryCountOperations(supporter.id)).toEqual(beforeOperations);
   });
 
   it.each([

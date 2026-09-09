@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createExistingSupporterMigrationService,
-  createLotteryLevelService,
+  createLotteryEntryCountService,
 } from "./index.js";
 import {
   DuplicateFanboxRelationshipError,
@@ -39,7 +39,7 @@ function validInput(
     fanboxRelationshipId: "relationship-1",
     displayName: "Supporter",
     supporting: true,
-    currentLevel: 7,
+    currentEntryCount: 7,
     migratedAt: new Date("2026-09-01T00:00:00.000Z"),
     ...overrides,
   };
@@ -52,19 +52,19 @@ afterEach(() => {
 });
 
 describe("existing supporter migration service", () => {
-  it("registers a level-seven baseline through storage", () => {
+  it("registers a seven-entry baseline through storage", () => {
     const { migrationService, store } = openServices();
 
     const result = migrationService.registerExistingSupporter(validInput());
 
-    expect(result.supporter.currentLevel).toBe(7);
+    expect(result.supporter.currentEntryCount).toBe(7);
     expect(result.operation).toMatchObject({
       kind: "initial_import",
-      beforeLevel: 7,
-      afterLevel: 7,
+      beforeEntryCount: 7,
+      afterEntryCount: 7,
       monthKey: "2026-09",
     });
-    expect(store.listLevelOperations(result.supporter.id)).toEqual([
+    expect(store.listEntryCountOperations(result.supporter.id)).toEqual([
       result.operation,
     ]);
   });
@@ -106,46 +106,46 @@ describe("existing supporter migration service", () => {
     const { migrationService, store } = openServices();
     const input = validInput();
     const first = migrationService.registerExistingSupporter(input);
-    const beforeHistory = store.listLevelOperations(first.supporter.id);
+    const beforeHistory = store.listEntryCountOperations(first.supporter.id);
 
     expect(() =>
       migrationService.registerExistingSupporter({
         ...input,
         displayName: "Changed name",
-        currentLevel: 2,
+        currentEntryCount: 2,
       }),
     ).toThrow(DuplicateFanboxRelationshipError);
 
     expect(store.getSupporterById(first.supporter.id)).toEqual(first.supporter);
-    expect(store.listLevelOperations(first.supporter.id)).toEqual(beforeHistory);
+    expect(store.listEntryCountOperations(first.supporter.id)).toEqual(beforeHistory);
   });
 
-  it("preserves an inactive migrated supporter at its known level", () => {
+  it("preserves an inactive migrated supporter at its known entryCount", () => {
     const { migrationService, store } = openServices();
 
     const result = migrationService.registerExistingSupporter(
       validInput({
         fanboxRelationshipId: "inactive-supporter",
         supporting: false,
-        currentLevel: 5,
+        currentEntryCount: 5,
       }),
     );
 
     expect(result.supporter).toMatchObject({
       supporting: false,
-      currentLevel: 5,
+      currentEntryCount: 5,
     });
     expect(result.operation).toMatchObject({
       kind: "initial_import",
-      beforeLevel: 5,
-      afterLevel: 5,
+      beforeEntryCount: 5,
+      afterEntryCount: 5,
     });
-    expect(store.listLevelOperations(result.supporter.id)).toHaveLength(1);
+    expect(store.listEntryCountOperations(result.supporter.id)).toHaveLength(1);
   });
 
   it("allows the first same-month lottery loss to use the normal allowance", () => {
     const { migrationService, store } = openServices();
-    const lotteryService = createLotteryLevelService(store);
+    const lotteryService = createLotteryEntryCountService(store);
     const migrated = migrationService.registerExistingSupporter(
       validInput({
         fanboxRelationshipId: "same-month-loss",
@@ -157,31 +157,31 @@ describe("existing supporter migration service", () => {
       migrated.supporter.id,
       new Date("2026-09-20T00:00:00+09:00"),
     );
-    const history = store.listLevelOperations(migrated.supporter.id);
+    const history = store.listEntryCountOperations(migrated.supporter.id);
 
     expect(state).toMatchObject({
       monthKey: "2026-09",
-      level: 8,
-      monthlyPlusOneUsed: true,
+      entryCount: 8,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     });
-    expect(store.getSupporterById(migrated.supporter.id)?.currentLevel).toBe(8);
+    expect(store.getSupporterById(migrated.supporter.id)?.currentEntryCount).toBe(8);
     expect(history).toMatchObject([
       {
         kind: "initial_import",
-        beforeLevel: 7,
-        afterLevel: 7,
+        beforeEntryCount: 7,
+        afterEntryCount: 7,
       },
       {
         kind: "lottery_loss",
-        beforeLevel: 7,
-        afterLevel: 8,
+        beforeEntryCount: 7,
+        afterEntryCount: 8,
       },
     ]);
     expect(history).toHaveLength(2);
     expect(store.getMonthlyState(migrated.supporter.id, "2026-09")).toMatchObject({
-      level: 8,
-      monthlyPlusOneUsed: true,
+      entryCount: 8,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     });
   });

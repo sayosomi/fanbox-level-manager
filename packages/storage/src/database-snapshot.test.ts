@@ -14,7 +14,7 @@ type SupporterSnapshotRow = {
   id: string;
   fanbox_relationship_id: string;
   display_name: string;
-  current_level: number;
+  current_entry_count: number;
   supporting: number;
 };
 
@@ -27,8 +27,8 @@ type ImportSnapshotRow = {
 type MonthlyStateSnapshotRow = {
   supporter_id: string;
   month_key: string;
-  level: number;
-  monthly_plus_one_used: number;
+  entry_count: number;
+  monthly_entry_count_increment_used: number;
   lottery_participation_occurred: number;
 };
 
@@ -37,8 +37,8 @@ type OperationSnapshotRow = {
   supporter_id: string;
   month_key: string;
   kind: string;
-  before_level: number;
-  after_level: number;
+  before_entry_count: number;
+  after_entry_count: number;
 };
 
 type PortalAccessSnapshotRow = {
@@ -115,7 +115,7 @@ describe("local database snapshots", () => {
       fanboxRelationshipId: "relationship-snapshot",
       displayName: "Original supporter",
       supporting: true,
-      initialLevel: 4,
+      initialEntryCount: 4,
     });
     store.updateSupporterProfile(supporter.id, {
       displayName: "Profile supporter",
@@ -145,8 +145,8 @@ describe("local database snapshots", () => {
       },
       (state) => ({
         ...state,
-        level: 5,
-        monthlyPlusOneUsed: true,
+        entryCount: 5,
+        monthlyEntryCountIncrementUsed: true,
         lotteryParticipationOccurred: true,
       }),
     );
@@ -186,7 +186,7 @@ describe("local database snapshots", () => {
         `SELECT id,
                 fanbox_relationship_id,
                 display_name,
-                current_level,
+                current_entry_count,
                 supporting
          FROM supporters
          WHERE id = ?`,
@@ -196,7 +196,7 @@ describe("local database snapshots", () => {
       id: supporter.id,
       fanbox_relationship_id: "relationship-snapshot",
       display_name: "Profile supporter",
-      current_level: 5,
+      current_entry_count: 5,
       supporting: 1,
     });
 
@@ -219,8 +219,8 @@ describe("local database snapshots", () => {
         reconstructed,
         `SELECT supporter_id,
                 month_key,
-                level,
-                monthly_plus_one_used,
+                entry_count,
+                monthly_entry_count_increment_used,
                 lottery_participation_occurred
          FROM supporter_month_states
          WHERE supporter_id = ? AND month_key = ?`,
@@ -230,8 +230,8 @@ describe("local database snapshots", () => {
     ).toEqual({
       supporter_id: supporter.id,
       month_key: "2026-09",
-      level: 5,
-      monthly_plus_one_used: 1,
+      entry_count: 5,
+      monthly_entry_count_increment_used: 1,
       lottery_participation_occurred: 1,
     });
 
@@ -242,9 +242,9 @@ describe("local database snapshots", () => {
                   supporter_id,
                   month_key,
                   kind,
-                  before_level,
-                  after_level
-           FROM level_operations
+                  before_entry_count,
+                  after_entry_count
+           FROM entry_count_operations
            WHERE supporter_id = ?
            ORDER BY sequence ASC`,
         )
@@ -255,16 +255,16 @@ describe("local database snapshots", () => {
         supporter_id: supporter.id,
         month_key: "2026-09",
         kind: "lottery_loss",
-        before_level: 4,
-        after_level: 5,
+        before_entry_count: 4,
+        after_entry_count: 5,
       },
       {
         id: monthEndTransition.operation.id,
         supporter_id: supporter.id,
         month_key: "2026-09",
         kind: "month_end",
-        before_level: 5,
-        after_level: 5,
+        before_entry_count: 5,
+        after_entry_count: 5,
       },
     ] satisfies OperationSnapshotRow[]);
 
@@ -302,7 +302,7 @@ describe("local database snapshots", () => {
       fanboxRelationshipId: "relationship-filesystem",
       displayName: "Filesystem supporter",
       supporting: true,
-      initialLevel: 2,
+      initialEntryCount: 2,
     });
 
     expect(sourceDatabaseOf(store).pragma("journal_mode", { simple: true })).toBe(
@@ -328,7 +328,7 @@ describe("local database snapshots", () => {
       fanboxRelationshipId: "relationship-detached",
       displayName: "Detached supporter",
       supporting: true,
-      initialLevel: 6,
+      initialEntryCount: 6,
     });
     const snapshot = store.createDatabaseSnapshot();
     const snapshotPath = join(directory, "detached-snapshot.sqlite");
@@ -345,7 +345,7 @@ describe("local database snapshots", () => {
         `SELECT id,
                 fanbox_relationship_id,
                 display_name,
-                current_level,
+                current_entry_count,
                 supporting
          FROM supporters
          WHERE id = ?`,
@@ -355,7 +355,7 @@ describe("local database snapshots", () => {
       id: supporter.id,
       fanbox_relationship_id: "relationship-detached",
       display_name: "Detached supporter",
-      current_level: 6,
+      current_entry_count: 6,
       supporting: 1,
     });
   });
@@ -366,7 +366,7 @@ describe("local database snapshots", () => {
       fanboxRelationshipId: "relationship-detached-value",
       displayName: "Before mutation",
       supporting: true,
-      initialLevel: 1,
+      initialEntryCount: 1,
     });
     const sourceDatabase = sourceDatabaseOf(store);
     const snapshotA = store.createDatabaseSnapshot();
@@ -382,7 +382,7 @@ describe("local database snapshots", () => {
         kind: "lottery_win",
         occurredAt: new Date("2026-09-16T00:00:00.000Z"),
       },
-      (state) => ({ ...state, level: 3 }),
+      (state) => ({ ...state, entryCount: 3 }),
     );
     const snapshotB = store.createDatabaseSnapshot();
 
@@ -401,7 +401,7 @@ describe("local database snapshots", () => {
     expect(
       snapshotRow<SupporterSnapshotRow>(
         reconstructedA,
-        `SELECT id, fanbox_relationship_id, display_name, current_level, supporting
+        `SELECT id, fanbox_relationship_id, display_name, current_entry_count, supporting
          FROM supporters
          WHERE id = ?`,
         supporter.id,
@@ -410,13 +410,13 @@ describe("local database snapshots", () => {
       id: supporter.id,
       fanbox_relationship_id: "relationship-detached-value",
       display_name: "Before mutation",
-      current_level: 1,
+      current_entry_count: 1,
       supporting: 1,
     });
     expect(
       snapshotRow<MonthlyStateSnapshotRow>(
         reconstructedA,
-        `SELECT supporter_id, month_key, level, monthly_plus_one_used, lottery_participation_occurred
+        `SELECT supporter_id, month_key, entry_count, monthly_entry_count_increment_used, lottery_participation_occurred
          FROM supporter_month_states
          WHERE supporter_id = ? AND month_key = ?`,
         supporter.id,
@@ -427,7 +427,7 @@ describe("local database snapshots", () => {
     expect(
       snapshotRow<SupporterSnapshotRow>(
         reconstructedB,
-        `SELECT id, fanbox_relationship_id, display_name, current_level, supporting
+        `SELECT id, fanbox_relationship_id, display_name, current_entry_count, supporting
          FROM supporters
          WHERE id = ?`,
         supporter.id,
@@ -436,13 +436,13 @@ describe("local database snapshots", () => {
       id: supporter.id,
       fanbox_relationship_id: "relationship-detached-value",
       display_name: "After mutation",
-      current_level: 3,
+      current_entry_count: 3,
       supporting: 0,
     });
     expect(
       snapshotRow<MonthlyStateSnapshotRow>(
         reconstructedB,
-        `SELECT supporter_id, month_key, level, monthly_plus_one_used, lottery_participation_occurred
+        `SELECT supporter_id, month_key, entry_count, monthly_entry_count_increment_used, lottery_participation_occurred
          FROM supporter_month_states
          WHERE supporter_id = ? AND month_key = ?`,
         supporter.id,
@@ -451,7 +451,7 @@ describe("local database snapshots", () => {
     ).toMatchObject({
       supporter_id: supporter.id,
       month_key: "2026-09",
-      level: 3,
+      entry_count: 3,
     });
   });
 });

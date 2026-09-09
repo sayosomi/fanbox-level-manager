@@ -8,7 +8,7 @@ export type ExistingSupporterMigrationInput = Readonly<{
   fanboxRelationshipId: string;
   displayName: string;
   supporting: boolean;
-  currentLevel: number;
+  currentEntryCount: number;
   migratedAt: Date;
 }>;
 
@@ -30,7 +30,7 @@ export function createExistingSupporterMigrationService(
         fanboxRelationshipId: input.fanboxRelationshipId,
         displayName: input.displayName,
         supporting: input.supporting,
-        currentLevel: input.currentLevel,
+        currentEntryCount: input.currentEntryCount,
         monthKey,
       });
     },

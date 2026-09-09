@@ -50,7 +50,7 @@ function supporter(
     id: "supporter-id",
     fanboxRelationshipId: "relationship-id",
     displayName: "Stored supporter",
-    currentLevel: 0,
+    currentEntryCount: 1,
     supporting: true,
     latestMonthKey: null,
     createdAt: "2026-09-01T00:00:00.000Z",
@@ -466,7 +466,7 @@ describe("FANBOX supporter import service", () => {
     expect(String(storageFailure)).not.toContain(storageFailureMessage);
   });
 
-  it("applies a real import while preserving levels and exact candidate strings", () => {
+  it("applies a real import while preserving entry counts and exact candidate strings", () => {
     const store = track(
       openLocalStore(":memory:", { clock: fixedClock }),
     );
@@ -474,13 +474,13 @@ describe("FANBOX supporter import service", () => {
       fanboxRelationshipId: "continuing-rel",
       displayName: "Continuing stored",
       supporting: true,
-      initialLevel: 4,
+      initialEntryCount: 4,
     });
     const returning = store.createSupporter({
       fanboxRelationshipId: "returning-rel",
       displayName: "Returning stored",
       supporting: false,
-      initialLevel: 7,
+      initialEntryCount: 7,
     });
     const service = createFanboxSupporterImportService(store);
 
@@ -502,17 +502,17 @@ describe("FANBOX supporter import service", () => {
 
     expect(store.getSupporterById(continuing.id)).toMatchObject({
       displayName: "  Continuing exact  ",
-      currentLevel: 4,
+      currentEntryCount: 4,
       supporting: true,
     });
     expect(store.getSupporterById(returning.id)).toMatchObject({
       displayName: "  Returning exact  ",
-      currentLevel: 7,
+      currentEntryCount: 7,
       supporting: true,
     });
     expect(store.getSupporterByRelationshipId("new-rel")).toMatchObject({
       displayName: "  New exact  ",
-      currentLevel: 0,
+      currentEntryCount: 1,
       supporting: true,
     });
     expect(store.getLatestFanboxSupporterImport()).toMatchObject({

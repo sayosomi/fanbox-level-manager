@@ -21,12 +21,12 @@ function openStore(): LocalStore {
   return track(openLocalStore(":memory:", { clock: fixedClock }));
 }
 
-function createSupporter(store: LocalStore, initialLevel = 0) {
+function createSupporter(store: LocalStore, initialEntryCount = 1) {
   return store.createSupporter({
     fanboxRelationshipId: `relationship-${Math.random()}`,
     displayName: "Supporter",
     supporting: true,
-    initialLevel,
+    initialEntryCount,
   });
 }
 
@@ -36,7 +36,7 @@ afterEach(() => {
   }
 });
 
-describe("level operation history", () => {
+describe("entry-count operation history", () => {
   it("keeps the existing state-only transition free of operation rows", () => {
     const store = openStore();
     const supporter = createSupporter(store);
@@ -46,14 +46,14 @@ describe("level operation history", () => {
       "2026-09",
       (state) => ({
         ...state,
-        level: state.level + 1,
-        monthlyPlusOneUsed: true,
+        entryCount: state.entryCount + 1,
+        monthlyEntryCountIncrementUsed: true,
         lotteryParticipationOccurred: true,
       }),
     );
 
-    expect(result.level).toBe(1);
-    expect(store.listLevelOperations(supporter.id)).toEqual([]);
+    expect(result.entryCount).toBe(2);
+    expect(store.listEntryCountOperations(supporter.id)).toEqual([]);
   });
 
   it("persists one operation atomically with the seeded state", () => {
@@ -68,29 +68,29 @@ describe("level operation history", () => {
       },
       (state) => ({
         ...state,
-        level: state.level + 1,
-        monthlyPlusOneUsed: true,
+        entryCount: state.entryCount + 1,
+        monthlyEntryCountIncrementUsed: true,
         lotteryParticipationOccurred: true,
       }),
     );
 
-    expect(result.state.level).toBe(3);
+    expect(result.state.entryCount).toBe(3);
     expect(result.operation).toMatchObject({
       supporterId: supporter.id,
       monthKey: "2026-09",
       kind: "lottery_loss",
-      beforeLevel: 2,
-      afterLevel: 3,
+      beforeEntryCount: 2,
+      afterEntryCount: 3,
       occurredAt: "2026-09-15T03:34:56.789Z",
       supportingAtMonthEnd: null,
       createdAt: fixedClock().toISOString(),
     });
     expect(result.operation.createdAt).toBe(result.state.updatedAt);
-    expect(store.getSupporterById(supporter.id)?.currentLevel).toBe(3);
+    expect(store.getSupporterById(supporter.id)?.currentEntryCount).toBe(3);
     expect(store.getMonthlyState(supporter.id, "2026-09")).toEqual(
       result.state,
     );
-    expect(store.listLevelOperations(supporter.id)).toEqual([
+    expect(store.listEntryCountOperations(supporter.id)).toEqual([
       result.operation,
     ]);
   });
@@ -145,8 +145,8 @@ describe("level operation history", () => {
       },
       (state) => ({
         ...state,
-        level: state.level + 1,
-        monthlyPlusOneUsed: true,
+        entryCount: state.entryCount + 1,
+        monthlyEntryCountIncrementUsed: true,
         lotteryParticipationOccurred: true,
       }),
     );
@@ -159,11 +159,11 @@ describe("level operation history", () => {
       },
       (state) => ({
         ...state,
-        level: 0,
+        entryCount: 1,
       }),
     );
 
-    const operations = store.listLevelOperations(supporter.id);
+    const operations = store.listEntryCountOperations(supporter.id);
     expect(operations.map((operation) => operation.id)).toEqual([
       first.operation.id,
       second.operation.id,
@@ -173,7 +173,7 @@ describe("level operation history", () => {
     expect(Object.isFrozen(first.operation)).toBe(true);
     expect(Object.isFrozen(first)).toBe(true);
     expect(() => {
-      (operations[0] as unknown as { afterLevel: number }).afterLevel = 99;
+      (operations[0] as unknown as { afterEntryCount: number }).afterEntryCount = 99;
     }).toThrow(TypeError);
   });
 
@@ -181,7 +181,7 @@ describe("level operation history", () => {
     const store = openStore();
     const supporter = createSupporter(store);
 
-    const operations = store.listLevelOperations(supporter.id);
+    const operations = store.listEntryCountOperations(supporter.id);
 
     expect(operations).toEqual([]);
     expect(Object.isFrozen(operations)).toBe(true);
@@ -190,7 +190,7 @@ describe("level operation history", () => {
   it("rejects operation history reads for missing supporters", () => {
     const store = openStore();
 
-    expect(() => store.listLevelOperations("missing-supporter")).toThrow(
+    expect(() => store.listEntryCountOperations("missing-supporter")).toThrow(
       SupporterNotFoundError,
     );
   });
@@ -216,10 +216,10 @@ describe("level operation history", () => {
 
     expect(store.getMonthlyState(supporter.id, "2026-09")).toBeNull();
     expect(store.getSupporterById(supporter.id)).toMatchObject({
-      currentLevel: 6,
+      currentEntryCount: 6,
       latestMonthKey: null,
     });
-    expect(store.listLevelOperations(supporter.id)).toEqual([]);
+    expect(store.listEntryCountOperations(supporter.id)).toEqual([]);
   });
 
   it("rolls back a newly seeded month when the transition result is invalid", () => {
@@ -235,8 +235,8 @@ describe("level operation history", () => {
           occurredAt: new Date("2026-09-15T00:00:00.000Z"),
         },
         () => ({
-          level: -1,
-          monthlyPlusOneUsed: false,
+          entryCount: -1,
+          monthlyEntryCountIncrementUsed: false,
           lotteryParticipationOccurred: false,
         }),
       ),
@@ -244,10 +244,10 @@ describe("level operation history", () => {
 
     expect(store.getMonthlyState(supporter.id, "2026-09")).toBeNull();
     expect(store.getSupporterById(supporter.id)).toMatchObject({
-      currentLevel: 6,
+      currentEntryCount: 6,
       latestMonthKey: null,
     });
-    expect(store.listLevelOperations(supporter.id)).toEqual([]);
+    expect(store.listEntryCountOperations(supporter.id)).toEqual([]);
   });
 
   it("rolls back after a valid callback when operation metadata is invalid", () => {
@@ -268,10 +268,10 @@ describe("level operation history", () => {
 
     expect(store.getMonthlyState(supporter.id, "2026-09")).toBeNull();
     expect(store.getSupporterById(supporter.id)).toMatchObject({
-      currentLevel: 6,
+      currentEntryCount: 6,
       latestMonthKey: null,
     });
-    expect(store.listLevelOperations(supporter.id)).toEqual([]);
+    expect(store.listEntryCountOperations(supporter.id)).toEqual([]);
   });
 
   it("rejects stale months without changing later state or history", () => {
@@ -286,14 +286,14 @@ describe("level operation history", () => {
       },
       (state) => ({
         ...state,
-        level: 1,
-        monthlyPlusOneUsed: true,
+        entryCount: 1,
+        monthlyEntryCountIncrementUsed: true,
         lotteryParticipationOccurred: true,
       }),
     );
     const beforeSupporter = store.getSupporterById(supporter.id);
     const beforeState = store.getMonthlyState(supporter.id, "2026-10");
-    const beforeOperations = store.listLevelOperations(supporter.id);
+    const beforeOperations = store.listEntryCountOperations(supporter.id);
 
     expect(() =>
       store.transitionMonthlyStateWithOperation(
@@ -312,7 +312,7 @@ describe("level operation history", () => {
       beforeState,
     );
     expect(store.getMonthlyState(supporter.id, "2026-09")).toBeNull();
-    expect(store.listLevelOperations(supporter.id)).toEqual(beforeOperations);
+    expect(store.listEntryCountOperations(supporter.id)).toEqual(beforeOperations);
   });
 
   it("rejects missing supporters without creating operations", () => {
@@ -331,7 +331,7 @@ describe("level operation history", () => {
     ).toThrow(SupporterNotFoundError);
   });
 
-  it("persists successful no-level-change operations", () => {
+  it("persists successful no-entry-count-change operations", () => {
     const store = openStore();
     const supporter = createSupporter(store);
 
@@ -345,8 +345,8 @@ describe("level operation history", () => {
       (state) => state,
     );
 
-    expect(result.operation.beforeLevel).toBe(0);
-    expect(result.operation.afterLevel).toBe(0);
-    expect(store.listLevelOperations(supporter.id)).toHaveLength(1);
+    expect(result.operation.beforeEntryCount).toBe(1);
+    expect(result.operation.afterEntryCount).toBe(1);
+    expect(store.listEntryCountOperations(supporter.id)).toHaveLength(1);
   });
 });

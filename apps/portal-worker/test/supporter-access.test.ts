@@ -22,14 +22,14 @@ const HASH_B =
 
 type HistoryReason =
   | "当選"
-  | "抽選結果によるレベルアップ"
-  | "抽選不参加によるレベルアップ"
+  | "抽選結果による口数増加"
+  | "抽選不参加による口数増加"
   | "旧管理方式による履歴";
 
 type HistoryEntry = {
   id: string;
   monthKey: string;
-  level: number;
+  entryCount: number;
   reason: HistoryReason;
   occurredAt: string | null;
   recordedAt: string;
@@ -37,7 +37,7 @@ type HistoryEntry = {
 
 type SyncPayload = {
   supporterId: string;
-  currentLevel: number;
+  entryCount: number;
   history: HistoryEntry[];
 };
 
@@ -54,8 +54,8 @@ function validHistoryEntry(
   return {
     id: "entry-1",
     monthKey: "2026-09",
-    level: 1,
-    reason: "抽選結果によるレベルアップ",
+    entryCount: 1,
+    reason: "抽選結果による口数増加",
     occurredAt: "2026-09-04T00:00:00.000Z",
     recordedAt: "2026-09-05T00:00:00.000Z",
     ...overrides,
@@ -65,7 +65,7 @@ function validHistoryEntry(
 function validSyncPayload(overrides: Partial<SyncPayload> = {}): SyncPayload {
   return {
     supporterId: "opaque-a",
-    currentLevel: 0,
+    entryCount: 1,
     history: [],
     ...overrides,
   };
@@ -154,10 +154,10 @@ async function insertSupporter(supporterId: string): Promise<void> {
   await env.DB
     .prepare(
       `INSERT INTO portal_supporters
-         (supporter_id, current_level, verified_at, created_at, updated_at)
+         (supporter_id, current_entry_count, verified_at, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?)`,
     )
-    .bind(supporterId, 0, FIRST_TIMESTAMP, FIRST_TIMESTAMP, FIRST_TIMESTAMP)
+    .bind(supporterId, 1, FIRST_TIMESTAMP, FIRST_TIMESTAMP, FIRST_TIMESTAMP)
     .run();
 }
 
@@ -419,12 +419,12 @@ describe("admin supporter token endpoint", () => {
   });
 
   it("preserves the access row after a later sync-supporter upsert", async () => {
-    await synchronize(validSyncPayload({ currentLevel: 2 }));
+    await synchronize(validSyncPayload({ entryCount: 2 }));
     await setSupporterToken({ supporterId: "opaque-a", tokenHash: HASH_A });
 
     const response = await synchronize(
       validSyncPayload({
-        currentLevel: 8,
+        entryCount: 8,
         history: [
           validHistoryEntry({
             id: "later",
@@ -447,18 +447,18 @@ describe("supporter read endpoint", () => {
   it("authenticates the known 43-character token using exact SHA-256 hex", async () => {
     await synchronize(
       validSyncPayload({
-        currentLevel: 7,
+        entryCount: 7,
         history: [
           validHistoryEntry({
             id: "position-zero",
-            level: 7,
-            reason: "抽選結果によるレベルアップ",
+            entryCount: 7,
+            reason: "抽選結果による口数増加",
             occurredAt: "2030-01-01T00:00:00.000Z",
             recordedAt: "2030-01-01T00:00:00.000Z",
           }),
           validHistoryEntry({
             id: "position-one",
-            level: 6,
+            entryCount: 6,
             reason: "旧管理方式による履歴",
             occurredAt: null,
             recordedAt: "2020-01-01T00:00:00.000Z",
@@ -474,22 +474,21 @@ describe("supporter read endpoint", () => {
     const body = await jsonBody(response);
     expect(body).toEqual({
       confirmationId: "0FE5-2E2A-DA00-4C13",
-      currentLevel: 7,
-      nextLotteryEntryCount: 8,
+      entryCount: 7,
       verifiedAt: FIRST_TIMESTAMP,
       history: [
         {
           id: "position-zero",
           monthKey: "2026-09",
-          level: 7,
-          reason: "抽選結果によるレベルアップ",
+          entryCount: 7,
+          reason: "抽選結果による口数増加",
           occurredAt: "2030-01-01T00:00:00.000Z",
           recordedAt: "2030-01-01T00:00:00.000Z",
         },
         {
           id: "position-one",
           monthKey: "2026-09",
-          level: 6,
+          entryCount: 6,
           reason: "旧管理方式による履歴",
           occurredAt: null,
           recordedAt: "2020-01-01T00:00:00.000Z",
@@ -516,7 +515,7 @@ describe("supporter read endpoint", () => {
     await synchronize(
       validSyncPayload({
         supporterId: FIXTURE_SUPPORTER_ID,
-        currentLevel: 4,
+        entryCount: 4,
       }),
       SECOND_TIMESTAMP,
     );
@@ -555,7 +554,7 @@ describe("supporter read endpoint", () => {
   it("returns only the exact privacy-safe response shape", async () => {
     await synchronize(
       validSyncPayload({
-        currentLevel: 3,
+        entryCount: 3,
         history: [
           validHistoryEntry({
             id: "privacy-entry",
@@ -574,14 +573,13 @@ describe("supporter read endpoint", () => {
 
     expect(Object.keys(body).sort()).toEqual([
       "confirmationId",
-      "currentLevel",
+      "entryCount",
       "history",
-      "nextLotteryEntryCount",
       "verifiedAt",
     ]);
     expect(Object.keys(history[0] ?? {}).sort()).toEqual([
+      "entryCount",
       "id",
-      "level",
       "monthKey",
       "occurredAt",
       "reason",
@@ -598,21 +596,21 @@ describe("supporter read endpoint", () => {
   it("maps history fields exactly and preserves persisted position order", async () => {
     await synchronize(
       validSyncPayload({
-        currentLevel: 5,
+        entryCount: 5,
         history: [
           validHistoryEntry({
             id: "newest-position",
             monthKey: "2026-09",
-            level: 5,
-            reason: "抽選結果によるレベルアップ",
+            entryCount: 5,
+            reason: "抽選結果による口数増加",
             occurredAt: "2031-01-01T00:00:00.000Z",
             recordedAt: "2031-01-01T00:00:00.000Z",
           }),
           validHistoryEntry({
             id: "older-position",
             monthKey: "2026-08",
-            level: 4,
-            reason: "抽選不参加によるレベルアップ",
+            entryCount: 4,
+            reason: "抽選不参加による口数増加",
             occurredAt: null,
             recordedAt: "2020-01-01T00:00:00.000Z",
           }),
@@ -627,16 +625,16 @@ describe("supporter read endpoint", () => {
         {
           id: "newest-position",
           monthKey: "2026-09",
-          level: 5,
-          reason: "抽選結果によるレベルアップ",
+          entryCount: 5,
+          reason: "抽選結果による口数増加",
           occurredAt: "2031-01-01T00:00:00.000Z",
           recordedAt: "2031-01-01T00:00:00.000Z",
         },
         {
           id: "older-position",
           monthKey: "2026-08",
-          level: 4,
-          reason: "抽選不参加によるレベルアップ",
+          entryCount: 4,
+          reason: "抽選不参加による口数増加",
           occurredAt: null,
           recordedAt: "2020-01-01T00:00:00.000Z",
         },
@@ -645,7 +643,7 @@ describe("supporter read endpoint", () => {
   });
 
   it("invalidates the old raw token immediately after rotation", async () => {
-    await synchronize(validSyncPayload({ currentLevel: 4 }));
+    await synchronize(validSyncPayload({ entryCount: 4 }));
     await setSupporterToken({ supporterId: "opaque-a", tokenHash: HASH_A });
     await setSupporterToken({ supporterId: "opaque-a", tokenHash: HASH_B });
 
@@ -656,15 +654,14 @@ describe("supporter read endpoint", () => {
     const newResponse = await readMyLevel({ token: RAW_TOKEN_B });
     expect(newResponse.status).toBe(200);
     expect(await jsonBody(newResponse)).toMatchObject({
-      currentLevel: 4,
-      nextLotteryEntryCount: 5,
+      entryCount: 4,
     });
   });
 
   it("returns the later synchronized level, history, and verifiedAt", async () => {
     await synchronize(
       validSyncPayload({
-        currentLevel: 1,
+        entryCount: 1,
         history: [
           validHistoryEntry({
             id: "old-entry",
@@ -678,12 +675,12 @@ describe("supporter read endpoint", () => {
     await setSupporterToken({ supporterId: "opaque-a", tokenHash: HASH_A });
     await synchronize(
       validSyncPayload({
-        currentLevel: 9,
+        entryCount: 9,
         history: [
           validHistoryEntry({
             id: "new-entry",
-            level: 9,
-            reason: "抽選結果によるレベルアップ",
+            entryCount: 9,
+            reason: "抽選結果による口数増加",
             occurredAt: "2026-09-06T00:00:00.000Z",
           }),
         ],
@@ -694,15 +691,14 @@ describe("supporter read endpoint", () => {
     const response = await readMyLevel({ token: RAW_TOKEN_A });
     expect(await jsonBody(response)).toEqual({
       confirmationId: "0FE5-2E2A-DA00-4C13",
-      currentLevel: 9,
-      nextLotteryEntryCount: 10,
+      entryCount: 9,
       verifiedAt: SECOND_TIMESTAMP,
       history: [
         {
           id: "new-entry",
           monthKey: "2026-09",
-          level: 9,
-          reason: "抽選結果によるレベルアップ",
+          entryCount: 9,
+          reason: "抽選結果による口数増加",
           occurredAt: "2026-09-06T00:00:00.000Z",
           recordedAt: FIRST_TIMESTAMP,
         },
@@ -711,7 +707,7 @@ describe("supporter read endpoint", () => {
   });
 
   it("does not require SYNC_API_TOKEN for a valid supporter read", async () => {
-    await synchronize(validSyncPayload({ currentLevel: 6 }));
+    await synchronize(validSyncPayload({ entryCount: 6 }));
     await setSupporterToken({ supporterId: "opaque-a", tokenHash: HASH_A });
 
     const response = await readMyLevel(
@@ -722,8 +718,7 @@ describe("supporter read endpoint", () => {
 
     expect(response.status).toBe(200);
     expect(await jsonBody(response)).toMatchObject({
-      currentLevel: 6,
-      nextLotteryEntryCount: 7,
+      entryCount: 6,
     });
   });
 

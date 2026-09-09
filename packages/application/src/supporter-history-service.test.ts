@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createExistingSupporterMigrationService,
-  createLotteryLevelService,
+  createLotteryEntryCountService,
   createSupporterHistoryService,
 } from "./index.js";
 import {
@@ -24,14 +24,14 @@ function fixedClock(): Date {
 function openServices(): {
   store: LocalStore;
   historyService: ReturnType<typeof createSupporterHistoryService>;
-  lotteryService: ReturnType<typeof createLotteryLevelService>;
+  lotteryService: ReturnType<typeof createLotteryEntryCountService>;
   migrationService: ReturnType<typeof createExistingSupporterMigrationService>;
 } {
   const store = track(openLocalStore(":memory:", { clock: fixedClock }));
   return {
     store,
     historyService: createSupporterHistoryService(store),
-    lotteryService: createLotteryLevelService(store),
+    lotteryService: createLotteryEntryCountService(store),
     migrationService: createExistingSupporterMigrationService(store),
   };
 }
@@ -39,13 +39,13 @@ function openServices(): {
 function createSupporter(
   store: LocalStore,
   relationshipId: string,
-  initialLevel = 0,
+  initialEntryCount = 1,
 ): ReturnType<LocalStore["createSupporter"]> {
   return store.createSupporter({
     fanboxRelationshipId: relationshipId,
     displayName: "Supporter",
     supporting: true,
-    initialLevel,
+    initialEntryCount,
   });
 }
 
@@ -62,7 +62,7 @@ describe("supporter history application service", () => {
       fanboxRelationshipId: "migrated-supporter",
       displayName: "Migrated supporter",
       supporting: true,
-      currentLevel: 7,
+      currentEntryCount: 7,
       migratedAt: new Date("2026-09-01T00:00:00.000Z"),
     });
 
@@ -74,7 +74,7 @@ describe("supporter history application service", () => {
       {
         id: migrated.operation.id,
         monthKey: migrated.operation.monthKey,
-        level: 7,
+        entryCount: 7,
         reason: "旧管理方式による履歴",
         occurredAt: null,
         recordedAt: migrated.operation.createdAt,
@@ -82,14 +82,14 @@ describe("supporter history application service", () => {
     ]);
   });
 
-  it("shows the first lottery loss level-up with source metadata", () => {
+  it("shows the first lottery loss entryCount-up with source metadata", () => {
     const { historyService, lotteryService, store } = openServices();
     const supporter = createSupporter(store, "first-loss");
     const occurredAt = new Date("2026-09-15T00:00:00.000Z");
 
     lotteryService.recordLotteryLoss(supporter.id, occurredAt);
 
-    const operation = store.listLevelOperations(supporter.id)[0];
+    const operation = store.listEntryCountOperations(supporter.id)[0];
     if (operation === undefined) {
       throw new Error("expected a persisted lottery-loss operation");
     }
@@ -99,8 +99,8 @@ describe("supporter history application service", () => {
       {
         id: operation.id,
         monthKey: operation.monthKey,
-        level: 1,
-        reason: "抽選結果によるレベルアップ",
+        entryCount: 2,
+        reason: "抽選結果による口数増加",
         occurredAt: operation.occurredAt,
         recordedAt: operation.createdAt,
       },
@@ -115,22 +115,22 @@ describe("supporter history application service", () => {
     lotteryService.recordLotteryLoss(supporter.id, occurredAt);
     lotteryService.recordLotteryLoss(supporter.id, occurredAt);
 
-    const operations = store.listLevelOperations(supporter.id);
+    const operations = store.listEntryCountOperations(supporter.id);
     const history = historyService.getSupporterHistory(supporter.id);
 
     expect(operations).toHaveLength(2);
     expect(operations[1]).toMatchObject({
       kind: "lottery_loss",
-      beforeLevel: 1,
-      afterLevel: 1,
+      beforeEntryCount: 2,
+      afterEntryCount: 2,
     });
     expect(history).toHaveLength(1);
     expect(history[0]?.id).toBe(operations[0]?.id);
   });
 
-  it("shows a win from a higher level", () => {
+  it("shows a win from a higher entryCount", () => {
     const { historyService, lotteryService, store } = openServices();
-    const supporter = createSupporter(store, "higher-level-win", 5);
+    const supporter = createSupporter(store, "higher-entryCount-win", 5);
 
     lotteryService.recordLotteryWin(
       supporter.id,
@@ -142,37 +142,37 @@ describe("supporter history application service", () => {
     expect(history).toHaveLength(1);
     expect(history[0]).toMatchObject({
       reason: "当選",
-      level: 0,
+      entryCount: 1,
     });
   });
 
-  it("hides a win at level zero while retaining the operation", () => {
+  it("keeps a win at the one-entry baseline hidden when there is no change", () => {
     const { historyService, lotteryService, store } = openServices();
-    const supporter = createSupporter(store, "level-zero-win");
+    const supporter = createSupporter(store, "entryCount-zero-win");
 
     lotteryService.recordLotteryWin(
       supporter.id,
       new Date("2026-09-15T00:00:00.000Z"),
     );
 
-    const operations = store.listLevelOperations(supporter.id);
+    const operations = store.listEntryCountOperations(supporter.id);
 
     expect(operations).toHaveLength(1);
     expect(operations[0]).toMatchObject({
       kind: "lottery_win",
-      beforeLevel: 0,
-      afterLevel: 0,
+      beforeEntryCount: 1,
+      afterEntryCount: 1,
     });
     expect(historyService.getSupporterHistory(supporter.id)).toEqual([]);
   });
 
-  it("shows a month-end level-up", () => {
+  it("shows a month-end entryCount-up", () => {
     const { historyService, lotteryService, store } = openServices();
-    const supporter = createSupporter(store, "month-end-level-up");
+    const supporter = createSupporter(store, "month-end-entryCount-up");
 
     lotteryService.processMonthEnd(supporter.id, "2026-09", true);
 
-    const operation = store.listLevelOperations(supporter.id)[0];
+    const operation = store.listEntryCountOperations(supporter.id)[0];
     if (operation === undefined) {
       throw new Error("expected a persisted month-end operation");
     }
@@ -180,8 +180,8 @@ describe("supporter history application service", () => {
 
     expect(history).toHaveLength(1);
     expect(history[0]).toMatchObject({
-      reason: "抽選不参加によるレベルアップ",
-      level: operation.afterLevel,
+      reason: "抽選不参加による口数増加",
+      entryCount: operation.afterEntryCount,
     });
   });
 
@@ -191,11 +191,11 @@ describe("supporter history application service", () => {
 
     lotteryService.processMonthEnd(supporter.id, "2026-09", false);
 
-    expect(store.listLevelOperations(supporter.id)).toMatchObject([
+    expect(store.listEntryCountOperations(supporter.id)).toMatchObject([
       {
         kind: "month_end",
-        beforeLevel: 0,
-        afterLevel: 0,
+        beforeEntryCount: 1,
+        afterEntryCount: 1,
       },
     ]);
     expect(historyService.getSupporterHistory(supporter.id)).toEqual([]);
@@ -210,14 +210,14 @@ describe("supporter history application service", () => {
     lotteryService.recordLotteryWin(supporter.id, occurredAt);
     lotteryService.recordLotteryLoss(supporter.id, occurredAt);
 
-    expect(store.listLevelOperations(supporter.id)).toMatchObject([
-      { kind: "lottery_loss", beforeLevel: 0, afterLevel: 1 },
-      { kind: "lottery_win", beforeLevel: 1, afterLevel: 0 },
-      { kind: "lottery_loss", beforeLevel: 0, afterLevel: 0 },
+    expect(store.listEntryCountOperations(supporter.id)).toMatchObject([
+      { kind: "lottery_loss", beforeEntryCount: 1, afterEntryCount: 2 },
+      { kind: "lottery_win", beforeEntryCount: 2, afterEntryCount: 1 },
+      { kind: "lottery_loss", beforeEntryCount: 1, afterEntryCount: 1 },
     ]);
     expect(historyService.getSupporterHistory(supporter.id)).toMatchObject([
-      { reason: "当選", level: 0 },
-      { reason: "抽選結果によるレベルアップ", level: 1 },
+      { reason: "当選", entryCount: 1 },
+      { reason: "抽選結果による口数増加", entryCount: 2 },
     ]);
   });
 
@@ -227,7 +227,7 @@ describe("supporter history application service", () => {
       fanboxRelationshipId: "migration-order",
       displayName: "Migrated supporter",
       supporting: true,
-      currentLevel: 7,
+      currentEntryCount: 7,
       migratedAt: new Date("2026-09-01T00:00:00.000Z"),
     });
 
@@ -237,8 +237,8 @@ describe("supporter history application service", () => {
     );
 
     expect(historyService.getSupporterHistory(migrated.supporter.id)).toMatchObject([
-      { reason: "抽選結果によるレベルアップ", level: 8 },
-      { reason: "旧管理方式による履歴", level: 7 },
+      { reason: "抽選結果による口数増加", entryCount: 8 },
+      { reason: "旧管理方式による履歴", entryCount: 7 },
     ]);
   });
 
@@ -251,7 +251,7 @@ describe("supporter history application service", () => {
     lotteryService.recordLotteryLoss(supporter.id, laterOccurredAt);
     lotteryService.recordLotteryWin(supporter.id, earlierOccurredAt);
 
-    const operations = store.listLevelOperations(supporter.id);
+    const operations = store.listEntryCountOperations(supporter.id);
     const history = historyService.getSupporterHistory(supporter.id);
 
     expect(operations[0]?.occurredAt).toBe(laterOccurredAt.toISOString());
@@ -278,8 +278,8 @@ describe("supporter history application service", () => {
     }
 
     expect(Object.keys(entry).sort()).toEqual([
+      "entryCount",
       "id",
-      "level",
       "monthKey",
       "occurredAt",
       "reason",
@@ -289,7 +289,7 @@ describe("supporter history application service", () => {
     expect(entry).not.toHaveProperty("fanboxRelationshipId");
     expect(entry).not.toHaveProperty("displayName");
     expect(entry).not.toHaveProperty("supporting");
-    expect(entry).not.toHaveProperty("beforeLevel");
+    expect(entry).not.toHaveProperty("beforeEntryCount");
     expect(entry).not.toHaveProperty("supportingAtMonthEnd");
     expect(entry).not.toHaveProperty("kind");
   });
@@ -312,7 +312,7 @@ describe("supporter history application service", () => {
     expect(Object.isFrozen(entry)).toBe(true);
     expect(Object.isFrozen(history)).toBe(true);
     expect(() => {
-      (entry as unknown as { level: number }).level = 99;
+      (entry as unknown as { entryCount: number }).entryCount = 99;
     }).toThrow(TypeError);
     expect(() => {
       (history as unknown as unknown[]).push(entry);

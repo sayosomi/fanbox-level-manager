@@ -11,7 +11,7 @@ function supporterRecord(overrides: Partial<SupporterRecord> = {}): SupporterRec
     id: "supporter-id",
     fanboxRelationshipId: "relationship-id",
     displayName: "Supporter",
-    currentLevel: 0,
+    currentEntryCount: 1,
     supporting: true,
     latestMonthKey: null,
     createdAt: "2026-09-04T00:00:00.000Z",
@@ -29,7 +29,7 @@ function storeReturning(
     listSupporters: () => records,
     getSupporterPortalAccess: (supporterId: string) =>
       accesses.get(supporterId) ?? null,
-    listLevelOperations: (supporterId: string) => operations.get(supporterId) ?? [],
+    listEntryCountOperations: (supporterId: string) => operations.get(supporterId) ?? [],
   } as unknown as LocalStore;
 }
 
@@ -41,7 +41,7 @@ describe("supporter list application service", () => {
           id: "supporter-1",
           fanboxRelationshipId: "relationship-1",
           displayName: "A supporter",
-          currentLevel: 2,
+          currentEntryCount: 2,
           supporting: false,
           latestMonthKey: "2026-09",
         }),
@@ -54,8 +54,7 @@ describe("supporter list application service", () => {
       id: "supporter-1",
       confirmationId: "E418-717D-4B70-46FA",
       displayName: "A supporter",
-      currentLevel: 2,
-      nextLotteryEntryCount: 3,
+      entryCount: 2,
       supporting: false,
       latestMonthKey: "2026-09",
       legacyBaselineEligible: false,
@@ -63,12 +62,11 @@ describe("supporter list application service", () => {
     });
     expect(item && Object.keys(item).sort()).toEqual([
       "confirmationId",
-      "currentLevel",
       "displayName",
+      "entryCount",
       "id",
       "latestMonthKey",
       "legacyBaselineEligible",
-      "nextLotteryEntryCount",
       "portalDeliveryState",
       "supporting",
     ]);
@@ -77,7 +75,7 @@ describe("supporter list application service", () => {
       "createdAt",
       "updatedAt",
       "tokenHash",
-      "monthlyPlusOneUsed",
+      "monthlyEntryCountIncrementUsed",
       "lotteryParticipationOccurred",
       "operation",
       "issuedAt",
@@ -131,7 +129,7 @@ describe("supporter list application service", () => {
       "sent",
     ]);
     for (const item of service.listSupporters()) {
-      expect(Object.keys(item)).toHaveLength(9);
+      expect(Object.keys(item)).toHaveLength(8);
       expect(item).not.toHaveProperty("tokenHash");
       expect(item).not.toHaveProperty("issuedAt");
       expect(item).not.toHaveProperty("provisionedAt");
@@ -140,12 +138,12 @@ describe("supporter list application service", () => {
     }
   });
 
-  it("only marks a history-empty level-zero supporter eligible", () => {
+  it("only marks a history-empty one-entry supporter eligible", () => {
     const service = createSupporterListService(
       storeReturning(
         [
           supporterRecord({ id: "eligible" }),
-          supporterRecord({ id: "nonzero", currentLevel: 1 }),
+          supporterRecord({ id: "nonzero", currentEntryCount: 2 }),
           supporterRecord({ id: "processed", latestMonthKey: "2026-09" }),
           supporterRecord({ id: "with-history" }),
         ],
@@ -164,18 +162,15 @@ describe("supporter list application service", () => {
     ]);
   });
 
-  it("derives entry counts through the domain semantics", () => {
+  it("projects the canonical entry count without a derived next count", () => {
     const service = createSupporterListService(
       storeReturning([
-        supporterRecord({ id: "level-zero", currentLevel: 0 }),
-        supporterRecord({ id: "level-seven", currentLevel: 7 }),
+        supporterRecord({ id: "entryCount-one", currentEntryCount: 1 }),
+        supporterRecord({ id: "entryCount-seven", currentEntryCount: 7 }),
       ]),
     );
 
-    expect(service.listSupporters().map((item) => item.nextLotteryEntryCount)).toEqual([
-      1,
-      8,
-    ]);
+    expect(service.listSupporters().map((item) => item.entryCount)).toEqual([1, 7]);
   });
 
   it("preserves storage order", () => {

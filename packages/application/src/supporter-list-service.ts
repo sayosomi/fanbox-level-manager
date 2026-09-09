@@ -1,4 +1,3 @@
-import { entryCountForLevel } from "@sayosomi/domain";
 import type { LocalStore, SupporterRecord } from "@sayosomi/storage";
 import { deriveSupporterConfirmationId } from "./supporter-confirmation-id.js";
 import {
@@ -11,8 +10,7 @@ export type SupporterListItem = Readonly<{
   id: string;
   confirmationId: string;
   displayName: string;
-  currentLevel: number;
-  nextLotteryEntryCount: number;
+  entryCount: number;
   supporting: boolean;
   latestMonthKey: string | null;
   legacyBaselineEligible: boolean;
@@ -32,8 +30,7 @@ function toSupporterListItem(
     id: record.id,
     confirmationId: deriveSupporterConfirmationId(record.id),
     displayName: record.displayName,
-    currentLevel: record.currentLevel,
-    nextLotteryEntryCount: entryCountForLevel(record.currentLevel),
+    entryCount: record.currentEntryCount,
     supporting: record.supporting,
     latestMonthKey: record.latestMonthKey,
     legacyBaselineEligible,
@@ -55,9 +52,9 @@ export function createSupporterListService(
           .listSupporters()
           .map((record) => {
             const legacyBaselineEligible =
-              record.currentLevel === 0 &&
+              record.currentEntryCount === 1 &&
               record.latestMonthKey === null &&
-              store.listLevelOperations(record.id).length === 0;
+              store.listEntryCountOperations(record.id).length === 0;
             return toSupporterListItem(
               record,
               legacyBaselineEligible,

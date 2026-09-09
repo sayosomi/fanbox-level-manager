@@ -18,6 +18,7 @@ import {
   applyVersionThreeMigration,
   applyVersionFourMigration,
   applyVersionFiveMigration,
+  applyVersionSixMigration,
   configureDatabase,
   configureFileJournalMode,
   CURRENT_SCHEMA_VERSION,
@@ -32,8 +33,8 @@ import type {
   CreateMigratedSupporterResult,
   CreateSupporterInput,
   FanboxSupporterImportRecord,
-  LevelOperationRecord,
-  LevelTransitionOperationInput,
+  EntryCountOperationRecord,
+  EntryCountTransitionOperationInput,
   LocalStore,
   MonthlyStateRecord,
   MonthlyTransitionWithOperationBatchItem,
@@ -59,7 +60,7 @@ import {
   assertValidSupporterId,
   assertValidSupporterProfilePatch,
   assertValidTransitionCallback,
-  normalizeLevelTransitionOperation,
+  normalizeEntryCountTransitionOperation,
   timestampFromClock,
   validateTransitionResult,
 } from "./validation.js";
@@ -68,21 +69,21 @@ type SupporterRow = {
   id: string;
   fanbox_relationship_id: string;
   display_name: string;
-  current_level: number;
+  current_entry_count: number;
   supporting: number;
   latest_month_key: string | null;
   created_at: string;
   updated_at: string;
 };
 
-type LevelOperationRow = {
+type EntryCountOperationRow = {
   sequence: number;
   id: string;
   supporter_id: string;
   month_key: string;
-  kind: LevelOperationRecord["kind"];
-  before_level: number;
-  after_level: number;
+  kind: EntryCountOperationRecord["kind"];
+  before_entry_count: number;
+  after_entry_count: number;
   occurred_at: string | null;
   supporting_at_month_end: number | null;
   created_at: string;
@@ -91,8 +92,8 @@ type LevelOperationRow = {
 type MonthlyStateRow = {
   supporter_id: string;
   month_key: string;
-  level: number;
-  monthly_plus_one_used: number;
+  entry_count: number;
+  monthly_entry_count_increment_used: number;
   lottery_participation_occurred: number;
   created_at: string;
   updated_at: string;
@@ -116,7 +117,7 @@ type SupporterInsertValues = Readonly<{
   id: string;
   fanboxRelationshipId: string;
   displayName: string;
-  currentLevel: number;
+  currentEntryCount: number;
   supporting: boolean;
   timestamp: string;
 }>;
@@ -126,7 +127,7 @@ function toSupporterRecord(row: SupporterRow): SupporterRecord {
     id: row.id,
     fanboxRelationshipId: row.fanbox_relationship_id,
     displayName: row.display_name,
-    currentLevel: row.current_level,
+    currentEntryCount: row.current_entry_count,
     supporting: row.supporting === 1,
     latestMonthKey: row.latest_month_key,
     createdAt: row.created_at,
@@ -138,22 +139,22 @@ function toMonthlyStateRecord(row: MonthlyStateRow): MonthlyStateRecord {
   return Object.freeze({
     supporterId: row.supporter_id,
     monthKey: row.month_key,
-    level: row.level,
-    monthlyPlusOneUsed: row.monthly_plus_one_used === 1,
+    entryCount: row.entry_count,
+    monthlyEntryCountIncrementUsed: row.monthly_entry_count_increment_used === 1,
     lotteryParticipationOccurred: row.lottery_participation_occurred === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   });
 }
 
-function toLevelOperationRecord(row: LevelOperationRow): LevelOperationRecord {
+function toEntryCountOperationRecord(row: EntryCountOperationRow): EntryCountOperationRecord {
   return Object.freeze({
     id: row.id,
     supporterId: row.supporter_id,
     monthKey: row.month_key,
     kind: row.kind,
-    beforeLevel: row.before_level,
-    afterLevel: row.after_level,
+    beforeEntryCount: row.before_entry_count,
+    afterEntryCount: row.after_entry_count,
     occurredAt: row.occurred_at,
     supportingAtMonthEnd:
       row.supporting_at_month_end === null
@@ -294,7 +295,8 @@ class LocalStoreImplementation implements LocalStore {
         id,
         fanboxRelationshipId: input.fanboxRelationshipId,
         displayName: input.displayName,
-        currentLevel: input.initialLevel === undefined ? 0 : input.initialLevel,
+        currentEntryCount:
+          input.initialEntryCount === undefined ? 1 : input.initialEntryCount,
         supporting: input.supporting,
         timestamp,
       });
@@ -332,7 +334,7 @@ class LocalStoreImplementation implements LocalStore {
             id,
             fanboxRelationshipId: create.fanboxRelationshipId,
             displayName: create.displayName,
-            currentLevel: 0,
+            currentEntryCount: 1,
             supporting: true,
             timestamp,
           });
@@ -511,20 +513,20 @@ class LocalStoreImplementation implements LocalStore {
         id: supporterId,
         fanboxRelationshipId: input.fanboxRelationshipId,
         displayName: input.displayName,
-        currentLevel: input.currentLevel,
+        currentEntryCount: input.currentEntryCount,
         supporting: input.supporting,
         timestamp,
       });
 
       this.database
         .prepare(
-          `INSERT INTO level_operations (
+          `INSERT INTO entry_count_operations (
              id,
              supporter_id,
              month_key,
              kind,
-             before_level,
-             after_level,
+             before_entry_count,
+             after_entry_count,
              occurred_at,
              supporting_at_month_end,
              created_at
@@ -534,8 +536,8 @@ class LocalStoreImplementation implements LocalStore {
           operationId,
           supporterId,
           input.monthKey,
-          input.currentLevel,
-          input.currentLevel,
+          input.currentEntryCount,
+          input.currentEntryCount,
           timestamp,
         );
 
@@ -551,22 +553,22 @@ class LocalStoreImplementation implements LocalStore {
                   supporter_id,
                   month_key,
                   kind,
-                  before_level,
-                  after_level,
+                  before_entry_count,
+                  after_entry_count,
                   occurred_at,
                   supporting_at_month_end,
                   created_at
-           FROM level_operations
+           FROM entry_count_operations
            WHERE id = ?`,
         )
-        .get(operationId) as LevelOperationRow | undefined;
+        .get(operationId) as EntryCountOperationRow | undefined;
       if (operation === undefined) {
         throw new Error("created migrated operation could not be loaded");
       }
 
       return Object.freeze({
         supporter,
-        operation: toLevelOperationRecord(operation),
+        operation: toEntryCountOperationRecord(operation),
       });
     });
 
@@ -604,13 +606,13 @@ class LocalStoreImplementation implements LocalStore {
       const existingOperation = this.database
         .prepare(
           `SELECT 1
-           FROM level_operations
+           FROM entry_count_operations
            WHERE supporter_id = ?
            LIMIT 1`,
         )
         .get(input.supporterId) as { 1: number } | undefined;
       if (
-        supporterRow.current_level !== 0 ||
+        supporterRow.current_entry_count !== 1 ||
         supporterRow.latest_month_key !== null ||
         existingOperation !== undefined
       ) {
@@ -621,10 +623,10 @@ class LocalStoreImplementation implements LocalStore {
       const updateResult = this.database
         .prepare(
           `UPDATE supporters
-           SET current_level = ?, updated_at = ?
+           SET current_entry_count = ?, updated_at = ?
            WHERE id = ?`,
         )
-        .run(input.currentLevel, timestamp, input.supporterId);
+        .run(input.currentEntryCount, timestamp, input.supporterId);
       if (updateResult.changes !== 1) {
         throw new SupporterNotFoundError(input.supporterId);
       }
@@ -632,13 +634,13 @@ class LocalStoreImplementation implements LocalStore {
       const operationId = randomUUID();
       this.database
         .prepare(
-          `INSERT INTO level_operations (
+          `INSERT INTO entry_count_operations (
              id,
              supporter_id,
              month_key,
              kind,
-             before_level,
-             after_level,
+             before_entry_count,
+             after_entry_count,
              occurred_at,
              supporting_at_month_end,
              created_at
@@ -648,8 +650,8 @@ class LocalStoreImplementation implements LocalStore {
           operationId,
           input.supporterId,
           input.monthKey,
-          input.currentLevel,
-          input.currentLevel,
+          input.currentEntryCount,
+          input.currentEntryCount,
           timestamp,
         );
 
@@ -665,22 +667,22 @@ class LocalStoreImplementation implements LocalStore {
                   supporter_id,
                   month_key,
                   kind,
-                  before_level,
-                  after_level,
+                  before_entry_count,
+                  after_entry_count,
                   occurred_at,
                   supporting_at_month_end,
                   created_at
-           FROM level_operations
+           FROM entry_count_operations
            WHERE id = ?`,
         )
-        .get(operationId) as LevelOperationRow | undefined;
+        .get(operationId) as EntryCountOperationRow | undefined;
       if (operation === undefined) {
         throw new Error("assigned legacy baseline operation could not be loaded");
       }
 
       return Object.freeze({
         supporter,
-        operation: toLevelOperationRecord(operation),
+        operation: toEntryCountOperationRecord(operation),
       });
     });
 
@@ -694,7 +696,7 @@ class LocalStoreImplementation implements LocalStore {
            id,
            fanbox_relationship_id,
            display_name,
-           current_level,
+           current_entry_count,
            supporting,
            latest_month_key,
            created_at,
@@ -705,7 +707,7 @@ class LocalStoreImplementation implements LocalStore {
         values.id,
         values.fanboxRelationshipId,
         values.displayName,
-        values.currentLevel,
+        values.currentEntryCount,
         values.supporting ? 1 : 0,
         values.timestamp,
         values.timestamp,
@@ -994,7 +996,7 @@ class LocalStoreImplementation implements LocalStore {
   transitionMonthlyStateWithOperation(
     supporterId: string,
     monthKey: string,
-    operation: LevelTransitionOperationInput,
+    operation: EntryCountTransitionOperationInput,
     transition: MonthlyStateTransition,
   ): MonthlyTransitionWithOperationResult {
     return this.runMonthlyTransition(
@@ -1028,7 +1030,7 @@ class LocalStoreImplementation implements LocalStore {
     return runTransitions();
   }
 
-  listLevelOperations(supporterId: string): readonly LevelOperationRecord[] {
+  listEntryCountOperations(supporterId: string): readonly EntryCountOperationRecord[] {
     assertValidSupporterId(supporterId);
     if (this.getSupporterById(supporterId) === null) {
       throw new SupporterNotFoundError(supporterId);
@@ -1041,18 +1043,18 @@ class LocalStoreImplementation implements LocalStore {
                 supporter_id,
                 month_key,
                 kind,
-                before_level,
-                after_level,
+                before_entry_count,
+                after_entry_count,
                 occurred_at,
                 supporting_at_month_end,
                 created_at
-         FROM level_operations
+         FROM entry_count_operations
          WHERE supporter_id = ?
          ORDER BY sequence ASC`,
       )
-      .all(supporterId) as LevelOperationRow[];
+      .all(supporterId) as EntryCountOperationRow[];
 
-    return Object.freeze(rows.map(toLevelOperationRecord));
+    return Object.freeze(rows.map(toEntryCountOperationRecord));
   }
 
   private getSupporterPortalAccessRow(
@@ -1081,13 +1083,13 @@ class LocalStoreImplementation implements LocalStore {
     supporterId: string,
     monthKey: string,
     transition: MonthlyStateTransition,
-    operation: LevelTransitionOperationInput,
+    operation: EntryCountTransitionOperationInput,
   ): MonthlyTransitionWithOperationResult;
   private runMonthlyTransition(
     supporterId: string,
     monthKey: string,
     transition: MonthlyStateTransition,
-    operation: LevelTransitionOperationInput | null,
+    operation: EntryCountTransitionOperationInput | null,
   ): MonthlyStateRecord | MonthlyTransitionWithOperationResult {
     assertValidSupporterId(supporterId);
     assertValidMonthKey(monthKey);
@@ -1130,14 +1132,14 @@ class LocalStoreImplementation implements LocalStore {
     supporterId: string,
     monthKey: string,
     transition: MonthlyStateTransition,
-    operation: LevelTransitionOperationInput,
+    operation: EntryCountTransitionOperationInput,
     timestamp: string,
   ): MonthlyTransitionWithOperationResult;
   private runMonthlyTransitionInCurrentTransaction(
     supporterId: string,
     monthKey: string,
     transition: MonthlyStateTransition,
-    operation: LevelTransitionOperationInput | null,
+    operation: EntryCountTransitionOperationInput | null,
     timestamp: string,
   ): MonthlyStateRecord | MonthlyTransitionWithOperationResult {
     const supporterRow = this.database
@@ -1155,8 +1157,8 @@ class LocalStoreImplementation implements LocalStore {
           `INSERT INTO supporter_month_states (
              supporter_id,
              month_key,
-             level,
-             monthly_plus_one_used,
+             entry_count,
+             monthly_entry_count_increment_used,
              lottery_participation_occurred,
              created_at,
              updated_at
@@ -1165,7 +1167,7 @@ class LocalStoreImplementation implements LocalStore {
         .run(
           supporterId,
           monthKey,
-          supporterRow.current_level,
+          supporterRow.current_entry_count,
           timestamp,
           timestamp,
         );
@@ -1180,8 +1182,8 @@ class LocalStoreImplementation implements LocalStore {
       stateRow = {
         supporter_id: supporterId,
         month_key: monthKey,
-        level: supporterRow.current_level,
-        monthly_plus_one_used: 0,
+        entry_count: supporterRow.current_entry_count,
+        monthly_entry_count_increment_used: 0,
         lottery_participation_occurred: 0,
         created_at: timestamp,
         updated_at: timestamp,
@@ -1208,8 +1210,8 @@ class LocalStoreImplementation implements LocalStore {
           `INSERT INTO supporter_month_states (
              supporter_id,
              month_key,
-             level,
-             monthly_plus_one_used,
+             entry_count,
+             monthly_entry_count_increment_used,
              lottery_participation_occurred,
              created_at,
              updated_at
@@ -1218,7 +1220,7 @@ class LocalStoreImplementation implements LocalStore {
         .run(
           supporterId,
           monthKey,
-          supporterRow.current_level,
+          supporterRow.current_entry_count,
           timestamp,
           timestamp,
         );
@@ -1233,8 +1235,8 @@ class LocalStoreImplementation implements LocalStore {
       stateRow = {
         supporter_id: supporterId,
         month_key: monthKey,
-        level: supporterRow.current_level,
-        monthly_plus_one_used: 0,
+        entry_count: supporterRow.current_entry_count,
+        monthly_entry_count_increment_used: 0,
         lottery_participation_occurred: 0,
         created_at: timestamp,
         updated_at: timestamp,
@@ -1242,15 +1244,15 @@ class LocalStoreImplementation implements LocalStore {
     }
 
     const snapshot = Object.freeze({
-      level: stateRow.level,
-      monthlyPlusOneUsed: stateRow.monthly_plus_one_used === 1,
+      entryCount: stateRow.entry_count,
+      monthlyEntryCountIncrementUsed: stateRow.monthly_entry_count_increment_used === 1,
       lotteryParticipationOccurred:
         stateRow.lottery_participation_occurred === 1,
     });
     const result = validateTransitionResult(transition(snapshot));
 
-    if (snapshot.monthlyPlusOneUsed && !result.monthlyPlusOneUsed) {
-      throw new RangeError("monthlyPlusOneUsed cannot change from true to false");
+    if (snapshot.monthlyEntryCountIncrementUsed && !result.monthlyEntryCountIncrementUsed) {
+      throw new RangeError("monthlyEntryCountIncrementUsed cannot change from true to false");
     }
     if (
       snapshot.lotteryParticipationOccurred &&
@@ -1262,20 +1264,20 @@ class LocalStoreImplementation implements LocalStore {
     }
 
     const normalizedOperation =
-      operation === null ? null : normalizeLevelTransitionOperation(operation);
+      operation === null ? null : normalizeEntryCountTransitionOperation(operation);
 
     this.database
       .prepare(
         `UPDATE supporter_month_states
-         SET level = ?,
-             monthly_plus_one_used = ?,
+         SET entry_count = ?,
+             monthly_entry_count_increment_used = ?,
              lottery_participation_occurred = ?,
              updated_at = ?
          WHERE supporter_id = ? AND month_key = ?`,
       )
       .run(
-        result.level,
-        result.monthlyPlusOneUsed ? 1 : 0,
+        result.entryCount,
+        result.monthlyEntryCountIncrementUsed ? 1 : 0,
         result.lotteryParticipationOccurred ? 1 : 0,
         timestamp,
         supporterId,
@@ -1284,10 +1286,10 @@ class LocalStoreImplementation implements LocalStore {
     this.database
       .prepare(
         `UPDATE supporters
-         SET current_level = ?, updated_at = ?
+         SET current_entry_count = ?, updated_at = ?
          WHERE id = ?`,
       )
-      .run(result.level, timestamp, supporterId);
+      .run(result.entryCount, timestamp, supporterId);
 
     const persistedRow = this.database
       .prepare(
@@ -1308,13 +1310,13 @@ class LocalStoreImplementation implements LocalStore {
     const operationId = randomUUID();
     this.database
       .prepare(
-        `INSERT INTO level_operations (
+        `INSERT INTO entry_count_operations (
            id,
            supporter_id,
            month_key,
            kind,
-           before_level,
-           after_level,
+           before_entry_count,
+           after_entry_count,
            occurred_at,
            supporting_at_month_end,
            created_at
@@ -1325,8 +1327,8 @@ class LocalStoreImplementation implements LocalStore {
         supporterId,
         monthKey,
         normalizedOperation.kind,
-        snapshot.level,
-        result.level,
+        snapshot.entryCount,
+        result.entryCount,
         normalizedOperation.occurredAt,
         normalizedOperation.supportingAtMonthEnd === null
           ? null
@@ -1343,22 +1345,22 @@ class LocalStoreImplementation implements LocalStore {
                 supporter_id,
                 month_key,
                 kind,
-                before_level,
-                after_level,
+                before_entry_count,
+                after_entry_count,
                 occurred_at,
                 supporting_at_month_end,
                 created_at
-         FROM level_operations
+         FROM entry_count_operations
          WHERE id = ?`,
       )
-      .get(operationId) as LevelOperationRow | undefined;
+      .get(operationId) as EntryCountOperationRow | undefined;
     if (persistedOperation === undefined) {
-      throw new Error("persisted level operation could not be loaded");
+      throw new Error("persisted entryCount operation could not be loaded");
     }
 
     return Object.freeze({
       state: persistedState,
-      operation: toLevelOperationRecord(persistedOperation),
+      operation: toEntryCountOperationRecord(persistedOperation),
     });
   }
 }
@@ -1388,20 +1390,27 @@ export function openLocalStore(
       applyVersionThreeMigration(database);
       applyVersionFourMigration(database);
       applyVersionFiveMigration(database);
+      applyVersionSixMigration(database);
     } else if (userVersion === 1) {
       applyVersionTwoMigration(database);
       applyVersionThreeMigration(database);
       applyVersionFourMigration(database);
       applyVersionFiveMigration(database);
+      applyVersionSixMigration(database);
     } else if (userVersion === 2) {
       applyVersionThreeMigration(database);
       applyVersionFourMigration(database);
       applyVersionFiveMigration(database);
+      applyVersionSixMigration(database);
     } else if (userVersion === 3) {
       applyVersionFourMigration(database);
       applyVersionFiveMigration(database);
+      applyVersionSixMigration(database);
     } else if (userVersion === 4) {
       applyVersionFiveMigration(database);
+      applyVersionSixMigration(database);
+    } else if (userVersion === 5) {
+      applyVersionSixMigration(database);
     }
 
     return new LocalStoreImplementation(database, clock);

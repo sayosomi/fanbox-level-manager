@@ -11,14 +11,14 @@ const FIRST_TIMESTAMP = "2026-09-05T00:00:00.000Z";
 
 type HistoryReason =
   | "当選"
-  | "抽選結果によるレベルアップ"
-  | "抽選不参加によるレベルアップ"
+  | "抽選結果による口数増加"
+  | "抽選不参加による口数増加"
   | "旧管理方式による履歴";
 
 type HistoryEntry = {
   id: string;
   monthKey: string;
-  level: number;
+  entryCount: number;
   reason: HistoryReason;
   occurredAt: string | null;
   recordedAt: string;
@@ -26,7 +26,7 @@ type HistoryEntry = {
 
 type SyncPayload = {
   supporterId: string;
-  currentLevel: number;
+  entryCount: number;
   history: HistoryEntry[];
 };
 
@@ -36,8 +36,8 @@ function validHistoryEntry(
   return {
     id: "entry-1",
     monthKey: "2026-09",
-    level: 1,
-    reason: "抽選結果によるレベルアップ",
+    entryCount: 1,
+    reason: "抽選結果による口数増加",
     occurredAt: "2026-09-04T00:00:00.000Z",
     recordedAt: "2026-09-05T00:00:00.000Z",
     ...overrides,
@@ -47,7 +47,7 @@ function validHistoryEntry(
 function validPayload(overrides: Partial<SyncPayload> = {}): SyncPayload {
   return {
     supporterId: "opaque-a",
-    currentLevel: 0,
+    entryCount: 1,
     history: [],
     ...overrides,
   };
@@ -115,7 +115,7 @@ async function countRows(table: "portal_supporters" | "portal_history") {
 async function historyRows() {
   const result = await env.DB
     .prepare(
-      `SELECT supporter_id, entry_id, position, month_key, level, reason,
+      `SELECT supporter_id, entry_id, position, month_key, entry_count, reason,
               occurred_at, recorded_at
        FROM portal_history
        ORDER BY supporter_id, position`,
@@ -125,7 +125,7 @@ async function historyRows() {
       entry_id: string;
       position: number;
       month_key: string;
-      level: number;
+      entry_count: number;
       reason: HistoryReason;
       occurred_at: string | null;
       recorded_at: string;
@@ -174,7 +174,7 @@ describe("portal sync migration", () => {
 
     expect(supporterColumns.results.map((column) => column.name)).toEqual([
       "supporter_id",
-      "current_level",
+      "current_entry_count",
       "verified_at",
       "created_at",
       "updated_at",
@@ -184,7 +184,7 @@ describe("portal sync migration", () => {
       "entry_id",
       "position",
       "month_key",
-      "level",
+      "entry_count",
       "reason",
       "occurred_at",
       "recorded_at",
@@ -219,27 +219,27 @@ describe("portal sync migration", () => {
       env.DB
         .prepare(
           `INSERT INTO portal_supporters
-             (supporter_id, current_level, verified_at, created_at, updated_at)
+             (supporter_id, current_entry_count, verified_at, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?)`,
         )
-        .bind("invalid-level", -1, FIRST_TIMESTAMP, FIRST_TIMESTAMP, FIRST_TIMESTAMP)
+        .bind("invalid-entry-count", 0, FIRST_TIMESTAMP, FIRST_TIMESTAMP, FIRST_TIMESTAMP)
         .run(),
     ).rejects.toThrow();
 
     await env.DB
       .prepare(
         `INSERT INTO portal_supporters
-           (supporter_id, current_level, verified_at, created_at, updated_at)
+           (supporter_id, current_entry_count, verified_at, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?)`,
       )
-      .bind("schema-owner", 0, FIRST_TIMESTAMP, FIRST_TIMESTAMP, FIRST_TIMESTAMP)
+      .bind("schema-owner", 1, FIRST_TIMESTAMP, FIRST_TIMESTAMP, FIRST_TIMESTAMP)
       .run();
 
     const insertHistory = (values: unknown[]) =>
       env.DB
         .prepare(
           `INSERT INTO portal_history
-             (supporter_id, entry_id, position, month_key, level, reason,
+             (supporter_id, entry_id, position, month_key, entry_count, reason,
               occurred_at, recorded_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         )
@@ -252,7 +252,7 @@ describe("portal sync migration", () => {
       0,
       "2026-09",
       1,
-      "抽選結果によるレベルアップ",
+      "抽選結果による口数増加",
       "2026-09-04T00:00:00.000Z",
       FIRST_TIMESTAMP,
     ];
@@ -323,7 +323,7 @@ describe("successful synchronization", () => {
     await expect(
       env.DB
         .prepare(
-          `SELECT supporter_id, current_level, verified_at, created_at, updated_at
+          `SELECT supporter_id, current_entry_count, verified_at, created_at, updated_at
            FROM portal_supporters`,
         )
         .all(),
@@ -331,7 +331,7 @@ describe("successful synchronization", () => {
       results: [
         {
           supporter_id: "opaque-a",
-          current_level: 0,
+          current_entry_count: 1,
           verified_at: FIRST_TIMESTAMP,
           created_at: FIRST_TIMESTAMP,
           updated_at: FIRST_TIMESTAMP,
@@ -345,21 +345,21 @@ describe("successful synchronization", () => {
     const history = [
       validHistoryEntry({
         id: "newest",
-        level: 7,
-        reason: "抽選結果によるレベルアップ",
+        entryCount: 7,
+        reason: "抽選結果による口数増加",
         occurredAt: "2020-01-01T00:00:00.000Z",
         recordedAt: "2030-01-01T00:00:00.000Z",
       }),
       validHistoryEntry({
         id: "legacy",
-        level: 6,
+        entryCount: 6,
         reason: "旧管理方式による履歴",
         occurredAt: null,
         recordedAt: "2026-01-01T00:00:00.000Z",
       }),
     ];
     const response = await dispatch(
-      validPayload({ currentLevel: 7, history }),
+      validPayload({ entryCount: 7, history }),
       FIRST_TIMESTAMP,
     );
 
@@ -370,8 +370,8 @@ describe("successful synchronization", () => {
         entry_id: "newest",
         position: 0,
         month_key: "2026-09",
-        level: 7,
-        reason: "抽選結果によるレベルアップ",
+        entry_count: 7,
+        reason: "抽選結果による口数増加",
         occurred_at: "2020-01-01T00:00:00.000Z",
         recorded_at: "2030-01-01T00:00:00.000Z",
       },
@@ -380,7 +380,7 @@ describe("successful synchronization", () => {
         entry_id: "legacy",
         position: 1,
         month_key: "2026-09",
-        level: 6,
+        entry_count: 6,
         reason: "旧管理方式による履歴",
         occurred_at: null,
         recorded_at: "2026-01-01T00:00:00.000Z",
@@ -390,11 +390,11 @@ describe("successful synchronization", () => {
 
   it("advances verifiedAt on an unchanged later verification", async () => {
     const payload = validPayload({
-      currentLevel: 2,
+      entryCount: 2,
       history: [
         validHistoryEntry({
           id: "unchanged",
-          level: 2,
+          entryCount: 2,
           reason: "旧管理方式による履歴",
           occurredAt: null,
         }),
@@ -411,13 +411,13 @@ describe("successful synchronization", () => {
     await expect(
       env.DB
         .prepare(
-          `SELECT current_level, verified_at, created_at, updated_at
+          `SELECT current_entry_count, verified_at, created_at, updated_at
            FROM portal_supporters WHERE supporter_id = ?`,
         )
         .bind("opaque-a")
         .first(),
     ).resolves.toEqual({
-      current_level: 2,
+      current_entry_count: 2,
       verified_at: secondTimestamp,
       created_at: FIRST_TIMESTAMP,
       updated_at: secondTimestamp,
@@ -431,14 +431,14 @@ describe("successful synchronization", () => {
       validHistoryEntry({ id: "old-1", reason: "旧管理方式による履歴", occurredAt: null }),
       validHistoryEntry({ id: "old-2", reason: "旧管理方式による履歴", occurredAt: null }),
     ];
-    await dispatch(validPayload({ currentLevel: 3, history: firstHistory }));
+    await dispatch(validPayload({ entryCount: 3, history: firstHistory }));
 
     const secondTimestamp = "2026-09-06T00:00:00.000Z";
     const secondHistory = [
       validHistoryEntry({
         id: "newest-by-request",
         monthKey: "2026-09",
-        reason: "抽選結果によるレベルアップ",
+        reason: "抽選結果による口数増加",
         occurredAt: "2030-01-01T00:00:00.000Z",
         recordedAt: "2030-01-01T00:00:00.000Z",
       }),
@@ -451,7 +451,7 @@ describe("successful synchronization", () => {
       }),
     ];
     const response = await dispatch(
-      validPayload({ currentLevel: 9, history: secondHistory }),
+      validPayload({ entryCount: 9, history: secondHistory }),
       secondTimestamp,
     );
 
@@ -466,11 +466,11 @@ describe("successful synchronization", () => {
     await expect(
       env.DB
         .prepare(
-          "SELECT current_level, verified_at FROM portal_supporters WHERE supporter_id = ?",
+          "SELECT current_entry_count, verified_at FROM portal_supporters WHERE supporter_id = ?",
         )
         .bind("opaque-a")
         .first(),
-    ).resolves.toEqual({ current_level: 9, verified_at: secondTimestamp });
+    ).resolves.toEqual({ current_entry_count: 9, verified_at: secondTimestamp });
   });
 });
 
@@ -510,9 +510,9 @@ describe("request validation and privacy", () => {
   });
 
   it.each([-1, 1.5, "7", null])(
-    "rejects invalid currentLevel %j",
-    async (currentLevel) => {
-      const response = await dispatch({ ...validPayload(), currentLevel });
+    "rejects invalid entryCount %j",
+    async (entryCount) => {
+      const response = await dispatch({ ...validPayload(), entryCount });
 
       expect(response.status).toBe(400);
       expect(await jsonBody(response)).toEqual({ error: "invalid_request" });
@@ -520,10 +520,10 @@ describe("request validation and privacy", () => {
     },
   );
 
-  it("rejects an invalid history level", async () => {
+  it("rejects an invalid history entry count", async () => {
     const response = await dispatch({
       ...validPayload(),
-      history: [validHistoryEntry({ level: -1 })],
+      history: [validHistoryEntry({ entryCount: 0 })],
     });
 
     expect(response.status).toBe(400);
@@ -578,8 +578,8 @@ describe("request validation and privacy", () => {
 
   it.each([
     { reason: "当選" as const, occurredAt: null },
-    { reason: "抽選結果によるレベルアップ" as const, occurredAt: null },
-    { reason: "抽選不参加によるレベルアップ" as const, occurredAt: FIRST_TIMESTAMP },
+    { reason: "抽選結果による口数増加" as const, occurredAt: null },
+    { reason: "抽選不参加による口数増加" as const, occurredAt: FIRST_TIMESTAMP },
     { reason: "旧管理方式による履歴" as const, occurredAt: FIRST_TIMESTAMP },
   ])("enforces reason/occurredAt association", async ({ reason, occurredAt }) => {
     const response = await dispatch({
@@ -596,7 +596,7 @@ describe("request validation and privacy", () => {
       ...validPayload(),
       history: [
         validHistoryEntry({ id: "duplicate" }),
-        validHistoryEntry({ id: "duplicate", level: 2 }),
+        validHistoryEntry({ id: "duplicate", entryCount: 2 }),
       ],
     });
 
@@ -606,7 +606,7 @@ describe("request validation and privacy", () => {
 
   it.each([
     "supporterId",
-    "currentLevel",
+    "entryCount",
     "history",
   ])("rejects a missing top-level field %s", async (missingField) => {
     const payload: Record<string, unknown> = validPayload();
@@ -621,7 +621,7 @@ describe("request validation and privacy", () => {
   it.each([
     "id",
     "monthKey",
-    "level",
+    "entryCount",
     "reason",
     "occurredAt",
     "recordedAt",
@@ -663,7 +663,7 @@ describe("history size and atomicity", () => {
       }),
     );
     const accepted = await dispatch(
-      validPayload({ currentLevel: 400, history: history400 }),
+      validPayload({ entryCount: 400, history: history400 }),
     );
 
     expect(accepted.status).toBe(200);
@@ -678,7 +678,7 @@ describe("history size and atomicity", () => {
       }),
     ];
     const rejected = await dispatch(
-      validPayload({ currentLevel: 401, history: history401 }),
+      validPayload({ entryCount: 401, history: history401 }),
       "2026-09-05T01:00:00.000Z",
     );
 
@@ -688,12 +688,12 @@ describe("history size and atomicity", () => {
     await expect(
       env.DB
         .prepare(
-          "SELECT current_level, verified_at FROM portal_supporters WHERE supporter_id = ?",
+          "SELECT current_entry_count, verified_at FROM portal_supporters WHERE supporter_id = ?",
         )
         .bind("opaque-a")
         .first(),
     ).resolves.toEqual({
-      current_level: 400,
+      current_entry_count: 400,
       verified_at: FIRST_TIMESTAMP,
     });
   });
@@ -709,7 +709,7 @@ describe("history size and atomicity", () => {
     await dispatch(
       validPayload({
         supporterId: "opaque-rollback",
-        currentLevel: 4,
+        entryCount: 4,
         history: firstHistory,
       }),
       FIRST_TIMESTAMP,
@@ -729,7 +729,7 @@ describe("history size and atomicity", () => {
     const response = await dispatch(
       validPayload({
         supporterId: "opaque-rollback",
-        currentLevel: 9,
+        entryCount: 9,
         history: [
           validHistoryEntry({
             id: "force-failure",
@@ -746,13 +746,13 @@ describe("history size and atomicity", () => {
     await expect(
       env.DB
         .prepare(
-          `SELECT current_level, verified_at, updated_at, created_at
+          `SELECT current_entry_count, verified_at, updated_at, created_at
            FROM portal_supporters WHERE supporter_id = ?`,
         )
         .bind("opaque-rollback")
         .first(),
     ).resolves.toEqual({
-      current_level: 4,
+      current_entry_count: 4,
       verified_at: FIRST_TIMESTAMP,
       updated_at: FIRST_TIMESTAMP,
       created_at: FIRST_TIMESTAMP,

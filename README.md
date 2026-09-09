@@ -1,9 +1,9 @@
 # fanbox-level-manager
 
-Tools for managing Sayosomi Lab's FANBOX supporter lottery levels.
+Tools for managing Sayosomi Lab's FANBOX supporter lottery entry counts.
 
 The product consists of a Mac-local admin web application and a supporter-facing
-Cloudflare page for viewing current levels and level history.
+Cloudflare page for viewing current entry counts and entry-count history.
 
 ## Current status
 

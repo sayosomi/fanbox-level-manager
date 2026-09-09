@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createExistingSupporterMigrationService,
-  createLotteryLevelService,
+  createLotteryEntryCountService,
   createSupporterPortalSnapshotService,
 } from "./index.js";
 import {
@@ -23,14 +23,14 @@ function fixedClock(): Date {
 
 function openServices(): {
   store: LocalStore;
-  lotteryService: ReturnType<typeof createLotteryLevelService>;
+  lotteryService: ReturnType<typeof createLotteryEntryCountService>;
   migrationService: ReturnType<typeof createExistingSupporterMigrationService>;
   snapshotService: ReturnType<typeof createSupporterPortalSnapshotService>;
 } {
   const store = track(openLocalStore(":memory:", { clock: fixedClock }));
   return {
     store,
-    lotteryService: createLotteryLevelService(store),
+    lotteryService: createLotteryEntryCountService(store),
     migrationService: createExistingSupporterMigrationService(store),
     snapshotService: createSupporterPortalSnapshotService(store),
   };
@@ -39,13 +39,13 @@ function openServices(): {
 function createSupporter(
   store: LocalStore,
   relationshipId: string,
-  initialLevel = 0,
+  initialEntryCount = 1,
 ): ReturnType<LocalStore["createSupporter"]> {
   return store.createSupporter({
     fanboxRelationshipId: relationshipId,
     displayName: "Supporter",
     supporting: true,
-    initialLevel,
+    initialEntryCount,
   });
 }
 
@@ -56,28 +56,26 @@ afterEach(() => {
 });
 
 describe("supporter portal snapshot application service", () => {
-  it("projects a new level-zero supporter with no operations", () => {
+  it("projects a new one-entry supporter with no operations", () => {
     const { snapshotService, store } = openServices();
-    const supporter = createSupporter(store, "level-zero");
+    const supporter = createSupporter(store, "entryCount-one");
 
     const snapshot = snapshotService.getSupporterPortalSnapshot(supporter.id);
 
     expect(snapshot).toEqual({
-      currentLevel: 0,
-      nextLotteryEntryCount: 1,
+      entryCount: 1,
       history: [],
     });
     expect(Object.isFrozen(snapshot.history)).toBe(true);
   });
 
-  it("uses a nonzero persisted level without history", () => {
+  it("uses a nonzero persisted entryCount without history", () => {
     const { snapshotService, store } = openServices();
-    const supporter = createSupporter(store, "level-five", 5);
+    const supporter = createSupporter(store, "entryCount-five", 5);
 
     const snapshot = snapshotService.getSupporterPortalSnapshot(supporter.id);
 
-    expect(snapshot.currentLevel).toBe(5);
-    expect(snapshot.nextLotteryEntryCount).toBe(6);
+    expect(snapshot.entryCount).toBe(5);
     expect(snapshot.history).toEqual([]);
   });
 
@@ -87,7 +85,7 @@ describe("supporter portal snapshot application service", () => {
       fanboxRelationshipId: "migrated-supporter",
       displayName: "Migrated supporter",
       supporting: true,
-      currentLevel: 7,
+      currentEntryCount: 7,
       migratedAt: new Date("2026-09-01T00:00:00.000Z"),
     });
 
@@ -95,16 +93,15 @@ describe("supporter portal snapshot application service", () => {
       migrated.supporter.id,
     );
 
-    expect(snapshot.currentLevel).toBe(7);
-    expect(snapshot.nextLotteryEntryCount).toBe(8);
+    expect(snapshot.entryCount).toBe(7);
     expect(snapshot.history).toHaveLength(1);
     expect(snapshot.history[0]).toMatchObject({
-      level: 7,
+      entryCount: 7,
       reason: "旧管理方式による履歴",
     });
   });
 
-  it("projects the first lottery loss level-up", () => {
+  it("projects the first lottery loss entryCount-up", () => {
     const { lotteryService, snapshotService, store } = openServices();
     const supporter = createSupporter(store, "first-loss");
 
@@ -115,11 +112,10 @@ describe("supporter portal snapshot application service", () => {
 
     const snapshot = snapshotService.getSupporterPortalSnapshot(supporter.id);
 
-    expect(snapshot.currentLevel).toBe(1);
-    expect(snapshot.nextLotteryEntryCount).toBe(2);
+    expect(snapshot.entryCount).toBe(2);
     expect(snapshot.history[0]).toMatchObject({
-      reason: "抽選結果によるレベルアップ",
-      level: 1,
+      reason: "抽選結果による口数増加",
+      entryCount: 2,
     });
   });
 
@@ -134,11 +130,10 @@ describe("supporter portal snapshot application service", () => {
 
     const snapshot = snapshotService.getSupporterPortalSnapshot(supporter.id);
 
-    expect(snapshot.currentLevel).toBe(0);
-    expect(snapshot.nextLotteryEntryCount).toBe(1);
+    expect(snapshot.entryCount).toBe(1);
     expect(snapshot.history[0]).toMatchObject({
       reason: "当選",
-      level: 0,
+      entryCount: 1,
     });
   });
 
@@ -150,16 +145,15 @@ describe("supporter portal snapshot application service", () => {
     lotteryService.recordLotteryLoss(supporter.id, occurredAt);
     lotteryService.recordLotteryLoss(supporter.id, occurredAt);
 
-    expect(store.listLevelOperations(supporter.id)).toHaveLength(2);
+    expect(store.listEntryCountOperations(supporter.id)).toHaveLength(2);
 
     const snapshot = snapshotService.getSupporterPortalSnapshot(supporter.id);
 
-    expect(snapshot.currentLevel).toBe(1);
-    expect(snapshot.nextLotteryEntryCount).toBe(2);
+    expect(snapshot.entryCount).toBe(2);
     expect(snapshot.history).toHaveLength(1);
     expect(snapshot.history[0]).toMatchObject({
-      reason: "抽選結果によるレベルアップ",
-      level: 1,
+      reason: "抽選結果による口数増加",
+      entryCount: 2,
     });
   });
 
@@ -169,7 +163,7 @@ describe("supporter portal snapshot application service", () => {
       fanboxRelationshipId: "migration-order",
       displayName: "Migrated supporter",
       supporting: true,
-      currentLevel: 7,
+      currentEntryCount: 7,
       migratedAt: new Date("2026-09-01T00:00:00.000Z"),
     });
 
@@ -182,12 +176,11 @@ describe("supporter portal snapshot application service", () => {
       migrated.supporter.id,
     );
 
-    expect(snapshot.currentLevel).toBe(8);
-    expect(snapshot.nextLotteryEntryCount).toBe(9);
+    expect(snapshot.entryCount).toBe(8);
     expect(snapshot.history).toHaveLength(2);
     expect(snapshot.history).toMatchObject([
-      { reason: "抽選結果によるレベルアップ", level: 8 },
-      { reason: "旧管理方式による履歴", level: 7 },
+      { reason: "抽選結果による口数増加", entryCount: 8 },
+      { reason: "旧管理方式による履歴", entryCount: 7 },
     ]);
   });
 
@@ -197,13 +190,12 @@ describe("supporter portal snapshot application service", () => {
       fanboxRelationshipId: "inactive-supporter",
       displayName: "Inactive supporter",
       supporting: false,
-      initialLevel: 4,
+      initialEntryCount: 4,
     });
 
     const snapshot = snapshotService.getSupporterPortalSnapshot(supporter.id);
 
-    expect(snapshot.currentLevel).toBe(4);
-    expect(snapshot.nextLotteryEntryCount).toBe(5);
+    expect(snapshot.entryCount).toBe(4);
     expect(snapshot).not.toHaveProperty("supporting");
   });
 
@@ -219,9 +211,8 @@ describe("supporter portal snapshot application service", () => {
     const snapshot = snapshotService.getSupporterPortalSnapshot(supporter.id);
 
     expect(Object.keys(snapshot).sort()).toEqual([
-      "currentLevel",
+      "entryCount",
       "history",
-      "nextLotteryEntryCount",
     ]);
     for (const property of [
       "supporterId",
@@ -243,8 +234,8 @@ describe("supporter portal snapshot application service", () => {
       throw new Error("expected a projected history entry");
     }
     expect(Object.keys(entry).sort()).toEqual([
+      "entryCount",
       "id",
-      "level",
       "monthKey",
       "occurredAt",
       "reason",
@@ -261,7 +252,7 @@ describe("supporter portal snapshot application service", () => {
       supporter.id,
       new Date("2026-09-15T00:00:00.000Z"),
     );
-    const operation = store.listLevelOperations(supporter.id)[0];
+    const operation = store.listEntryCountOperations(supporter.id)[0];
     if (operation === undefined) {
       throw new Error("expected a persisted operation");
     }
@@ -285,10 +276,7 @@ describe("supporter portal snapshot application service", () => {
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(Object.isFrozen(snapshot.history)).toBe(true);
     expect(() => {
-      (snapshot as unknown as { currentLevel: number }).currentLevel = 99;
-    }).toThrow(TypeError);
-    expect(() => {
-      (snapshot as unknown as { nextLotteryEntryCount: number }).nextLotteryEntryCount = 99;
+      (snapshot as unknown as { entryCount: number }).entryCount = 99;
     }).toThrow(TypeError);
     expect(() => {
       (snapshot.history as unknown as unknown[]).push(snapshot.history[0]);
@@ -306,10 +294,8 @@ describe("supporter portal snapshot application service", () => {
     );
     const snapshotB = snapshotService.getSupporterPortalSnapshot(supporter.id);
 
-    expect(snapshotA.currentLevel).toBe(0);
-    expect(snapshotA.nextLotteryEntryCount).toBe(1);
-    expect(snapshotB.currentLevel).toBe(1);
-    expect(snapshotB.nextLotteryEntryCount).toBe(2);
+    expect(snapshotA.entryCount).toBe(1);
+    expect(snapshotB.entryCount).toBe(2);
     expect(snapshotA).not.toBe(snapshotB);
   });
 
