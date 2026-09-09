@@ -15,6 +15,7 @@ import {
   applyVersionTwoMigration,
   applyVersionThreeMigration,
   applyVersionFourMigration,
+  applyVersionFiveMigration,
   configureDatabase,
   configureFileJournalMode,
   CURRENT_SCHEMA_VERSION,
@@ -42,6 +43,7 @@ import type {
 import {
   assertNonBlankString,
   assertValidApplyFanboxSupporterImportInput,
+  assertValidBackupDestinationDirectory,
   assertValidCreateMigratedSupporterInput,
   assertValidCreateSupporterInput,
   assertValidMonthKey,
@@ -232,6 +234,30 @@ class LocalStoreImplementation implements LocalStore {
 
   createDatabaseSnapshot(): Uint8Array {
     return this.database.serialize();
+  }
+
+  getBackupDestinationDirectory(): string | null {
+    const row = this.database
+      .prepare(
+        `SELECT destination_directory
+         FROM backup_settings
+         WHERE singleton_id = 1`,
+      )
+      .get() as { destination_directory: string } | undefined;
+
+    return row === undefined ? null : row.destination_directory;
+  }
+
+  setBackupDestinationDirectory(directory: string): void {
+    assertValidBackupDestinationDirectory(directory);
+    this.database
+      .prepare(
+        `INSERT INTO backup_settings (singleton_id, destination_directory)
+         VALUES (1, ?)
+         ON CONFLICT(singleton_id) DO UPDATE SET
+           destination_directory = excluded.destination_directory`,
+      )
+      .run(directory);
   }
 
   createSupporter(input: CreateSupporterInput): SupporterRecord {
@@ -1155,15 +1181,21 @@ export function openLocalStore(
       applyVersionTwoMigration(database);
       applyVersionThreeMigration(database);
       applyVersionFourMigration(database);
+      applyVersionFiveMigration(database);
     } else if (userVersion === 1) {
       applyVersionTwoMigration(database);
       applyVersionThreeMigration(database);
       applyVersionFourMigration(database);
+      applyVersionFiveMigration(database);
     } else if (userVersion === 2) {
       applyVersionThreeMigration(database);
       applyVersionFourMigration(database);
+      applyVersionFiveMigration(database);
     } else if (userVersion === 3) {
       applyVersionFourMigration(database);
+      applyVersionFiveMigration(database);
+    } else if (userVersion === 4) {
+      applyVersionFiveMigration(database);
     }
 
     return new LocalStoreImplementation(database, clock);

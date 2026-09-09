@@ -49,7 +49,7 @@ afterEach(() => {
 });
 
 describe("schema migration and connection setup", () => {
-  it("migrates an empty in-memory database to version 4", () => {
+  it("migrates an empty in-memory database to version 5", () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const database = databaseOf(store);
     const tables = database
@@ -63,15 +63,28 @@ describe("schema migration and connection setup", () => {
       .map((row) => (row as { name: string }).name)
       .filter((name) => name !== "sqlite_sequence");
 
-    expect(CURRENT_SCHEMA_VERSION).toBe(4);
-    expect(database.pragma("user_version", { simple: true })).toBe(4);
+    expect(CURRENT_SCHEMA_VERSION).toBe(5);
+    expect(database.pragma("user_version", { simple: true })).toBe(5);
     expect(tables).toEqual([
+      "backup_settings",
       "fanbox_supporter_imports",
       "level_operations",
       "supporter_month_states",
       "supporter_portal_access",
       "supporters",
     ]);
+    expect(
+      database
+        .prepare("PRAGMA table_info(backup_settings)")
+        .all()
+        .map((row) => (row as { name: string }).name),
+    ).toEqual(["singleton_id", "destination_directory"]);
+    expect(
+      database
+        .prepare("PRAGMA table_list")
+        .all()
+        .find((row) => (row as { name: string }).name === "backup_settings"),
+    ).toMatchObject({ strict: 1 });
     expect(
       database
         .prepare(
@@ -180,7 +193,7 @@ describe("schema migration and connection setup", () => {
         openLocalStore(databasePath, { clock: fixedClock }),
       );
       expect(databaseOf(reopened).pragma("user_version", { simple: true })).toBe(
-        4,
+        5,
       );
       expect(reopened.getSupporterById(created.id)).toEqual(expectedSupporter);
       expect(reopened.listLevelOperations(created.id)).toEqual([operation]);
@@ -198,7 +211,7 @@ describe("schema migration and connection setup", () => {
 
     try {
       const store = track(openLocalStore(databasePath, { clock: fixedClock }));
-      databaseOf(store).pragma("user_version = 5");
+      databaseOf(store).pragma("user_version = 6");
       store.close();
       const before = readFileSync(databasePath);
 
@@ -209,8 +222,8 @@ describe("schema migration and connection setup", () => {
         openLocalStore(databasePath, { clock: fixedClock });
       } catch (error: unknown) {
         expect(error).toBeInstanceOf(UnsupportedSchemaVersionError);
-        expect((error as UnsupportedSchemaVersionError).actualVersion).toBe(5);
-        expect((error as UnsupportedSchemaVersionError).supportedVersion).toBe(4);
+        expect((error as UnsupportedSchemaVersionError).actualVersion).toBe(6);
+        expect((error as UnsupportedSchemaVersionError).supportedVersion).toBe(5);
       }
 
       expect(readFileSync(databasePath)).toEqual(before);
@@ -219,7 +232,7 @@ describe("schema migration and connection setup", () => {
     }
   });
 
-  it("migrates a real version-1 database through version 4 without changing data", () => {
+  it("migrates a real version-1 database through version 5 without changing data", () => {
     const directory = mkdtempSync(join(tmpdir(), "fanbox-level-manager-"));
     const databasePath = join(directory, "version-one.sqlite");
 
@@ -279,7 +292,7 @@ describe("schema migration and connection setup", () => {
       );
 
       expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(
-        4,
+        5,
       );
       expect(migrated.getSupporterById("supporter-v1")).toEqual({
         id: "supporter-v1",
@@ -306,7 +319,7 @@ describe("schema migration and connection setup", () => {
     }
   });
 
-  it("migrates a real version-2 database to version 4 without changing data", () => {
+  it("migrates a real version-2 database to version 5 without changing data", () => {
     const directory = mkdtempSync(join(tmpdir(), "fanbox-level-manager-"));
     const databasePath = join(directory, "version-two.sqlite");
 
@@ -392,7 +405,7 @@ describe("schema migration and connection setup", () => {
       );
 
       expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(
-        4,
+        5,
       );
       expect(migrated.getSupporterById("supporter-v2")).toEqual({
         id: "supporter-v2",
@@ -431,7 +444,7 @@ describe("schema migration and connection setup", () => {
     }
   });
 
-  it("migrates a real version-3 database to version 4 without changing data", () => {
+  it("migrates a real version-3 database to version 5 without changing data", () => {
     const directory = mkdtempSync(join(tmpdir(), "fanbox-level-manager-"));
     const databasePath = join(directory, "version-three.sqlite");
 
@@ -490,7 +503,7 @@ describe("schema migration and connection setup", () => {
       );
 
       expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(
-        4,
+        5,
       );
       expect(migrated.getSupporterById("supporter-v3")).toEqual({
         id: "supporter-v3",

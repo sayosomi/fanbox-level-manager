@@ -130,6 +130,8 @@ export type OpenLocalStoreOptions = Readonly<{
 export interface LocalStore {
   close(): void;
   createDatabaseSnapshot(): Uint8Array;
+  getBackupDestinationDirectory(): string | null;
+  setBackupDestinationDirectory(directory: string): void;
   createSupporter(input: CreateSupporterInput): SupporterRecord;
   applyFanboxSupporterImport(
     input: ApplyFanboxSupporterImportInput,
