@@ -42,7 +42,7 @@ main() {
   if (( ${+FANBOX_PORTAL_ORIGIN} )); then
     portal_origin="$FANBOX_PORTAL_ORIGIN"
   else
-    portal_origin="https://fanbox-level-portal.mitsube-github.workers.dev"
+    portal_origin="https://fanbox-level-portal.sayosomi.workers.dev"
   fi
 
   if (( ${+FANBOX_PORTAL_SYNC_API_TOKEN} )); then
