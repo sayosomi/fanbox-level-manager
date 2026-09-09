@@ -13,6 +13,8 @@ import {
   applyVersionOneMigration,
   applyVersionTwoMigration,
   applyVersionThreeMigration,
+  applyVersionFourMigration,
+  applyVersionFiveMigration,
   configureDatabase,
 } from "./migrations.js";
 
@@ -49,7 +51,7 @@ afterEach(() => {
 });
 
 describe("schema migration and connection setup", () => {
-  it("migrates an empty in-memory database to version 5", () => {
+  it("migrates an empty in-memory database to version 6", () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const database = databaseOf(store);
     const tables = database
@@ -63,12 +65,12 @@ describe("schema migration and connection setup", () => {
       .map((row) => (row as { name: string }).name)
       .filter((name) => name !== "sqlite_sequence");
 
-    expect(CURRENT_SCHEMA_VERSION).toBe(5);
-    expect(database.pragma("user_version", { simple: true })).toBe(5);
+    expect(CURRENT_SCHEMA_VERSION).toBe(6);
+    expect(database.pragma("user_version", { simple: true })).toBe(6);
     expect(tables).toEqual([
       "backup_settings",
+      "entry_count_operations",
       "fanbox_supporter_imports",
-      "level_operations",
       "supporter_month_states",
       "supporter_portal_access",
       "supporters",
@@ -95,7 +97,7 @@ describe("schema migration and connection setup", () => {
         )
         .all()
         .map((row) => (row as { name: string }).name),
-    ).toContain("level_operations_supporter_sequence_idx");
+    ).toContain("entry_count_operations_supporter_sequence_idx");
     expect(database.pragma("foreign_keys", { simple: true })).toBe(1);
     expect(database.pragma("synchronous", { simple: true })).toBe(2);
     expect(database.pragma("busy_timeout", { simple: true })).toBe(5000);
@@ -170,7 +172,7 @@ describe("schema migration and connection setup", () => {
         fanboxRelationshipId: "relationship-1",
         displayName: "First supporter",
         supporting: true,
-        initialLevel: 4,
+        initialEntryCount: 4,
       });
       const operation = firstStore.transitionMonthlyStateWithOperation(
         created.id,
@@ -181,8 +183,8 @@ describe("schema migration and connection setup", () => {
         },
         (state) => ({
           ...state,
-          level: state.level + 1,
-          monthlyPlusOneUsed: true,
+          entryCount: state.entryCount + 1,
+          monthlyEntryCountIncrementUsed: true,
           lotteryParticipationOccurred: true,
         }),
       ).operation;
@@ -192,11 +194,9 @@ describe("schema migration and connection setup", () => {
       const reopened = track(
         openLocalStore(databasePath, { clock: fixedClock }),
       );
-      expect(databaseOf(reopened).pragma("user_version", { simple: true })).toBe(
-        5,
-      );
+      expect(databaseOf(reopened).pragma("user_version", { simple: true })).toBe(6);
       expect(reopened.getSupporterById(created.id)).toEqual(expectedSupporter);
-      expect(reopened.listLevelOperations(created.id)).toEqual([operation]);
+      expect(reopened.listEntryCountOperations(created.id)).toEqual([operation]);
       expect(
         databaseOf(reopened).pragma("journal_mode", { simple: true }),
       ).toBe("wal");
@@ -211,7 +211,7 @@ describe("schema migration and connection setup", () => {
 
     try {
       const store = track(openLocalStore(databasePath, { clock: fixedClock }));
-      databaseOf(store).pragma("user_version = 6");
+      databaseOf(store).pragma("user_version = 7");
       store.close();
       const before = readFileSync(databasePath);
 
@@ -222,8 +222,8 @@ describe("schema migration and connection setup", () => {
         openLocalStore(databasePath, { clock: fixedClock });
       } catch (error: unknown) {
         expect(error).toBeInstanceOf(UnsupportedSchemaVersionError);
-        expect((error as UnsupportedSchemaVersionError).actualVersion).toBe(6);
-        expect((error as UnsupportedSchemaVersionError).supportedVersion).toBe(5);
+        expect((error as UnsupportedSchemaVersionError).actualVersion).toBe(7);
+        expect((error as UnsupportedSchemaVersionError).supportedVersion).toBe(6);
       }
 
       expect(readFileSync(databasePath)).toEqual(before);
@@ -291,14 +291,12 @@ describe("schema migration and connection setup", () => {
         openLocalStore(databasePath, { clock: fixedClock }),
       );
 
-      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(
-        5,
-      );
+      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(6);
       expect(migrated.getSupporterById("supporter-v1")).toEqual({
         id: "supporter-v1",
         fanboxRelationshipId: "relationship-v1",
         displayName: "Version one supporter",
-        currentLevel: 7,
+        currentEntryCount: 8,
         supporting: false,
         latestMonthKey: "2026-09",
         createdAt: "2026-09-01T00:00:00.000Z",
@@ -307,13 +305,13 @@ describe("schema migration and connection setup", () => {
       expect(migrated.getMonthlyState("supporter-v1", "2026-09")).toEqual({
         supporterId: "supporter-v1",
         monthKey: "2026-09",
-        level: 7,
-        monthlyPlusOneUsed: true,
+        entryCount: 8,
+        monthlyEntryCountIncrementUsed: true,
         lotteryParticipationOccurred: false,
         createdAt: "2026-09-01T00:00:00.000Z",
         updatedAt: "2026-09-02T00:00:00.000Z",
       });
-      expect(migrated.listLevelOperations("supporter-v1")).toEqual([]);
+      expect(migrated.listEntryCountOperations("supporter-v1")).toEqual([]);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -404,14 +402,12 @@ describe("schema migration and connection setup", () => {
         openLocalStore(databasePath, { clock: fixedClock }),
       );
 
-      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(
-        5,
-      );
+      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(6);
       expect(migrated.getSupporterById("supporter-v2")).toEqual({
         id: "supporter-v2",
         fanboxRelationshipId: "relationship-v2",
         displayName: "Version two supporter",
-        currentLevel: 5,
+        currentEntryCount: 6,
         supporting: true,
         latestMonthKey: "2026-09",
         createdAt: "2026-09-01T00:00:00.000Z",
@@ -420,20 +416,20 @@ describe("schema migration and connection setup", () => {
       expect(migrated.getMonthlyState("supporter-v2", "2026-09")).toEqual({
         supporterId: "supporter-v2",
         monthKey: "2026-09",
-        level: 5,
-        monthlyPlusOneUsed: true,
+        entryCount: 6,
+        monthlyEntryCountIncrementUsed: true,
         lotteryParticipationOccurred: true,
         createdAt: "2026-09-01T00:00:00.000Z",
         updatedAt: "2026-09-02T00:00:00.000Z",
       });
-      expect(migrated.listLevelOperations("supporter-v2")).toEqual([
+      expect(migrated.listEntryCountOperations("supporter-v2")).toEqual([
         {
           id: "operation-v2",
           supporterId: "supporter-v2",
           monthKey: "2026-09",
           kind: "lottery_loss",
-          beforeLevel: 5,
-          afterLevel: 6,
+          beforeEntryCount: 6,
+          afterEntryCount: 7,
           occurredAt: "2026-09-15T00:00:00.000Z",
           supportingAtMonthEnd: null,
           createdAt: "2026-09-15T00:00:00.000Z",
@@ -502,14 +498,12 @@ describe("schema migration and connection setup", () => {
         openLocalStore(databasePath, { clock: fixedClock }),
       );
 
-      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(
-        5,
-      );
+      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(6);
       expect(migrated.getSupporterById("supporter-v3")).toEqual({
         id: "supporter-v3",
         fanboxRelationshipId: "relationship-v3",
         displayName: "Version three supporter",
-        currentLevel: 3,
+        currentEntryCount: 4,
         supporting: true,
         latestMonthKey: null,
         createdAt: "2026-09-01T00:00:00.000Z",
@@ -531,6 +525,468 @@ describe("schema migration and connection setup", () => {
           )
           .all(),
       ).toEqual([{ name: "fanbox_supporter_imports" }]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("maps legacy levels to entry counts exactly once while preserving identities and metadata", () => {
+    const directory = mkdtempSync(join(tmpdir(), "fanbox-level-manager-"));
+    const databasePath = join(directory, "version-five.sqlite");
+
+    try {
+      const legacyDatabase = new Database(databasePath);
+      configureDatabase(legacyDatabase);
+      applyVersionOneMigration(legacyDatabase);
+      applyVersionTwoMigration(legacyDatabase);
+      applyVersionThreeMigration(legacyDatabase);
+      applyVersionFourMigration(legacyDatabase);
+      applyVersionFiveMigration(legacyDatabase);
+
+      const supporters = [
+        [
+          "supporter-zero",
+          "relationship-zero",
+          "Zero supporter",
+          0,
+          1,
+          null,
+          "2026-01-01T00:00:00.000Z",
+          "2026-01-01T00:01:00.000Z",
+        ],
+        [
+          "supporter-one",
+          "relationship-one",
+          "One supporter",
+          1,
+          0,
+          "2026-09",
+          "2026-02-01T00:00:00.000Z",
+          "2026-02-01T00:01:00.000Z",
+        ],
+        [
+          "supporter-fourteen",
+          "relationship-fourteen",
+          "Fourteen supporter",
+          14,
+          1,
+          "2026-09",
+          "2026-03-01T00:00:00.000Z",
+          "2026-03-01T00:01:00.000Z",
+        ],
+      ] as const;
+      const insertSupporter = legacyDatabase.prepare(
+        `INSERT INTO supporters (
+           id,
+           fanbox_relationship_id,
+           display_name,
+           current_level,
+           supporting,
+           latest_month_key,
+           created_at,
+           updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      for (const supporter of supporters) {
+        insertSupporter.run(...supporter);
+      }
+
+      const insertMonthState = legacyDatabase.prepare(
+        `INSERT INTO supporter_month_states (
+           supporter_id,
+           month_key,
+           level,
+           monthly_plus_one_used,
+           lottery_participation_occurred,
+           created_at,
+           updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      );
+      insertMonthState.run(
+        "supporter-zero",
+        "2026-01",
+        0,
+        0,
+        0,
+        "2026-01-01T00:00:00.000Z",
+        "2026-01-01T00:01:00.000Z",
+      );
+      insertMonthState.run(
+        "supporter-one",
+        "2026-02",
+        1,
+        1,
+        1,
+        "2026-02-01T00:00:00.000Z",
+        "2026-02-01T00:01:00.000Z",
+      );
+      insertMonthState.run(
+        "supporter-fourteen",
+        "2026-03",
+        14,
+        0,
+        1,
+        "2026-03-01T00:00:00.000Z",
+        "2026-03-01T00:01:00.000Z",
+      );
+
+      const insertOperation = legacyDatabase.prepare(
+        `INSERT INTO level_operations (
+           sequence,
+           id,
+           supporter_id,
+           month_key,
+           kind,
+           before_level,
+           after_level,
+           occurred_at,
+           supporting_at_month_end,
+           created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      insertOperation.run(
+        2,
+        "operation-zero-loss",
+        "supporter-zero",
+        "2026-01",
+        "lottery_loss",
+        0,
+        1,
+        "2026-01-15T00:00:00.000Z",
+        null,
+        "2026-01-15T00:00:00.000Z",
+      );
+      insertOperation.run(
+        11,
+        "operation-zero-win",
+        "supporter-zero",
+        "2026-01",
+        "lottery_win",
+        1,
+        0,
+        "2026-01-20T00:00:00.000Z",
+        null,
+        "2026-01-20T00:00:00.000Z",
+      );
+      insertOperation.run(
+        20,
+        "operation-fourteen-loss",
+        "supporter-fourteen",
+        "2026-03",
+        "lottery_loss",
+        14,
+        14,
+        "2026-03-15T00:00:00.000Z",
+        null,
+        "2026-03-15T00:00:00.000Z",
+      );
+
+      const insertPortalAccess = legacyDatabase.prepare(
+        `INSERT INTO supporter_portal_access (
+           supporter_id,
+           token_hash,
+           issued_at,
+           provisioned_at,
+           sent_at
+         ) VALUES (?, ?, ?, ?, ?)`,
+      );
+      insertPortalAccess.run(
+        "supporter-zero",
+        "0".repeat(64),
+        "2026-01-02T00:00:00.000Z",
+        "2026-01-03T00:00:00.000Z",
+        "2026-01-04T00:00:00.000Z",
+      );
+      insertPortalAccess.run(
+        "supporter-one",
+        "1".repeat(64),
+        "2026-02-02T00:00:00.000Z",
+        null,
+        null,
+      );
+
+      legacyDatabase
+        .prepare(
+          `INSERT INTO fanbox_supporter_imports (
+             sequence,
+             imported_at,
+             present_supporter_count
+           ) VALUES (?, ?, ?)`,
+        )
+        .run(4, "2026-09-01T00:00:00.000Z", 3);
+      legacyDatabase
+        .prepare(
+          `INSERT INTO fanbox_supporter_imports (
+             sequence,
+             imported_at,
+             present_supporter_count
+           ) VALUES (?, ?, ?)`,
+        )
+        .run(9, "2026-09-02T00:00:00.000Z", 2);
+      legacyDatabase
+        .prepare(
+          `INSERT INTO backup_settings (
+             singleton_id,
+             destination_directory
+           ) VALUES (1, ?)`,
+        )
+        .run("/synthetic/backup/directory");
+
+      const expectedSupporters = legacyDatabase
+        .prepare(
+          `SELECT id,
+                  fanbox_relationship_id,
+                  display_name,
+                  supporting,
+                  latest_month_key,
+                  created_at,
+                  updated_at
+           FROM supporters
+           ORDER BY id`,
+        )
+        .all();
+      const expectedMonthStates = legacyDatabase
+        .prepare(
+          `SELECT supporter_id,
+                  month_key,
+                  monthly_plus_one_used,
+                  lottery_participation_occurred,
+                  created_at,
+                  updated_at
+           FROM supporter_month_states
+           ORDER BY supporter_id, month_key`,
+        )
+        .all();
+      const expectedPortalAccess = legacyDatabase
+        .prepare(
+          `SELECT supporter_id,
+                  token_hash,
+                  issued_at,
+                  provisioned_at,
+                  sent_at
+           FROM supporter_portal_access
+           ORDER BY supporter_id`,
+        )
+        .all();
+      const expectedImports = legacyDatabase
+        .prepare(
+          `SELECT sequence, imported_at, present_supporter_count
+           FROM fanbox_supporter_imports
+           ORDER BY sequence`,
+        )
+        .all();
+      const expectedBackupSettings = legacyDatabase
+        .prepare("SELECT singleton_id, destination_directory FROM backup_settings")
+        .all();
+      legacyDatabase.close();
+
+      const migrated = track(
+        openLocalStore(databasePath, { clock: fixedClock }),
+      );
+      const migratedDatabase = databaseOf(migrated);
+      expect(migratedDatabase.pragma("user_version", { simple: true })).toBe(6);
+      expect(
+        migratedDatabase
+          .prepare(
+            `SELECT id, current_entry_count
+             FROM supporters
+             ORDER BY id`,
+          )
+          .all(),
+      ).toEqual([
+        { id: "supporter-fourteen", current_entry_count: 15 },
+        { id: "supporter-one", current_entry_count: 2 },
+        { id: "supporter-zero", current_entry_count: 1 },
+      ]);
+      expect(
+        migratedDatabase
+          .prepare(
+            `SELECT supporter_id, month_key, entry_count
+             FROM supporter_month_states
+             ORDER BY supporter_id, month_key`,
+          )
+          .all(),
+      ).toEqual([
+        { supporter_id: "supporter-fourteen", month_key: "2026-03", entry_count: 15 },
+        { supporter_id: "supporter-one", month_key: "2026-02", entry_count: 2 },
+        { supporter_id: "supporter-zero", month_key: "2026-01", entry_count: 1 },
+      ]);
+      expect(
+        migratedDatabase
+          .prepare(
+            `SELECT sequence,
+                    id,
+                    supporter_id,
+                    month_key,
+                    kind,
+                    before_entry_count,
+                    after_entry_count,
+                    occurred_at,
+                    supporting_at_month_end,
+                    created_at
+             FROM entry_count_operations
+             ORDER BY sequence`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          sequence: 2,
+          id: "operation-zero-loss",
+          supporter_id: "supporter-zero",
+          month_key: "2026-01",
+          kind: "lottery_loss",
+          before_entry_count: 1,
+          after_entry_count: 2,
+          occurred_at: "2026-01-15T00:00:00.000Z",
+          supporting_at_month_end: null,
+          created_at: "2026-01-15T00:00:00.000Z",
+        },
+        {
+          sequence: 11,
+          id: "operation-zero-win",
+          supporter_id: "supporter-zero",
+          month_key: "2026-01",
+          kind: "lottery_win",
+          before_entry_count: 2,
+          after_entry_count: 1,
+          occurred_at: "2026-01-20T00:00:00.000Z",
+          supporting_at_month_end: null,
+          created_at: "2026-01-20T00:00:00.000Z",
+        },
+        {
+          sequence: 20,
+          id: "operation-fourteen-loss",
+          supporter_id: "supporter-fourteen",
+          month_key: "2026-03",
+          kind: "lottery_loss",
+          before_entry_count: 15,
+          after_entry_count: 15,
+          occurred_at: "2026-03-15T00:00:00.000Z",
+          supporting_at_month_end: null,
+          created_at: "2026-03-15T00:00:00.000Z",
+        },
+      ]);
+      expect(
+        migratedDatabase
+          .prepare(
+            `SELECT id,
+                    fanbox_relationship_id,
+                    display_name,
+                    supporting,
+                    latest_month_key,
+                    created_at,
+                    updated_at
+             FROM supporters
+             ORDER BY id`,
+          )
+          .all(),
+      ).toEqual(expectedSupporters);
+      expect(
+        migratedDatabase
+          .prepare(
+            `SELECT supporter_id,
+                    month_key,
+                    monthly_entry_count_increment_used,
+                    lottery_participation_occurred,
+                    created_at,
+                    updated_at
+             FROM supporter_month_states
+             ORDER BY supporter_id, month_key`,
+          )
+          .all(),
+      ).toEqual(
+        expectedMonthStates.map((row) => {
+          const state = row as {
+            supporter_id: string;
+            month_key: string;
+            monthly_plus_one_used: number;
+            lottery_participation_occurred: number;
+            created_at: string;
+            updated_at: string;
+          };
+          return {
+            supporter_id: state.supporter_id,
+            month_key: state.month_key,
+            monthly_entry_count_increment_used: state.monthly_plus_one_used,
+            lottery_participation_occurred: state.lottery_participation_occurred,
+            created_at: state.created_at,
+            updated_at: state.updated_at,
+          };
+        }),
+      );
+      expect(
+        migratedDatabase
+          .prepare(
+            `SELECT supporter_id,
+                    token_hash,
+                    issued_at,
+                    provisioned_at,
+                    sent_at
+             FROM supporter_portal_access
+             ORDER BY supporter_id`,
+          )
+          .all(),
+      ).toEqual(expectedPortalAccess);
+      expect(
+        migratedDatabase
+          .prepare(
+            `SELECT sequence, imported_at, present_supporter_count
+             FROM fanbox_supporter_imports
+             ORDER BY sequence`,
+          )
+          .all(),
+      ).toEqual(expectedImports);
+      expect(
+        migratedDatabase
+          .prepare("SELECT singleton_id, destination_directory FROM backup_settings")
+          .all(),
+      ).toEqual(expectedBackupSettings);
+
+      const migratedSnapshot = {
+        supporters: migratedDatabase
+          .prepare("SELECT id, current_entry_count FROM supporters ORDER BY id")
+          .all(),
+        monthStates: migratedDatabase
+          .prepare(
+            `SELECT supporter_id, month_key, entry_count
+             FROM supporter_month_states
+             ORDER BY supporter_id, month_key`,
+          )
+          .all(),
+        operations: migratedDatabase
+          .prepare(
+            `SELECT sequence, id, before_entry_count, after_entry_count
+             FROM entry_count_operations
+             ORDER BY sequence`,
+          )
+          .all(),
+      };
+      migrated.close();
+
+      const reopened = track(
+        openLocalStore(databasePath, { clock: fixedClock }),
+      );
+      const reopenedDatabase = databaseOf(reopened);
+      expect(reopenedDatabase.pragma("user_version", { simple: true })).toBe(6);
+      expect({
+        supporters: reopenedDatabase
+          .prepare("SELECT id, current_entry_count FROM supporters ORDER BY id")
+          .all(),
+        monthStates: reopenedDatabase
+          .prepare(
+            `SELECT supporter_id, month_key, entry_count
+             FROM supporter_month_states
+             ORDER BY supporter_id, month_key`,
+          )
+          .all(),
+        operations: reopenedDatabase
+          .prepare(
+            `SELECT sequence, id, before_entry_count, after_entry_count
+             FROM entry_count_operations
+             ORDER BY sequence`,
+          )
+          .all(),
+      }).toEqual(migratedSnapshot);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -664,7 +1120,7 @@ describe("schema migration and connection setup", () => {
          id,
          fanbox_relationship_id,
          display_name,
-         current_level,
+         current_entry_count,
          supporting,
          latest_month_key,
          created_at,
@@ -739,8 +1195,8 @@ describe("schema migration and connection setup", () => {
           `INSERT INTO supporter_month_states (
              supporter_id,
              month_key,
-             level,
-             monthly_plus_one_used,
+             entry_count,
+             monthly_entry_count_increment_used,
              lottery_participation_occurred,
              created_at,
              updated_at
@@ -761,8 +1217,8 @@ describe("schema migration and connection setup", () => {
       `INSERT INTO supporter_month_states (
          supporter_id,
          month_key,
-         level,
-         monthly_plus_one_used,
+             entry_count,
+             monthly_entry_count_increment_used,
          lottery_participation_occurred,
          created_at,
          updated_at
@@ -812,13 +1268,13 @@ describe("schema migration and connection setup", () => {
       supporting: true,
     });
     const insertOperation = database.prepare(
-      `INSERT INTO level_operations (
+      `INSERT INTO entry_count_operations (
          id,
          supporter_id,
          month_key,
          kind,
-         before_level,
-         after_level,
+         before_entry_count,
+         after_entry_count,
          occurred_at,
          supporting_at_month_end,
          created_at
@@ -829,8 +1285,8 @@ describe("schema migration and connection setup", () => {
       id: string;
       monthKey: string;
       kind: string;
-      beforeLevel: number;
-      afterLevel: number;
+      beforeEntryCount: number;
+      afterEntryCount: number;
       occurredAt: string | null;
       supportingAtMonthEnd: number | null;
     }> = {}) => {
@@ -840,8 +1296,8 @@ describe("schema migration and connection setup", () => {
         supporter.id,
         overrides.monthKey ?? "2026-09",
         overrides.kind ?? "lottery_loss",
-        overrides.beforeLevel ?? 0,
-        overrides.afterLevel ?? 1,
+        overrides.beforeEntryCount ?? 1,
+        overrides.afterEntryCount ?? 2,
         overrides.occurredAt === undefined
           ? "2026-09-15T00:00:00.000Z"
           : overrides.occurredAt,
@@ -855,10 +1311,10 @@ describe("schema migration and connection setup", () => {
     expect(() => insertValidOperation({ id: "" })).toThrow();
     expect(() => insertValidOperation({ monthKey: "2026-13" })).toThrow();
     expect(() => insertValidOperation({ kind: "unknown" })).toThrow();
-    expect(() => insertValidOperation({ beforeLevel: -1 })).toThrow();
-    expect(() => insertValidOperation({ beforeLevel: 1.5 })).toThrow();
-    expect(() => insertValidOperation({ afterLevel: -1 })).toThrow();
-    expect(() => insertValidOperation({ afterLevel: 1.5 })).toThrow();
+    expect(() => insertValidOperation({ beforeEntryCount: 0 })).toThrow();
+    expect(() => insertValidOperation({ beforeEntryCount: 1.5 })).toThrow();
+    expect(() => insertValidOperation({ afterEntryCount: 0 })).toThrow();
+    expect(() => insertValidOperation({ afterEntryCount: 1.5 })).toThrow();
     expect(() =>
       insertValidOperation({ occurredAt: null }),
     ).toThrow();

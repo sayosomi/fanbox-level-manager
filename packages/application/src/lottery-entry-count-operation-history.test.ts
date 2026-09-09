@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { createLotteryLevelService } from "./index.js";
+import { createLotteryEntryCountService } from "./index.js";
 import {
   StaleMonthError,
   SupporterNotFoundError,
@@ -19,24 +19,24 @@ function fixedClock(): Date {
 }
 
 function openService(): {
-  service: ReturnType<typeof createLotteryLevelService>;
+  service: ReturnType<typeof createLotteryEntryCountService>;
   store: LocalStore;
 } {
   const store = track(openLocalStore(":memory:", { clock: fixedClock }));
-  return { service: createLotteryLevelService(store), store };
+  return { service: createLotteryEntryCountService(store), store };
 }
 
 function createSupporter(
   store: LocalStore,
   relationshipId: string,
-  initialLevel = 0,
+  initialEntryCount = 1,
   supporting = true,
 ) {
   return store.createSupporter({
     fanboxRelationshipId: relationshipId,
     displayName: "Supporter",
     supporting,
-    initialLevel,
+    initialEntryCount,
   });
 }
 
@@ -46,7 +46,7 @@ afterEach(() => {
   }
 });
 
-describe("lottery level operation history integration", () => {
+describe("lottery entryCount operation history integration", () => {
   it("records first and repeated lottery losses, including no-change losses", () => {
     const { service, store } = openService();
     const supporter = createSupporter(store, "repeated-loss-history");
@@ -55,45 +55,45 @@ describe("lottery level operation history integration", () => {
     service.recordLotteryLoss(supporter.id, occurredAt);
     service.recordLotteryLoss(supporter.id, occurredAt);
 
-    expect(store.listLevelOperations(supporter.id)).toMatchObject([
+    expect(store.listEntryCountOperations(supporter.id)).toMatchObject([
       {
         kind: "lottery_loss",
         monthKey: "2026-09",
         occurredAt: occurredAt.toISOString(),
-        beforeLevel: 0,
-        afterLevel: 1,
+        beforeEntryCount: 1,
+        afterEntryCount: 2,
       },
       {
         kind: "lottery_loss",
         monthKey: "2026-09",
         occurredAt: occurredAt.toISOString(),
-        beforeLevel: 1,
-        afterLevel: 1,
+        beforeEntryCount: 2,
+        afterEntryCount: 2,
       },
     ]);
   });
 
-  it("records wins from a higher level and from level zero", () => {
+  it("records wins from a higher entryCount and from the one-entry baseline", () => {
     const { service, store } = openService();
-    const higherLevel = createSupporter(store, "higher-level-win", 5);
-    const levelZero = createSupporter(store, "level-zero-win");
+    const higherEntryCount = createSupporter(store, "higher-entryCount-win", 5);
+    const baseline = createSupporter(store, "entryCount-one-win");
     const occurredAt = new Date("2026-09-15T00:00:00.000Z");
 
-    service.recordLotteryWin(higherLevel.id, occurredAt);
-    service.recordLotteryWin(levelZero.id, occurredAt);
+    service.recordLotteryWin(higherEntryCount.id, occurredAt);
+    service.recordLotteryWin(baseline.id, occurredAt);
 
-    expect(store.listLevelOperations(higherLevel.id)).toMatchObject([
+    expect(store.listEntryCountOperations(higherEntryCount.id)).toMatchObject([
       {
         kind: "lottery_win",
-        beforeLevel: 5,
-        afterLevel: 0,
+        beforeEntryCount: 5,
+        afterEntryCount: 1,
       },
     ]);
-    expect(store.listLevelOperations(levelZero.id)).toMatchObject([
+    expect(store.listEntryCountOperations(baseline.id)).toMatchObject([
       {
         kind: "lottery_win",
-        beforeLevel: 0,
-        afterLevel: 0,
+        beforeEntryCount: 1,
+        afterEntryCount: 1,
       },
     ]);
   });
@@ -116,22 +116,22 @@ describe("lottery level operation history integration", () => {
     service.processMonthEnd(storedNotSupporting.id, "2026-09", true);
     service.processMonthEnd(storedSupporting.id, "2026-09", false);
 
-    expect(store.listLevelOperations(storedNotSupporting.id)).toMatchObject([
+    expect(store.listEntryCountOperations(storedNotSupporting.id)).toMatchObject([
       {
         kind: "month_end",
         supportingAtMonthEnd: true,
         occurredAt: null,
-        beforeLevel: 2,
-        afterLevel: 3,
+        beforeEntryCount: 2,
+        afterEntryCount: 3,
       },
     ]);
-    expect(store.listLevelOperations(storedSupporting.id)).toMatchObject([
+    expect(store.listEntryCountOperations(storedSupporting.id)).toMatchObject([
       {
         kind: "month_end",
         supportingAtMonthEnd: false,
         occurredAt: null,
-        beforeLevel: 2,
-        afterLevel: 2,
+        beforeEntryCount: 2,
+        afterEntryCount: 2,
       },
     ]);
     expect(store.getSupporterById(storedNotSupporting.id)?.supporting).toBe(
@@ -149,11 +149,11 @@ describe("lottery level operation history integration", () => {
     service.recordLotteryWin(supporter.id, occurredAt);
     const result = service.recordLotteryLoss(supporter.id, occurredAt);
 
-    expect(result.level).toBe(0);
-    expect(store.listLevelOperations(supporter.id)).toMatchObject([
-      { kind: "lottery_loss", beforeLevel: 0, afterLevel: 1 },
-      { kind: "lottery_win", beforeLevel: 1, afterLevel: 0 },
-      { kind: "lottery_loss", beforeLevel: 0, afterLevel: 0 },
+    expect(result.entryCount).toBe(1);
+    expect(store.listEntryCountOperations(supporter.id)).toMatchObject([
+      { kind: "lottery_loss", beforeEntryCount: 1, afterEntryCount: 2 },
+      { kind: "lottery_win", beforeEntryCount: 2, afterEntryCount: 1 },
+      { kind: "lottery_loss", beforeEntryCount: 1, afterEntryCount: 1 },
     ]);
   });
 
@@ -170,7 +170,7 @@ describe("lottery level operation history integration", () => {
     ).toThrow(RangeError);
 
     expect(store.getMonthlyState(supporter.id, "2026-09")).toBeNull();
-    expect(store.listLevelOperations(supporter.id)).toEqual([]);
+    expect(store.listEntryCountOperations(supporter.id)).toEqual([]);
   });
 
   it("does not append history for a stale lottery call", () => {
@@ -180,7 +180,7 @@ describe("lottery level operation history integration", () => {
       supporter.id,
       new Date("2026-10-15T00:00:00.000Z"),
     );
-    const beforeOperations = store.listLevelOperations(supporter.id);
+    const beforeOperations = store.listEntryCountOperations(supporter.id);
     const beforeState = store.getMonthlyState(supporter.id, "2026-10");
 
     expect(() =>
@@ -190,7 +190,7 @@ describe("lottery level operation history integration", () => {
       ),
     ).toThrow(StaleMonthError);
 
-    expect(store.listLevelOperations(supporter.id)).toEqual(beforeOperations);
+    expect(store.listEntryCountOperations(supporter.id)).toEqual(beforeOperations);
     expect(store.getMonthlyState(supporter.id, "2026-10")).toEqual(
       beforeState,
     );
@@ -205,7 +205,7 @@ describe("lottery level operation history integration", () => {
         new Date("2026-09-15T00:00:00.000Z"),
       ),
     ).toThrow(SupporterNotFoundError);
-    expect(() => store.listLevelOperations("missing-supporter")).toThrow(
+    expect(() => store.listEntryCountOperations("missing-supporter")).toThrow(
       SupporterNotFoundError,
     );
   });
@@ -226,7 +226,7 @@ describe("lottery level operation history integration", () => {
     expect(store.getMonthlyState(supporter.id, "2026-09")).toBeNull();
     expect(store.getSupporterById(supporter.id)).toEqual(before);
     expect(store.getSupporterById(supporter.id)?.latestMonthKey).toBeNull();
-    expect(store.getSupporterById(supporter.id)?.currentLevel).toBe(6);
-    expect(store.listLevelOperations(supporter.id)).toEqual([]);
+    expect(store.getSupporterById(supporter.id)?.currentEntryCount).toBe(6);
+    expect(store.listEntryCountOperations(supporter.id)).toEqual([]);
   });
 });

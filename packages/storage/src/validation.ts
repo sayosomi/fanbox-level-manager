@@ -6,7 +6,7 @@ import type {
   CreateSupporterInput,
   FanboxSupporterImportCreate,
   FanboxSupporterImportUpdate,
-  LevelOperationKind,
+  EntryCountOperationKind,
   MonthlyState,
   MonthlyTransitionWithOperationBatchItem,
   RelinkSupporterFanboxRelationshipInput,
@@ -55,14 +55,14 @@ export function assertValidSupporterId(value: unknown): asserts value is string 
   assertNonBlankString(value, "supporterId");
 }
 
-export function assertValidLevel(value: unknown): asserts value is number {
+export function assertValidEntryCount(value: unknown): asserts value is number {
   if (
     typeof value !== "number" ||
     !Number.isFinite(value) ||
     !Number.isInteger(value) ||
-    value < 0
+    value < 1
   ) {
-    throw new RangeError("level must be a non-negative finite integer");
+    throw new RangeError("entryCount must be a positive finite integer");
   }
 }
 
@@ -92,8 +92,8 @@ export function assertValidCreateSupporterInput(
   assertNonBlankString(input.displayName, "displayName");
   assertBoolean(input.supporting, "supporting");
 
-  if (input.initialLevel !== undefined) {
-    assertValidLevel(input.initialLevel);
+  if (input.initialEntryCount !== undefined) {
+    assertValidEntryCount(input.initialEntryCount);
   }
 }
 
@@ -107,7 +107,7 @@ export function assertValidCreateMigratedSupporterInput(
   assertNonBlankString(input.fanboxRelationshipId, "fanboxRelationshipId");
   assertNonBlankString(input.displayName, "displayName");
   assertBoolean(input.supporting, "supporting");
-  assertValidLevel(input.currentLevel);
+  assertValidEntryCount(input.currentEntryCount);
   assertValidMonthKey(input.monthKey);
 }
 
@@ -120,11 +120,11 @@ export function assertValidAssignLegacyBaselineInput(
 
   assertAllowedKeys(
     input,
-    ["supporterId", "currentLevel", "monthKey"],
+    ["supporterId", "currentEntryCount", "monthKey"],
     "assign legacy baseline input",
   );
   assertValidSupporterId(input.supporterId);
-  assertValidLevel(input.currentLevel);
+  assertValidEntryCount(input.currentEntryCount);
   assertValidMonthKey(input.monthKey);
 }
 
@@ -300,22 +300,22 @@ export function validateTransitionResult(result: unknown): MonthlyState {
     throw new TypeError("transition must return a monthly state object");
   }
 
-  assertValidLevel(result.level);
-  assertBoolean(result.monthlyPlusOneUsed, "monthlyPlusOneUsed");
+  assertValidEntryCount(result.entryCount);
+  assertBoolean(result.monthlyEntryCountIncrementUsed, "monthlyEntryCountIncrementUsed");
   assertBoolean(
     result.lotteryParticipationOccurred,
     "lotteryParticipationOccurred",
   );
 
   return Object.freeze({
-    level: result.level,
-    monthlyPlusOneUsed: result.monthlyPlusOneUsed,
+    entryCount: result.entryCount,
+    monthlyEntryCountIncrementUsed: result.monthlyEntryCountIncrementUsed,
     lotteryParticipationOccurred: result.lotteryParticipationOccurred,
   });
 }
 
-type NormalizedLevelTransitionOperation = Readonly<{
-  kind: Exclude<LevelOperationKind, "initial_import">;
+type NormalizedEntryCountTransitionOperation = Readonly<{
+  kind: Exclude<EntryCountOperationKind, "initial_import">;
   occurredAt: string | null;
   supportingAtMonthEnd: boolean | null;
 }>;
@@ -326,7 +326,7 @@ function assertOperationKeys(
 ): void {
   for (const key of Object.keys(operation)) {
     if (!allowedKeys.includes(key)) {
-      throw new TypeError(`unsupported level operation field: ${key}`);
+      throw new TypeError(`unsupported entryCount operation field: ${key}`);
     }
   }
 }
@@ -339,11 +339,11 @@ function validateOccurredAt(value: unknown): string {
   return value.toISOString();
 }
 
-export function normalizeLevelTransitionOperation(
+export function normalizeEntryCountTransitionOperation(
   operation: unknown,
-): NormalizedLevelTransitionOperation {
+): NormalizedEntryCountTransitionOperation {
   if (!isRecord(operation) || Array.isArray(operation)) {
-    throw new TypeError("level transition operation must be an object");
+    throw new TypeError("entryCount transition operation must be an object");
   }
 
   if (operation.kind === "lottery_loss" || operation.kind === "lottery_win") {
@@ -366,7 +366,7 @@ export function normalizeLevelTransitionOperation(
   }
 
   throw new TypeError(
-    "level transition operation kind must be lottery_loss, lottery_win, or month_end",
+    "entryCount transition operation kind must be lottery_loss, lottery_win, or month_end",
   );
 }
 
@@ -401,7 +401,7 @@ export function assertValidMonthlyTransitionWithOperationBatch(
     assertValidSupporterId(item.supporterId);
     assertValidMonthKey(item.monthKey);
     assertValidTransitionCallback(item.transition);
-    normalizeLevelTransitionOperation(item.operation);
+    normalizeEntryCountTransitionOperation(item.operation);
 
     if (supporterIds.has(item.supporterId)) {
       throw new TypeError(

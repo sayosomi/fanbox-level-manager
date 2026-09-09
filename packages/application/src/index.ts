@@ -1,10 +1,10 @@
-export { createLotteryLevelService } from "./lottery-level-service.js";
+export { createLotteryEntryCountService } from "./lottery-entry-count-service.js";
 export type {
-  LotteryLevelService,
+  LotteryEntryCountService,
   LotteryOutcome,
   LotteryResultParticipant,
   LotteryResultParticipantResult,
-} from "./lottery-level-service.js";
+} from "./lottery-entry-count-service.js";
 export {
   createExistingSupporterMigrationService,
 } from "./existing-supporter-migration-service.js";

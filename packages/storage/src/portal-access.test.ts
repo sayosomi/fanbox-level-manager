@@ -27,7 +27,7 @@ function createSupporter(
     fanboxRelationshipId: relationshipId,
     displayName: "Supporter",
     supporting,
-    initialLevel: 4,
+    initialEntryCount: 4,
   });
 }
 
@@ -270,7 +270,7 @@ describe("supporter portal access storage", () => {
     expect(store.getSupporterPortalAccess(supporter.id)).toEqual(before);
   });
 
-  it("does not change supporter, month, or level-operation state", () => {
+  it("does not change supporter, month, or entry-count operation state", () => {
     let now = "2026-09-04T00:00:00.000Z";
     const store = track(
       openLocalStore(":memory:", { clock: () => new Date(now) }),
@@ -285,14 +285,14 @@ describe("supporter portal access storage", () => {
       },
       (state) => ({
         ...state,
-        level: state.level + 1,
-        monthlyPlusOneUsed: true,
+        entryCount: state.entryCount + 1,
+        monthlyEntryCountIncrementUsed: true,
         lotteryParticipationOccurred: true,
       }),
     );
     const beforeSupporter = store.getSupporterById(supporter.id);
     const beforeMonth = store.getMonthlyState(supporter.id, "2026-09");
-    const beforeOperations = store.listLevelOperations(supporter.id);
+    const beforeOperations = store.listEntryCountOperations(supporter.id);
 
     store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH);
     now = "2026-09-04T00:01:00.000Z";
@@ -302,6 +302,6 @@ describe("supporter portal access storage", () => {
 
     expect(store.getSupporterById(supporter.id)).toEqual(beforeSupporter);
     expect(store.getMonthlyState(supporter.id, "2026-09")).toEqual(beforeMonth);
-    expect(store.listLevelOperations(supporter.id)).toEqual(beforeOperations);
+    expect(store.listEntryCountOperations(supporter.id)).toEqual(beforeOperations);
   });
 });

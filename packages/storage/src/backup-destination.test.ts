@@ -87,12 +87,12 @@ describe("backup destination storage", () => {
       legacyDatabase.close();
 
       const migrated = track(openLocalStore(databasePath));
-      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(5);
+      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(6);
       expect(migrated.getSupporterById("version-four-supporter")).toEqual({
         id: "version-four-supporter",
         fanboxRelationshipId: "version-four-relationship",
         displayName: "Version four supporter",
-        currentLevel: 2,
+        currentEntryCount: 3,
         supporting: true,
         latestMonthKey: null,
         createdAt: "2026-09-01T00:00:00.000Z",
@@ -133,7 +133,7 @@ describe("backup destination storage", () => {
     const snapshot = store.createDatabaseSnapshot();
     const snapshotDatabase = new Database(Buffer.from(snapshot));
     try {
-      expect(snapshotDatabase.pragma("user_version", { simple: true })).toBe(5);
+      expect(snapshotDatabase.pragma("user_version", { simple: true })).toBe(6);
       expect(
         snapshotDatabase
           .prepare(

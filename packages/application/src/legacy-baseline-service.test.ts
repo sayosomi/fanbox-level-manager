@@ -8,7 +8,7 @@ import type { LocalStore } from "@sayosomi/storage";
 function validInput(overrides: Partial<LegacyBaselineInput> = {}): LegacyBaselineInput {
   return {
     supporterId: "opaque-supporter-id",
-    currentLevel: 7,
+    currentEntryCount: 7,
     migratedAt: new Date("2026-08-31T15:00:00.000Z"),
     ...overrides,
   };
@@ -30,7 +30,7 @@ describe("legacy baseline application service", () => {
     expect(assignLegacyBaseline).toHaveBeenCalledTimes(1);
     expect(assignLegacyBaseline).toHaveBeenCalledWith({
       supporterId: "opaque-supporter-id",
-      currentLevel: 7,
+      currentEntryCount: 7,
       monthKey: "2026-09",
     });
   });

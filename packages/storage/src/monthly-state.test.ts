@@ -17,12 +17,12 @@ function fixedClock(): Date {
   return new Date("2026-09-04T00:00:00.000Z");
 }
 
-function createSupporter(store: LocalStore, initialLevel = 2) {
+function createSupporter(store: LocalStore, initialEntryCount = 2) {
   return store.createSupporter({
-    fanboxRelationshipId: `relationship-${initialLevel}-${Math.random()}`,
+    fanboxRelationshipId: `relationship-${initialEntryCount}-${Math.random()}`,
     displayName: "Supporter",
     supporting: true,
-    initialLevel,
+    initialEntryCount,
   });
 }
 
@@ -54,8 +54,8 @@ describe("monthly state transitions", () => {
         },
         transition: (state) => ({
           ...state,
-          level: 3,
-          monthlyPlusOneUsed: true,
+          entryCount: 3,
+          monthlyEntryCountIncrementUsed: true,
         }),
       },
       {
@@ -67,7 +67,7 @@ describe("monthly state transitions", () => {
         },
         transition: (state) => ({
           ...state,
-          level: 9,
+          entryCount: 9,
           lotteryParticipationOccurred: true,
         }),
       },
@@ -82,31 +82,31 @@ describe("monthly state transitions", () => {
       first.id,
     ]);
     expect(results[0]?.state).toMatchObject({
-      level: 3,
-      monthlyPlusOneUsed: true,
+      entryCount: 3,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: false,
     });
     expect(results[1]?.state).toMatchObject({
-      level: 9,
-      monthlyPlusOneUsed: false,
+      entryCount: 9,
+      monthlyEntryCountIncrementUsed: false,
       lotteryParticipationOccurred: true,
     });
     expect(results[0]?.operation).toMatchObject({
       kind: "lottery_win",
       occurredAt: firstOccurredAt.toISOString(),
-      beforeLevel: 7,
-      afterLevel: 3,
+      beforeEntryCount: 7,
+      afterEntryCount: 3,
     });
     expect(results[1]?.operation).toMatchObject({
       kind: "lottery_loss",
       occurredAt: secondOccurredAt.toISOString(),
-      beforeLevel: 2,
-      afterLevel: 9,
+      beforeEntryCount: 2,
+      afterEntryCount: 9,
     });
-    expect(store.listLevelOperations(second.id)).toEqual([
+    expect(store.listEntryCountOperations(second.id)).toEqual([
       results[0]?.operation,
     ]);
-    expect(store.listLevelOperations(first.id)).toEqual([
+    expect(store.listEntryCountOperations(first.id)).toEqual([
       results[1]?.operation,
     ]);
     expect(Object.isFrozen(results)).toBe(true);
@@ -128,7 +128,7 @@ describe("monthly state transitions", () => {
           },
           transition: (state) => ({
             ...state,
-            level: state.level + 1,
+            entryCount: state.entryCount + 1,
           }),
         },
         {
@@ -145,7 +145,7 @@ describe("monthly state transitions", () => {
 
     expect(store.getSupporterById(first.id)).toEqual(before);
     expect(store.getMonthlyState(first.id, "2026-09")).toBeNull();
-    expect(store.listLevelOperations(first.id)).toEqual([]);
+    expect(store.listEntryCountOperations(first.id)).toEqual([]);
   });
 
   it("rolls back earlier batch writes when a later month is stale", () => {
@@ -159,11 +159,11 @@ describe("monthly state transitions", () => {
         kind: "lottery_loss",
         occurredAt: new Date("2026-10-15T00:00:00.000Z"),
       },
-      (state) => ({ ...state, level: state.level + 1 }),
+      (state) => ({ ...state, entryCount: state.entryCount + 1 }),
     );
     const beforeStaleSupporter = store.getSupporterById(stale.id);
     const beforeStaleState = store.getMonthlyState(stale.id, "2026-10");
-    const beforeStaleOperations = store.listLevelOperations(stale.id);
+    const beforeStaleOperations = store.listEntryCountOperations(stale.id);
 
     expect(() =>
       store.transitionMonthlyStatesWithOperations([
@@ -174,7 +174,7 @@ describe("monthly state transitions", () => {
             kind: "lottery_loss",
             occurredAt: new Date("2026-09-15T00:00:00.000Z"),
           },
-          transition: (state) => ({ ...state, level: state.level + 1 }),
+          transition: (state) => ({ ...state, entryCount: state.entryCount + 1 }),
         },
         {
           supporterId: stale.id,
@@ -194,7 +194,7 @@ describe("monthly state transitions", () => {
     expect(store.getMonthlyState(stale.id, "2026-10")).toEqual(
       beforeStaleState,
     );
-    expect(store.listLevelOperations(stale.id)).toEqual(beforeStaleOperations);
+    expect(store.listEntryCountOperations(stale.id)).toEqual(beforeStaleOperations);
   });
 
   it("rolls back earlier batch writes when a later transition throws", () => {
@@ -212,7 +212,7 @@ describe("monthly state transitions", () => {
             kind: "lottery_loss",
             occurredAt: new Date("2026-09-15T00:00:00.000Z"),
           },
-          transition: (state) => ({ ...state, level: state.level + 1 }),
+          transition: (state) => ({ ...state, entryCount: state.entryCount + 1 }),
         },
         {
           supporterId: second.id,
@@ -230,8 +230,8 @@ describe("monthly state transitions", () => {
 
     expect(store.getMonthlyState(first.id, "2026-09")).toBeNull();
     expect(store.getMonthlyState(second.id, "2026-09")).toBeNull();
-    expect(store.listLevelOperations(first.id)).toEqual([]);
-    expect(store.listLevelOperations(second.id)).toEqual([]);
+    expect(store.listEntryCountOperations(first.id)).toEqual([]);
+    expect(store.listEntryCountOperations(second.id)).toEqual([]);
   });
 
   it("rolls back earlier batch writes when a later transition result is invalid", () => {
@@ -248,7 +248,7 @@ describe("monthly state transitions", () => {
             kind: "lottery_loss",
             occurredAt: new Date("2026-09-15T00:00:00.000Z"),
           },
-          transition: (state) => ({ ...state, level: state.level + 1 }),
+          transition: (state) => ({ ...state, entryCount: state.entryCount + 1 }),
         },
         {
           supporterId: second.id,
@@ -258,8 +258,8 @@ describe("monthly state transitions", () => {
             occurredAt: new Date("2026-09-15T00:00:00.000Z"),
           },
           transition: () => ({
-            level: -1,
-            monthlyPlusOneUsed: false,
+            entryCount: -1,
+            monthlyEntryCountIncrementUsed: false,
             lotteryParticipationOccurred: false,
           }),
         },
@@ -268,8 +268,8 @@ describe("monthly state transitions", () => {
 
     expect(store.getMonthlyState(first.id, "2026-09")).toBeNull();
     expect(store.getMonthlyState(second.id, "2026-09")).toBeNull();
-    expect(store.listLevelOperations(first.id)).toEqual([]);
-    expect(store.listLevelOperations(second.id)).toEqual([]);
+    expect(store.listEntryCountOperations(first.id)).toEqual([]);
+    expect(store.listEntryCountOperations(second.id)).toEqual([]);
   });
 
   it("rejects invalid later operation metadata without mutation", () => {
@@ -289,7 +289,7 @@ describe("monthly state transitions", () => {
           },
           transition: (state) => {
             firstTransitionCalls += 1;
-            return { ...state, level: state.level + 1 };
+            return { ...state, entryCount: state.entryCount + 1 };
           },
         },
         {
@@ -307,8 +307,8 @@ describe("monthly state transitions", () => {
     expect(firstTransitionCalls).toBe(0);
     expect(store.getMonthlyState(first.id, "2026-09")).toBeNull();
     expect(store.getMonthlyState(second.id, "2026-09")).toBeNull();
-    expect(store.listLevelOperations(first.id)).toEqual([]);
-    expect(store.listLevelOperations(second.id)).toEqual([]);
+    expect(store.listEntryCountOperations(first.id)).toEqual([]);
+    expect(store.listEntryCountOperations(second.id)).toEqual([]);
   });
 
   it("rejects invalid batch envelopes without mutation", () => {
@@ -334,7 +334,7 @@ describe("monthly state transitions", () => {
         store.transitionMonthlyStatesWithOperations(invalid as never),
       ).toThrow();
       expect(store.getMonthlyState(first.id, "2026-09")).toBeNull();
-      expect(store.listLevelOperations(first.id)).toEqual([]);
+      expect(store.listEntryCountOperations(first.id)).toEqual([]);
     }
   });
 
@@ -360,7 +360,7 @@ describe("monthly state transitions", () => {
           kind: "lottery_loss",
           occurredAt: new Date("2026-09-15T00:00:00.000Z"),
         },
-        transition: (state) => ({ ...state, level: state.level + 1 }),
+        transition: (state) => ({ ...state, entryCount: state.entryCount + 1 }),
       },
       {
         supporterId: second.id,
@@ -369,7 +369,7 @@ describe("monthly state transitions", () => {
           kind: "lottery_win",
           occurredAt: new Date("2026-09-15T00:00:00.000Z"),
         },
-        transition: (state) => ({ ...state, level: 0 }),
+        transition: (state) => ({ ...state, entryCount: 1 }),
       },
     ]);
 
@@ -382,7 +382,7 @@ describe("monthly state transitions", () => {
     expect(new Set(timestamps)).toEqual(new Set(["2026-09-04T00:00:00.000Z"]));
   });
 
-  it("does not create state on read and seeds the first month from current level", () => {
+  it("does not create state on read and seeds the first month from current entry count", () => {
     const store = openStore();
     const supporter = createSupporter(store, 3);
     expect(store.getMonthlyState(supporter.id, "2026-09")).toBeNull();
@@ -396,8 +396,8 @@ describe("monthly state transitions", () => {
         calls += 1;
         received = state;
         return Object.freeze({
-          level: state.level + 1,
-          monthlyPlusOneUsed: true,
+          entryCount: state.entryCount + 1,
+          monthlyEntryCountIncrementUsed: true,
           lotteryParticipationOccurred: true,
         });
       },
@@ -405,20 +405,20 @@ describe("monthly state transitions", () => {
 
     expect(calls).toBe(1);
     expect(received).toEqual({
-      level: 3,
-      monthlyPlusOneUsed: false,
+      entryCount: 3,
+      monthlyEntryCountIncrementUsed: false,
       lotteryParticipationOccurred: false,
     });
     expect(Object.isFrozen(received)).toBe(true);
     expect(result).toMatchObject({
       supporterId: supporter.id,
       monthKey: "2026-09",
-      level: 4,
-      monthlyPlusOneUsed: true,
+      entryCount: 4,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     });
     expect(Object.isFrozen(result)).toBe(true);
-    expect(store.getSupporterById(supporter.id)?.currentLevel).toBe(4);
+    expect(store.getSupporterById(supporter.id)?.currentEntryCount).toBe(4);
   });
 
   it("reuses same-month flags and resets them for a later month", () => {
@@ -427,8 +427,8 @@ describe("monthly state transitions", () => {
 
     store.transitionMonthlyState(supporter.id, "2026-09", (state) => ({
       ...state,
-      level: 4,
-      monthlyPlusOneUsed: true,
+      entryCount: 4,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     }));
 
@@ -438,8 +438,8 @@ describe("monthly state transitions", () => {
       return state;
     });
     expect(sameMonthState).toEqual({
-      level: 4,
-      monthlyPlusOneUsed: true,
+      entryCount: 4,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     });
 
@@ -453,11 +453,11 @@ describe("monthly state transitions", () => {
       },
     );
     expect(laterMonthState).toEqual({
-      level: 4,
-      monthlyPlusOneUsed: false,
+      entryCount: 4,
+      monthlyEntryCountIncrementUsed: false,
       lotteryParticipationOccurred: false,
     });
-    expect(later.monthlyPlusOneUsed).toBe(false);
+    expect(later.monthlyEntryCountIncrementUsed).toBe(false);
     expect(later.lotteryParticipationOccurred).toBe(false);
     expect(store.getSupporterById(supporter.id)?.latestMonthKey).toBe("2026-10");
   });
@@ -467,16 +467,16 @@ describe("monthly state transitions", () => {
     const supporter = createSupporter(store, 2);
     store.transitionMonthlyState(supporter.id, "2026-10", (state) => ({
       ...state,
-      level: 5,
-      monthlyPlusOneUsed: true,
+      entryCount: 5,
+      monthlyEntryCountIncrementUsed: true,
     }));
     const beforeSupporter = store.getSupporterById(supporter.id);
     const beforeState = store.getMonthlyState(supporter.id, "2026-10");
 
     expect(() =>
       store.transitionMonthlyState(supporter.id, "2026-09", () => ({
-        level: 0,
-        monthlyPlusOneUsed: false,
+        entryCount: 1,
+        monthlyEntryCountIncrementUsed: false,
         lotteryParticipationOccurred: false,
       })),
     ).toThrow(StaleMonthError);
@@ -492,7 +492,7 @@ describe("monthly state transitions", () => {
     expect(store.getMonthlyState(supporter.id, "2026-09")).toBeNull();
   });
 
-  it("updates the monthly level and supporter level together", () => {
+  it("updates the monthly entry count and supporter entry count together", () => {
     const store = openStore();
     const supporter = createSupporter(store, 2);
     const result = store.transitionMonthlyState(
@@ -500,28 +500,28 @@ describe("monthly state transitions", () => {
       "2026-09",
       (state) => ({
         ...state,
-        level: 8,
+        entryCount: 8,
       }),
     );
 
-    expect(result.level).toBe(8);
-    expect(store.getMonthlyState(supporter.id, "2026-09")?.level).toBe(8);
-    expect(store.getSupporterById(supporter.id)?.currentLevel).toBe(8);
+    expect(result.entryCount).toBe(8);
+    expect(store.getMonthlyState(supporter.id, "2026-09")?.entryCount).toBe(8);
+    expect(store.getSupporterById(supporter.id)?.currentEntryCount).toBe(8);
   });
 
   it("rejects true-to-false reversals for either monthly flag", () => {
     const store = openStore();
     const supporter = createSupporter(store);
     store.transitionMonthlyState(supporter.id, "2026-09", () => ({
-      level: 2,
-      monthlyPlusOneUsed: true,
+      entryCount: 2,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     }));
 
     expect(() =>
       store.transitionMonthlyState(supporter.id, "2026-09", (state) => ({
         ...state,
-        monthlyPlusOneUsed: false,
+        monthlyEntryCountIncrementUsed: false,
       })),
     ).toThrow(RangeError);
     expect(() =>
@@ -531,20 +531,20 @@ describe("monthly state transitions", () => {
       })),
     ).toThrow(RangeError);
     expect(store.getMonthlyState(supporter.id, "2026-09")).toMatchObject({
-      monthlyPlusOneUsed: true,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     });
   });
 
-  it("rejects invalid callback levels and flags", () => {
+  it("rejects invalid callback entry counts and flags", () => {
     const store = openStore();
     const supporter = createSupporter(store);
 
-    for (const level of [-1, 1.5, Number.NaN, Infinity, -Infinity]) {
+    for (const entryCount of [0, 1.5, Number.NaN, Infinity, -Infinity]) {
       expect(() =>
         store.transitionMonthlyState(supporter.id, "2026-09", () => ({
-          level,
-          monthlyPlusOneUsed: false,
+          entryCount,
+          monthlyEntryCountIncrementUsed: false,
           lotteryParticipationOccurred: false,
         })),
       ).toThrow(RangeError);
@@ -553,15 +553,15 @@ describe("monthly state transitions", () => {
 
     expect(() =>
       store.transitionMonthlyState(supporter.id, "2026-09", () => ({
-        level: 0,
-        monthlyPlusOneUsed: "no",
+        entryCount: 1,
+        monthlyEntryCountIncrementUsed: "no",
         lotteryParticipationOccurred: false,
       } as never)),
     ).toThrow(TypeError);
     expect(() =>
       store.transitionMonthlyState(supporter.id, "2026-09", () => ({
-        level: 0,
-        monthlyPlusOneUsed: false,
+        entryCount: 1,
+        monthlyEntryCountIncrementUsed: false,
         lotteryParticipationOccurred: "no",
       } as never)),
     ).toThrow(TypeError);
@@ -588,7 +588,7 @@ describe("monthly state transitions", () => {
     ).toThrow(sentinel);
 
     expect(store.getSupporterById(supporter.id)).toMatchObject({
-      currentLevel: 6,
+      currentEntryCount: 6,
       latestMonthKey: null,
     });
     expect(store.getMonthlyState(supporter.id, "2026-09")).toBeNull();
@@ -600,14 +600,14 @@ describe("monthly state transitions", () => {
 
     expect(() =>
       store.transitionMonthlyState(supporter.id, "2026-09", () => ({
-        level: -1,
-        monthlyPlusOneUsed: false,
+        entryCount: -1,
+        monthlyEntryCountIncrementUsed: false,
         lotteryParticipationOccurred: false,
       })),
     ).toThrow(RangeError);
 
     expect(store.getSupporterById(supporter.id)).toMatchObject({
-      currentLevel: 6,
+      currentEntryCount: 6,
       latestMonthKey: null,
     });
     expect(store.getMonthlyState(supporter.id, "2026-09")).toBeNull();

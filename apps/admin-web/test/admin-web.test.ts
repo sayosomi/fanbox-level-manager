@@ -28,7 +28,7 @@ import type {
   FanboxSupporterImportService,
   FanboxIdentityRelinkService,
   FanboxSupporterComparisonService,
-  LotteryLevelService,
+  LotteryEntryCountService,
   MonthEndProcessingService,
   SupporterPortalDeliveryService,
   SupporterPortalLinkService,
@@ -239,8 +239,7 @@ const sampleSupporters: readonly SupporterListItem[] = Object.freeze([
     id: "internal-supporter-id",
     confirmationId: "3630-5118-9AE4-0646",
     displayName: "支援者A",
-    currentLevel: 2,
-    nextLotteryEntryCount: 3,
+    entryCount: 2,
     supporting: true,
     latestMonthKey: "2026-09",
     legacyBaselineEligible: false,
@@ -250,8 +249,7 @@ const sampleSupporters: readonly SupporterListItem[] = Object.freeze([
     id: "internal-supporter-id-2",
     confirmationId: "9375-B3F5-FC05-7CB9",
     displayName: "支援者B",
-    currentLevel: 0,
-    nextLotteryEntryCount: 1,
+    entryCount: 1,
     supporting: false,
     latestMonthKey: null,
     legacyBaselineEligible: true,
@@ -450,10 +448,10 @@ function createExistingSupporterMigrationService(
   };
 }
 
-function createLotteryLevelService(
-  implementation: LotteryLevelService["recordLotteryResults"],
-): LotteryLevelService {
-  return { recordLotteryResults: implementation } as unknown as LotteryLevelService;
+function createLotteryEntryCountService(
+  implementation: LotteryEntryCountService["recordLotteryResults"],
+): LotteryEntryCountService {
+  return { recordLotteryResults: implementation } as unknown as LotteryEntryCountService;
 }
 
 function createPortalSyncService(
@@ -554,8 +552,8 @@ describe("admin web server", () => {
     expect(response.body).toContain('<html lang="ja">');
     expect(response.body).toContain('<meta charset="UTF-8">');
     expect(response.body).toContain('name="viewport"');
-    expect(response.body).toContain("<title>FANBOX抽選レベル管理</title>");
-    expect(response.body).toContain("<h1>FANBOX抽選レベル管理</h1>");
+    expect(response.body).toContain("<title>FANBOX抽選口数管理</title>");
+    expect(response.body).toContain("<h1>FANBOX抽選口数管理</h1>");
     expect(response.body).toContain("ローカル管理アプリケーションは起動しています。");
     expect(response.body).toContain('<link rel="stylesheet" href="/style.css">');
     expect(response.body).toContain('<script src="/app.js" defer></script>');
@@ -1561,7 +1559,7 @@ describe("existing supporter migration route", () => {
   const validBody = JSON.stringify({
     fanboxRelationshipId: "legacy_relationship_52",
     displayName: "  Legacy synthetic display name  ",
-    currentLevel: 4,
+    entryCount: 4,
   });
 
   it("passes the exact migration input and returns privacy-minimized success", async () => {
@@ -1604,7 +1602,7 @@ describe("existing supporter migration route", () => {
       expect(inputs).toHaveLength(1);
       expect(inputs[0]?.fanboxRelationshipId).toBe("legacy_relationship_52");
       expect(inputs[0]?.displayName).toBe("  Legacy synthetic display name  ");
-      expect(inputs[0]?.currentLevel).toBe(4);
+      expect(inputs[0]?.currentEntryCount).toBe(4);
       expect(inputs[0]?.supporting).toBe(true);
       expect(inputs[0]?.migratedAt).toBeInstanceOf(Date);
       expect(Number.isNaN(inputs[0]?.migratedAt.getTime())).toBe(false);
@@ -1619,38 +1617,38 @@ describe("existing supporter migration route", () => {
 
   it.each([
     "{not-json",
-    JSON.stringify({ displayName: "name", currentLevel: 1 }),
+    JSON.stringify({ displayName: "name", entryCount: 1 }),
     JSON.stringify({
       fanboxRelationshipId: "relationship",
       displayName: "name",
-      currentLevel: 1,
+      entryCount: 1,
       extra: "not accepted",
     }),
     JSON.stringify({
       fanboxRelationshipId: "relationship.invalid",
       displayName: "name",
-      currentLevel: 1,
+      entryCount: 1,
     }),
     JSON.stringify({
       fanboxRelationshipId: "relationship",
       displayName: "   ",
-      currentLevel: 1,
+      entryCount: 1,
     }),
     JSON.stringify({
       fanboxRelationshipId: "relationship",
       displayName: "name",
-      currentLevel: -1,
+      entryCount: -1,
     }),
     JSON.stringify({
       fanboxRelationshipId: "relationship",
       displayName: "name",
-      currentLevel: 1.5,
+      entryCount: 1.5,
     }),
-    '{"fanboxRelationshipId":"relationship","displayName":"name","currentLevel":1e999}',
+    '{"fanboxRelationshipId":"relationship","displayName":"name","entryCount":1e999}',
     JSON.stringify({
       fanboxRelationshipId: "relationship",
       displayName: "name",
-      currentLevel: "1",
+      entryCount: "1",
     }),
   ])("rejects invalid request %s without calling the service", async (body) => {
     const registerExistingSupporter = vi.fn();
@@ -2041,7 +2039,7 @@ describe("existing supporter migration route", () => {
 describe("legacy baseline assignment route", () => {
   const validBody = JSON.stringify({
     supporterId: " opaque-supporter-id ",
-    currentLevel: 7,
+    entryCount: 7,
   });
 
   function createLegacyBaselineTestService(
@@ -2108,7 +2106,7 @@ describe("legacy baseline assignment route", () => {
       expect(callOrder).toEqual(["backup-readiness", "mutation", "backup", "sync"]);
       expect(inputs).toHaveLength(1);
       expect(inputs[0]?.supporterId).toBe(" opaque-supporter-id ");
-      expect(inputs[0]?.currentLevel).toBe(7);
+      expect(inputs[0]?.currentEntryCount).toBe(7);
       expect(inputs[0]?.migratedAt).toBeInstanceOf(Date);
       expect(createBackup).toHaveBeenCalledTimes(1);
       expect(syncService.syncSupporter).toHaveBeenCalledTimes(1);
@@ -2120,11 +2118,11 @@ describe("legacy baseline assignment route", () => {
   it.each([
     "{not-json",
     JSON.stringify({ supporterId: "opaque-supporter-id" }),
-    JSON.stringify({ supporterId: "opaque-supporter-id", currentLevel: 1, extra: true }),
-    JSON.stringify({ supporterId: "   ", currentLevel: 1 }),
-    JSON.stringify({ supporterId: "opaque-supporter-id", currentLevel: -1 }),
-    JSON.stringify({ supporterId: "opaque-supporter-id", currentLevel: 1.5 }),
-    '{"supporterId":"opaque-supporter-id","currentLevel":1e999}',
+    JSON.stringify({ supporterId: "opaque-supporter-id", entryCount: 1, extra: true }),
+    JSON.stringify({ supporterId: "   ", entryCount: 1 }),
+    JSON.stringify({ supporterId: "opaque-supporter-id", entryCount: -1 }),
+    JSON.stringify({ supporterId: "opaque-supporter-id", entryCount: 1.5 }),
+    '{"supporterId":"opaque-supporter-id","entryCount":1e999}',
   ])("rejects invalid requests before readiness or mutation: %s", async (body) => {
     const assignLegacyBaseline = vi.fn();
     const getBackupDestinationDirectory = vi.fn(() => "/synthetic/backup/");
@@ -2226,7 +2224,7 @@ describe("lottery results route", () => {
       undefined,
       undefined,
       undefined,
-      createLotteryLevelService(recordLotteryResults),
+      createLotteryEntryCountService(recordLotteryResults),
       undefined,
       createBackupDestinationService(),
       createBackupExecutionService(),
@@ -2273,7 +2271,7 @@ describe("lottery results route", () => {
       undefined,
       undefined,
       undefined,
-      createLotteryLevelService(recordLotteryResults),
+      createLotteryEntryCountService(recordLotteryResults),
       undefined,
       undefined,
       undefined,
@@ -2383,7 +2381,7 @@ describe("lottery results route", () => {
       undefined,
       undefined,
       undefined,
-      createLotteryLevelService(recordLotteryResults),
+      createLotteryEntryCountService(recordLotteryResults),
       undefined,
       {
         getBackupDestinationDirectory,
@@ -2438,7 +2436,7 @@ describe("lottery results route", () => {
       undefined,
       undefined,
       undefined,
-      createLotteryLevelService(() => {
+      createLotteryEntryCountService(() => {
         throw new SupporterNotFoundError("private-supporter-id");
       }),
       undefined,
@@ -2454,7 +2452,7 @@ describe("lottery results route", () => {
       undefined,
       undefined,
       undefined,
-      createLotteryLevelService(() => {
+      createLotteryEntryCountService(() => {
         throw new StaleMonthError("2026-08", "2026-09");
       }),
       undefined,
@@ -2470,7 +2468,7 @@ describe("lottery results route", () => {
       undefined,
       undefined,
       undefined,
-      createLotteryLevelService(() => {
+      createLotteryEntryCountService(() => {
         throw new Error(
           "SQL failed for /private/admin.sqlite private-supporter-id operation-id month-key",
         );
@@ -2507,7 +2505,7 @@ describe("lottery results route", () => {
       );
 
       expect(unavailable.statusCode).toBe(500);
-      expect(unavailable.body).toBe('{"error":"lottery_level_unavailable"}');
+      expect(unavailable.body).toBe('{"error":"lottery_entry_count_unavailable"}');
       expect(conflict.statusCode).toBe(409);
       expect(conflict.body).toBe('{"error":"lottery_result_conflict"}');
       expect(stale.statusCode).toBe(409);
@@ -2568,7 +2566,7 @@ describe("lottery results route", () => {
       undefined,
       undefined,
       undefined,
-      createLotteryLevelService(recordLotteryResults),
+      createLotteryEntryCountService(recordLotteryResults),
       undefined,
       backupDestinationService,
       backupExecutionService,
@@ -2652,7 +2650,7 @@ describe("lottery results route", () => {
       undefined,
       undefined,
       undefined,
-      createLotteryLevelService(recordLotteryResults),
+      createLotteryEntryCountService(recordLotteryResults),
       undefined,
       createBackupDestinationService(),
       backupExecutionService,
@@ -2752,7 +2750,7 @@ describe("lottery results route", () => {
       undefined,
       undefined,
       undefined,
-      createLotteryLevelService(recordLotteryResults),
+      createLotteryEntryCountService(recordLotteryResults),
       undefined,
       destination,
       execution,
@@ -2794,7 +2792,7 @@ describe("lottery results route", () => {
       undefined,
       undefined,
       undefined,
-      createLotteryLevelService(recordLotteryResults),
+      createLotteryEntryCountService(recordLotteryResults),
       undefined,
       createBackupDestinationService(),
       backupExecutionService,
@@ -2833,7 +2831,7 @@ describe("lottery results route", () => {
       undefined,
       undefined,
       undefined,
-      createLotteryLevelService(recordLotteryResults),
+      createLotteryEntryCountService(recordLotteryResults),
       undefined,
       createBackupDestinationService(),
       createBackupExecutionService(createBackup),
@@ -2868,14 +2866,14 @@ describe("lottery results route", () => {
       undefined,
       undefined,
       undefined,
-      createLotteryLevelService(() => [
+      createLotteryEntryCountService(() => [
         {
           supporterId: "private-supporter-id",
           outcome: "win",
           state: {
             supporterId: "private-supporter-id",
             monthKey: "2026-09",
-            level: 4,
+            entryCount: 4,
             supporting: true,
             updatedAt: "2026-09-08T09:00:00.000Z",
           },
@@ -2902,7 +2900,7 @@ describe("lottery results route", () => {
         "private-supporter-id",
         "2026-09",
         "2026-09-08T09:00:00.000Z",
-        "level",
+        "entryCount",
       ]) {
         expect(response.body).not.toContain(value);
       }
@@ -2931,7 +2929,7 @@ describe("month-end routes", () => {
       supporterId: "synthetic-supporter-id",
       fanboxRelationshipId: "synthetic-relationship-id",
       displayName: "synthetic display name",
-      currentLevel: 9,
+      currentEntryCount: 9,
       monthlyFlag: true,
       operationId: "synthetic-operation-id",
       localPath: "/synthetic/private.sqlite",
@@ -3072,7 +3070,7 @@ describe("month-end routes", () => {
           state: {
             supporterId: "synthetic-supporter-id",
             monthKey: "2026-09",
-            level: 9,
+            entryCount: 9,
             supporting: true,
             updatedAt: "synthetic-updated-at",
           },
@@ -3105,7 +3103,7 @@ describe("month-end routes", () => {
         "synthetic-supporter-id",
         "synthetic-updated-at",
         "2026-09",
-        "level",
+        "entryCount",
       ]) {
         expect(response.body).not.toContain(value);
       }
@@ -3403,7 +3401,7 @@ describe("month-end routes", () => {
         state: {
           supporterId: "returned-supporter-1",
           monthKey: "2026-09",
-          level: 1,
+          entryCount: 1,
           supporting: true,
           updatedAt: "synthetic-updated-at-1",
         },
@@ -3414,7 +3412,7 @@ describe("month-end routes", () => {
         state: {
           supporterId: "returned-supporter-2",
           monthKey: "2026-09",
-          level: 2,
+          entryCount: 2,
           supporting: false,
           updatedAt: "synthetic-updated-at-2",
         },
@@ -5090,7 +5088,7 @@ describe("admin server configuration", () => {
       expect(suppliedStore).toBe(store);
       return migrationService;
     });
-    const lotteryService = createLotteryLevelService(vi.fn());
+    const lotteryService = createLotteryEntryCountService(vi.fn());
     const createLotteryService = vi.fn((suppliedStore: LocalStore) => {
       expect(suppliedStore).toBe(store);
       return lotteryService;
@@ -5126,7 +5124,7 @@ describe("admin server configuration", () => {
         createFanboxSupporterImportService: createImportService,
         createFanboxIdentityRelinkService: createIdentityRelinkService,
         createExistingSupporterMigrationService: createMigrationService,
-        createLotteryLevelService: createLotteryService,
+        createLotteryEntryCountService: createLotteryService,
         createMonthEndProcessingService: createMonthEndService,
         createBackupExecutionService: createBackupExecutionServiceFactory,
       });
@@ -5407,7 +5405,7 @@ describe("admin server configuration", () => {
       expect(suppliedStore).toBe(store);
       return migrationService;
     });
-    const lotteryService = createLotteryLevelService(vi.fn());
+    const lotteryService = createLotteryEntryCountService(vi.fn());
     const createLotteryService = vi.fn((suppliedStore: LocalStore) => {
       expect(suppliedStore).toBe(store);
       return lotteryService;
@@ -5428,7 +5426,7 @@ describe("admin server configuration", () => {
         createSupporterPortalSyncService: createSyncService,
         createSupporterPortalDeliveryService: createDeliveryService,
         createExistingSupporterMigrationService: createMigrationService,
-        createLotteryLevelService: createLotteryService,
+        createLotteryEntryCountService: createLotteryService,
       });
       await new Promise<void>((resolve, reject) => {
         productionServer?.once("listening", () => resolve());
@@ -5528,8 +5526,8 @@ describe("admin server configuration", () => {
     expect(ADMIN_SCRIPT).toContain('credentials: "omit"');
     expect(ADMIN_SCRIPT).toContain('redirect: "error"');
     expect(ADMIN_SCRIPT).toContain('referrerPolicy: "no-referrer"');
-    expect(ADMIN_SCRIPT).toContain("旧管理レベル");
-    expect(ADMIN_SCRIPT).toContain("旧管理レベルで登録");
+    expect(ADMIN_SCRIPT).toContain("旧管理口数");
+    expect(ADMIN_SCRIPT).toContain("旧管理口数で登録");
     expect(ADMIN_SCRIPT).toContain("comparison.status === \"new\"");
     expect(ADMIN_SCRIPT).toContain("value.status !== \"ok\"");
     expect(ADMIN_SCRIPT).toContain(
@@ -5653,9 +5651,8 @@ describe("admin server configuration", () => {
     ]) {
       expect(ADMIN_SCRIPT).toContain(deliveryState);
     }
-    expect(ADMIN_SCRIPT).toContain(
-      "supporter.nextLotteryEntryCount !== supporter.currentLevel + 1",
-    );
+    expect(ADMIN_SCRIPT).not.toContain("nextLotteryEntryCount");
+    expect(ADMIN_SCRIPT).not.toContain("currentLevel");
     expect(ADMIN_SCRIPT).toContain('const LOTTERY_RESULT_OPTIONS = [');
     expect(ADMIN_SCRIPT).toContain('{ value: "none", label: "不参加" }');
     expect(ADMIN_SCRIPT).toContain('{ value: "win", label: "当選" }');
@@ -5818,8 +5815,7 @@ describe("admin server configuration", () => {
                   id: "internal-supporter-id",
                   confirmationId: "3630-5118-9AE4-0646",
                   displayName: "支援者A",
-                  currentLevel: 2,
-                  nextLotteryEntryCount: 3,
+                  entryCount: 2,
                   supporting: false,
                   latestMonthKey: null,
                   legacyBaselineEligible: false,
@@ -5856,10 +5852,10 @@ describe("admin server configuration", () => {
 
     const row = elements.get("list")?.children[0];
     expect(row).toBeDefined();
-    const syncButton = row?.children[9];
-    const syncStatus = row?.children[10];
-    const portalButton = row?.children[7];
-    const sentButton = row?.children[11];
+    const syncButton = row?.children[8];
+    const syncStatus = row?.children[9];
+    const portalButton = row?.children[6];
+    const sentButton = row?.children[10];
     expect(syncButton?.textContent).toBe("Cloudflareへ同期");
     expect(syncButton?.disabled).toBe(false);
     expect(sentButton?.disabled).toBe(true);
@@ -5962,8 +5958,7 @@ describe("admin server configuration", () => {
             id: "opaque-supporter-id",
             confirmationId: "598E-043E-C2AC-06BE",
             displayName: "対象支援者",
-            currentLevel: 0,
-            nextLotteryEntryCount: 1,
+            entryCount: 1,
             supporting: true,
             latestMonthKey: null,
             legacyBaselineEligible: true,
@@ -5977,8 +5972,7 @@ describe("admin server configuration", () => {
             id: "opaque-supporter-id",
             confirmationId: "598E-043E-C2AC-06BE",
             displayName: "対象支援者",
-            currentLevel: 0,
-            nextLotteryEntryCount: 1,
+            entryCount: 1,
             supporting: true,
             latestMonthKey: null,
             legacyBaselineEligible: false,
@@ -6048,9 +6042,9 @@ describe("admin server configuration", () => {
     const levelInput = control?.children[1];
     const baselineButton = control?.children[2];
     expect(levelInput?.value).toBe("");
-    expect(levelInput?.min).toBe("0");
+    expect(levelInput?.min).toBe("1");
     expect(levelInput?.step).toBe("1");
-    expect(baselineButton?.textContent).toBe("旧管理レベルを設定");
+    expect(baselineButton?.textContent).toBe("旧管理口数を設定");
     expect(visibleText(list as FakeElement)).not.toContain("opaque-supporter-id");
     expect(JSON.stringify(list)).not.toContain("opaque-supporter-id");
     expect(JSON.stringify(levelInput?.dataset ?? {})).not.toContain(
@@ -6062,13 +6056,18 @@ describe("admin server configuration", () => {
     }
     levelInput.value = "0";
     baselineButton.click();
+    expect(baselineResolvers).toHaveLength(0);
+    expect(control?.children[3]?.textContent).toBe(
+      "旧管理口数は1以上の整数を入力してください。",
+    );
+    levelInput.value = "1";
     baselineButton.click();
     expect(baselineResolvers).toHaveLength(1);
     expect(fetchCalls.at(-1)?.options).toMatchObject({
       method: "POST",
       body: JSON.stringify({
         supporterId: "opaque-supporter-id",
-        currentLevel: 0,
+        entryCount: 1,
       }),
       cache: "no-store",
       credentials: "omit",
@@ -6079,7 +6078,7 @@ describe("admin server configuration", () => {
     baselineResolvers[0]?.(response(200, { status: "ok" }));
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(visibleText(list as FakeElement)).not.toContain("旧管理レベルを設定");
+    expect(visibleText(list as FakeElement)).not.toContain("旧管理口数を設定");
   });
 
   it("implements the settled month-end browser contract", async () => {
@@ -6554,8 +6553,7 @@ describe("admin server configuration", () => {
         id: "internal-supporter-id",
         confirmationId: "3630-5118-9AE4-0646",
         displayName: "支援者A・更新後",
-        currentLevel: 4,
-        nextLotteryEntryCount: 5,
+        entryCount: 4,
         supporting: true,
         latestMonthKey: "2026-09",
         legacyBaselineEligible: false,
@@ -6565,8 +6563,7 @@ describe("admin server configuration", () => {
         id: "internal-supporter-id-2",
         confirmationId: "9375-B3F5-FC05-7CB9",
         displayName: "支援者B・更新後",
-        currentLevel: 1,
-        nextLotteryEntryCount: 2,
+        entryCount: 1,
         supporting: false,
         latestMonthKey: "2026-09",
         legacyBaselineEligible: false,
@@ -6645,14 +6642,13 @@ describe("admin server configuration", () => {
     const rowText = (element: FakeElement): string =>
       [element.textContent, ...element.children.map(rowText)].join("");
     expect(rowText(rows[0]!)).toContain("支援者A");
-    expect(rowText(rows[0]!)).toContain("現在のレベル: Lv.2");
-    expect(rowText(rows[0]!)).toContain("次回抽選口数: 3口");
+    expect(rowText(rows[0]!)).toContain("現在の抽選口数: 2口");
     expect(rowText(rows[0]!)).toContain("現在の支援状態: 支援中");
     expect(rowText(rows[1]!)).toContain("支援者B");
     expect(rowText(rows[1]!)).toContain("現在の支援状態: 支援停止");
     expect(rowText(rows[0]!)).not.toContain("internal-supporter-id");
     expect(rowText(rows[1]!)).not.toContain("internal-supporter-id-2");
-    const selects = rows.map((row) => row.children[4]!.children[1]!);
+    const selects = rows.map((row) => row.children[3]!.children[1]!);
     expect(selects.map((select) => select.children.map((option) => [
       option.value,
       option.textContent,
@@ -6749,13 +6745,13 @@ describe("admin server configuration", () => {
     expect(occurredAtInput.value).toBe("");
     expect(participantList.children).toHaveLength(2);
     expect(rowText(participantList.children[0]!)).toContain("支援者A・更新後");
-    expect(rowText(participantList.children[0]!)).toContain("現在のレベル: Lv.4");
-    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe("none");
+    expect(rowText(participantList.children[0]!)).toContain("現在の抽選口数: 4口");
+    expect(participantList.children[0]!.children[3]!.children[1]!.value).toBe("none");
     expect(resultButton.disabled).toBe(false);
 
     occurredAtInput.value = "2026-09-08T21:34";
-    participantList.children[0]!.children[4]!.children[1]!.value = "win";
-    participantList.children[1]!.children[4]!.children[1]!.value = "loss";
+    participantList.children[0]!.children[3]!.children[1]!.value = "win";
+    participantList.children[1]!.children[3]!.children[1]!.value = "loss";
     resultButton.click();
     lotteryResolvers[1]?.(response(503, { error: "portal_not_configured" }));
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -6764,10 +6760,10 @@ describe("admin server configuration", () => {
       "ポータル連携を設定してから、抽選結果をもう一度反映してください。抽選結果はまだ反映されていません。",
     );
     expect(occurredAtInput.value).toBe("2026-09-08T21:34");
-    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
+    expect(participantList.children[0]!.children[3]!.children[1]!.value).toBe(
       "win",
     );
-    expect(participantList.children[1]!.children[4]!.children[1]!.value).toBe(
+    expect(participantList.children[1]!.children[3]!.children[1]!.value).toBe(
       "loss",
     );
     expect(fetchCalls.filter(({ url }) => url === "/api/portal-sync")).toHaveLength(0);
@@ -6784,7 +6780,7 @@ describe("admin server configuration", () => {
       "抽選結果を反映できませんでした。入力内容を確認して再試行してください。",
     );
     expect(occurredAtInput.value).toBe("2026-09-08T21:34");
-    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
+    expect(participantList.children[0]!.children[3]!.children[1]!.value).toBe(
       "win",
     );
     expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(2);
@@ -6799,14 +6795,14 @@ describe("admin server configuration", () => {
       "抽選結果はすでに反映されています。抽選結果を再登録しないでください。暗号化された処理後バックアップは作成済みです。対象の参加者は一覧の「Cloudflareへ同期」を実行してください。",
     );
     expect(occurredAtInput.value).toBe("");
-    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
+    expect(participantList.children[0]!.children[3]!.children[1]!.value).toBe(
       "none",
     );
     expect(resultStatus.textContent).not.toContain("internal-supporter-id");
     expect(fetchCalls.filter(({ url }) => url === "/api/portal-sync")).toHaveLength(0);
 
     occurredAtInput.value = "2026-09-08T21:34";
-    participantList.children[0]!.children[4]!.children[1]!.value = "loss";
+    participantList.children[0]!.children[3]!.children[1]!.value = "loss";
     resultButton.click();
     lotteryResolvers[4]?.(
       response(200, { error: "portal_sync_failed_after_update" }),
@@ -6816,13 +6812,13 @@ describe("admin server configuration", () => {
       "抽選結果を反映できませんでした。入力内容を確認して再試行してください。",
     );
     expect(occurredAtInput.value).toBe("2026-09-08T21:34");
-    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
+    expect(participantList.children[0]!.children[3]!.children[1]!.value).toBe(
       "loss",
     );
     expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(3);
 
     occurredAtInput.value = "2026-09-08T21:34";
-    participantList.children[0]!.children[4]!.children[1]!.value = "win";
+    participantList.children[0]!.children[3]!.children[1]!.value = "win";
     confirmMock.mockImplementationOnce(() => false);
     resultButton.click();
     expect(fetchCalls.filter(({ url }) => url === "/api/lottery-results")).toHaveLength(5);
@@ -6839,7 +6835,7 @@ describe("admin server configuration", () => {
     );
     expect(resultStatus.textContent).not.toContain("synthetic-secret");
     expect(occurredAtInput.value).toBe("2026-09-08T21:34");
-    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
+    expect(participantList.children[0]!.children[3]!.children[1]!.value).toBe(
       "win",
     );
     expect(resultButton.disabled).toBe(false);
@@ -6854,12 +6850,12 @@ describe("admin server configuration", () => {
       "支援者状態または処理月が変わっています。参加者と時刻を確認してから再試行してください。",
     );
     expect(occurredAtInput.value).toBe("2026-09-08T21:34");
-    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
+    expect(participantList.children[0]!.children[3]!.children[1]!.value).toBe(
       "none",
     );
 
     occurredAtInput.value = "2026-10-01T00:05";
-    participantList.children[0]!.children[4]!.children[1]!.value = "loss";
+    participantList.children[0]!.children[3]!.children[1]!.value = "loss";
     resultButton.click();
     lotteryResolvers[7]?.(
       response(409, {
@@ -6873,7 +6869,7 @@ describe("admin server configuration", () => {
     );
     expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(4);
     expect(occurredAtInput.value).toBe("2026-10-01T00:05");
-    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
+    expect(participantList.children[0]!.children[3]!.children[1]!.value).toBe(
       "loss",
     );
 
@@ -6891,7 +6887,7 @@ describe("admin server configuration", () => {
     expect(occurredAtInput.value).toBe("");
 
     occurredAtInput.value = "2026-09-08T21:34";
-    participantList.children[0]!.children[4]!.children[1]!.value = "win";
+    participantList.children[0]!.children[3]!.children[1]!.value = "win";
     resultButton.click();
     lotteryResolvers[9]?.(
       response(409, { error: "backup_destination_required" }),
@@ -6902,7 +6898,7 @@ describe("admin server configuration", () => {
     );
     expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(5);
     expect(occurredAtInput.value).toBe("2026-09-08T21:34");
-    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
+    expect(participantList.children[0]!.children[3]!.children[1]!.value).toBe(
       "win",
     );
 
@@ -7205,19 +7201,19 @@ describe("admin server configuration", () => {
     const migrationButton = migrationRow.children[2];
     const migrationStatus = migrationRow.children[3];
     expect(migrationLevelInput?.type).toBe("number");
-    expect(migrationLevelInput?.min).toBe("0");
+    expect(migrationLevelInput?.min).toBe("1");
     expect(migrationLevelInput?.step).toBe("1");
     expect(migrationLevelInput?.value).toBe("");
-    expect(migrationButton?.textContent).toBe("旧管理レベルで登録");
+    expect(migrationButton?.textContent).toBe("旧管理口数で登録");
     expect(migrationButton?.disabled).toBe(false);
     expect(inspectionResult.children[1]?.children).toHaveLength(6);
     expect(inspectionResult.children[2]?.children).toHaveLength(6);
     const blankRelationship = inspectionResult.children[3];
     const blankMigrationRow = blankRelationship?.children.at(-1);
-    expect(blankMigrationRow?.children[0]?.textContent).toBe("旧管理レベル");
+    expect(blankMigrationRow?.children[0]?.textContent).toBe("旧管理口数");
     expect(blankMigrationRow?.children[2]?.disabled).toBe(true);
     expect(blankMigrationRow?.children[3]?.textContent).toBe(
-      "表示名候補が必要なため、旧管理レベルで登録できません。",
+      "表示名候補が必要なため、旧管理口数で登録できません。",
     );
 
     for (const invalidLevel of ["", "-1", "1.5"]) {
@@ -7231,7 +7227,7 @@ describe("admin server configuration", () => {
         ),
       ).toHaveLength(0);
       expect(migrationStatus?.textContent).toBe(
-        "旧管理レベルは0以上の整数を入力してください。",
+        "旧管理口数は1以上の整数を入力してください。",
       );
     }
 
@@ -7267,7 +7263,7 @@ describe("admin server configuration", () => {
       JSON.stringify({
         fanboxRelationshipId: "synthetic_relationship",
         displayName: "  exact synthetic candidate  ",
-        currentLevel: 4,
+        entryCount: 4,
       }),
     );
     expect(migrationCall?.options).toMatchObject({
@@ -7298,7 +7294,7 @@ describe("admin server configuration", () => {
     migrationResolvers[1]?.(response(503, { error: "portal_not_configured" }));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(migrationStatus?.textContent).toBe(
-      "ポータル連携を設定してから、旧管理レベルでの登録をもう一度実行してください。支援者はまだ登録されていません。",
+      "ポータル連携を設定してから、旧管理口数での登録をもう一度実行してください。支援者はまだ登録されていません。",
     );
     expect(migrationLevelInput?.value).toBe("4");
     expect(migrationButton?.disabled).toBe(false);
@@ -7314,7 +7310,7 @@ describe("admin server configuration", () => {
     );
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(migrationStatus?.textContent).toBe(
-      "旧管理レベルで登録できませんでした。",
+      "旧管理口数で登録できませんでした。",
     );
     expect(migrationButton?.disabled).toBe(false);
 
@@ -7323,7 +7319,7 @@ describe("admin server configuration", () => {
     migrationResolvers[3]?.(response(503, { error: "wrong_error" }));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(migrationStatus?.textContent).toBe(
-      "旧管理レベルで登録できませんでした。",
+      "旧管理口数で登録できませんでした。",
     );
     expect(migrationButton?.disabled).toBe(false);
 
@@ -7342,7 +7338,7 @@ describe("admin server configuration", () => {
     );
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(migrationStatus?.textContent).toBe(
-      "旧管理レベルで登録できませんでした。",
+      "旧管理口数で登録できませんでした。",
     );
     expect(migrationButton?.disabled).toBe(false);
 
@@ -7353,7 +7349,7 @@ describe("admin server configuration", () => {
     );
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(migrationStatus?.textContent).toBe(
-      "旧管理レベルで登録できませんでした。",
+      "旧管理口数で登録できませんでした。",
     );
     expect(migrationButton?.disabled).toBe(false);
 
@@ -7364,7 +7360,7 @@ describe("admin server configuration", () => {
     );
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(migrationStatus?.textContent).toBe(
-      "バックアップ先を選択してから、旧管理レベルでの登録をもう一度実行してください。",
+      "バックアップ先を選択してから、旧管理口数での登録をもう一度実行してください。",
     );
     expect(migrationLevelInput?.value).toBe("4");
     expect(migrationButton?.disabled).toBe(false);

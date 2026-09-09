@@ -4,3 +4,8 @@ declare namespace Cloudflare {
     SYNC_API_TOKEN: string;
   }
 }
+
+declare module "*?raw" {
+  const content: string;
+  export default content;
+}

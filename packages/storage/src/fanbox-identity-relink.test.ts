@@ -34,7 +34,7 @@ function createSupporter(
   overrides: Readonly<{
     displayName?: string;
     supporting?: boolean;
-    initialLevel?: number;
+    initialEntryCount?: number;
   }> = {},
 ) {
   const input = {
@@ -42,8 +42,8 @@ function createSupporter(
     displayName: overrides.displayName ?? "Synthetic supporter",
     supporting: overrides.supporting ?? true,
   };
-  if (overrides.initialLevel !== undefined) {
-    return store.createSupporter({ ...input, initialLevel: overrides.initialLevel });
+  if (overrides.initialEntryCount !== undefined) {
+    return store.createSupporter({ ...input, initialEntryCount: overrides.initialEntryCount });
   }
   return store.createSupporter(input);
 }
@@ -61,7 +61,7 @@ describe("FANBOX relationship identity relink persistence", () => {
     const supporter = createSupporter(store, "old-relationship", {
       displayName: "Preserved synthetic supporter",
       supporting: false,
-      initialLevel: 4,
+      initialEntryCount: 4,
     });
     store.setBackupDestinationDirectory("/synthetic/backup/");
     store.applyFanboxSupporterImport({
@@ -83,8 +83,8 @@ describe("FANBOX relationship identity relink persistence", () => {
       },
       (state) => ({
         ...state,
-        level: 5,
-        monthlyPlusOneUsed: true,
+        entryCount: 5,
+        monthlyEntryCountIncrementUsed: true,
         lotteryParticipationOccurred: true,
       }),
     );
@@ -95,7 +95,7 @@ describe("FANBOX relationship identity relink persistence", () => {
 
     const before = store.getSupporterById(supporter.id);
     const monthlyStateBefore = store.getMonthlyState(supporter.id, "2026-09");
-    const operationsBefore = store.listLevelOperations(supporter.id);
+    const operationsBefore = store.listEntryCountOperations(supporter.id);
     const portalAccessBefore = store.getSupporterPortalAccess(supporter.id);
     const importBefore = store.getLatestFanboxSupporterImport();
     const backupBefore = store.getBackupDestinationDirectory();
@@ -111,7 +111,7 @@ describe("FANBOX relationship identity relink persistence", () => {
       id: supporter.id,
       fanboxRelationshipId: "new-relationship",
       displayName: before?.displayName,
-      currentLevel: before?.currentLevel,
+      currentEntryCount: before?.currentEntryCount,
       supporting: before?.supporting,
       latestMonthKey: before?.latestMonthKey,
       createdAt: before?.createdAt,
@@ -124,7 +124,7 @@ describe("FANBOX relationship identity relink persistence", () => {
     expect(store.getMonthlyState(supporter.id, "2026-09")).toEqual(
       monthlyStateBefore,
     );
-    expect(store.listLevelOperations(supporter.id)).toEqual(operationsBefore);
+    expect(store.listEntryCountOperations(supporter.id)).toEqual(operationsBefore);
     expect(store.getSupporterPortalAccess(supporter.id)).toEqual(portalAccessBefore);
     expect(store.getLatestFanboxSupporterImport()).toEqual(importBefore);
     expect(store.getBackupDestinationDirectory()).toBe(backupBefore);
@@ -182,12 +182,12 @@ describe("FANBOX relationship identity relink persistence", () => {
   it("reports an owned replacement relationship without mutating either supporter", () => {
     const store = createStore();
     const current = createSupporter(store, "current-relationship", {
-      initialLevel: 3,
+      initialEntryCount: 3,
     });
     const owner = createSupporter(store, "owned-replacement", {
       displayName: "Owned synthetic supporter",
       supporting: false,
-      initialLevel: 8,
+      initialEntryCount: 8,
     });
     const currentBefore = store.getSupporterById(current.id);
     const ownerBefore = store.getSupporterById(owner.id);
@@ -268,9 +268,9 @@ describe("FANBOX relationship identity relink persistence", () => {
     expect(store.getSupporterByRelationshipId("race-replacement")).toBeNull();
   });
 
-  it("keeps the storage schema at version 5", () => {
+  it("keeps the storage schema at version 6", () => {
     const store = createStore();
-    expect(CURRENT_SCHEMA_VERSION).toBe(5);
-    expect(databaseOf(store).pragma("user_version", { simple: true })).toBe(5);
+    expect(CURRENT_SCHEMA_VERSION).toBe(6);
+    expect(databaseOf(store).pragma("user_version", { simple: true })).toBe(6);
   });
 });

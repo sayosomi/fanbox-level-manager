@@ -48,7 +48,7 @@ describe("legacy baseline assignment", () => {
 
     const result = store.assignLegacyBaseline({
       supporterId: supporter.id,
-      currentLevel: 7,
+      currentEntryCount: 7,
       monthKey: "2026-09",
     });
 
@@ -57,7 +57,7 @@ describe("legacy baseline assignment", () => {
       fanboxRelationshipId: "imported-relationship",
       displayName: "Imported supporter",
       supporting: true,
-      currentLevel: 7,
+      currentEntryCount: 7,
       latestMonthKey: null,
       createdAt: before?.createdAt,
     });
@@ -66,13 +66,13 @@ describe("legacy baseline assignment", () => {
       supporterId: supporter.id,
       monthKey: "2026-09",
       kind: "initial_import",
-      beforeLevel: 7,
-      afterLevel: 7,
+      beforeEntryCount: 7,
+      afterEntryCount: 7,
       occurredAt: null,
       supportingAtMonthEnd: null,
       createdAt: result.supporter.updatedAt,
     });
-    expect(store.listLevelOperations(supporter.id)).toEqual([result.operation]);
+    expect(store.listEntryCountOperations(supporter.id)).toEqual([result.operation]);
     expect(store.getMonthlyState(supporter.id, "2026-09")).toBeNull();
   });
 
@@ -86,19 +86,19 @@ describe("legacy baseline assignment", () => {
 
     const result = store.assignLegacyBaseline({
       supporterId: supporter.id,
-      currentLevel: 0,
+      currentEntryCount: 1,
       monthKey: "2026-09",
     });
 
     expect(result.operation).toMatchObject({
       kind: "initial_import",
-      beforeLevel: 0,
-      afterLevel: 0,
+      beforeEntryCount: 1,
+      afterEntryCount: 1,
     });
     expect(() =>
       store.assignLegacyBaseline({
         supporterId: supporter.id,
-        currentLevel: 3,
+        currentEntryCount: 3,
         monthKey: "2026-09",
       }),
     ).toThrow(LegacyBaselineNotEligibleError);
@@ -110,7 +110,7 @@ describe("legacy baseline assignment", () => {
       fanboxRelationshipId: "nonzero-relationship",
       displayName: "Nonzero supporter",
       supporting: true,
-      initialLevel: 2,
+      initialEntryCount: 2,
     });
     const progressed = store.createSupporter({
       fanboxRelationshipId: "progressed-relationship",
@@ -122,7 +122,7 @@ describe("legacy baseline assignment", () => {
       fanboxRelationshipId: "history-relationship",
       displayName: "History supporter",
       supporting: true,
-      currentLevel: 0,
+      currentEntryCount: 1,
       monthKey: "2026-09",
     });
 
@@ -130,7 +130,7 @@ describe("legacy baseline assignment", () => {
       expect(() =>
         store.assignLegacyBaseline({
           supporterId,
-          currentLevel: 4,
+          currentEntryCount: 4,
           monthKey: "2026-09",
         }),
       ).toThrow(LegacyBaselineNotEligibleError);
@@ -138,7 +138,7 @@ describe("legacy baseline assignment", () => {
     expect(() =>
       store.assignLegacyBaseline({
         supporterId: "missing-supporter",
-        currentLevel: 4,
+        currentEntryCount: 4,
         monthKey: "2026-09",
       }),
     ).toThrow(SupporterNotFoundError);
@@ -153,7 +153,7 @@ describe("legacy baseline assignment", () => {
     });
     databaseOf(store).exec(`
       CREATE TRIGGER reject_legacy_baseline
-      BEFORE INSERT ON level_operations
+      BEFORE INSERT ON entry_count_operations
       WHEN NEW.kind = 'initial_import'
       BEGIN
         SELECT RAISE(ABORT, 'legacy baseline rejected for test');
@@ -163,16 +163,16 @@ describe("legacy baseline assignment", () => {
     expect(() =>
       store.assignLegacyBaseline({
         supporterId: supporter.id,
-        currentLevel: 7,
+        currentEntryCount: 7,
         monthKey: "2026-09",
       }),
     ).toThrow();
     expect(store.getSupporterById(supporter.id)).toMatchObject({
       id: supporter.id,
-      currentLevel: 0,
+      currentEntryCount: 1,
       latestMonthKey: null,
     });
-    expect(store.listLevelOperations(supporter.id)).toEqual([]);
+    expect(store.listEntryCountOperations(supporter.id)).toEqual([]);
   });
 
   it("leaves the first later same-month lottery transition on the normal allowance", () => {
@@ -184,7 +184,7 @@ describe("legacy baseline assignment", () => {
     });
     store.assignLegacyBaseline({
       supporterId: supporter.id,
-      currentLevel: 7,
+      currentEntryCount: 7,
       monthKey: "2026-09",
     });
 
@@ -197,17 +197,17 @@ describe("legacy baseline assignment", () => {
       },
       (state) => ({
         ...state,
-        level: state.level + 1,
-        monthlyPlusOneUsed: true,
+        entryCount: state.entryCount + 1,
+        monthlyEntryCountIncrementUsed: true,
         lotteryParticipationOccurred: true,
       }),
     );
 
     expect(result.operation).toMatchObject({
-      beforeLevel: 7,
-      afterLevel: 8,
+      beforeEntryCount: 7,
+      afterEntryCount: 8,
       kind: "lottery_loss",
     });
-    expect(result.state.level).toBe(8);
+    expect(result.state.entryCount).toBe(8);
   });
 });

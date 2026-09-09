@@ -1,14 +1,19 @@
 export type MonthlyState = Readonly<{
-  level: number;
-  monthlyPlusOneUsed: boolean;
+  entryCount: number;
+  monthlyEntryCountIncrementUsed: boolean;
   lotteryParticipationOccurred: boolean;
 }>;
 
-const INVALID_LEVEL_MESSAGE = "level must be a non-negative finite integer";
+const INVALID_ENTRY_COUNT_MESSAGE =
+  "entryCount must be a positive finite integer";
 
-function assertValidLevel(level: number): void {
-  if (!Number.isFinite(level) || !Number.isInteger(level) || level < 0) {
-    throw new RangeError(INVALID_LEVEL_MESSAGE);
+function assertValidEntryCount(entryCount: number): void {
+  if (
+    !Number.isFinite(entryCount) ||
+    !Number.isInteger(entryCount) ||
+    entryCount < 1
+  ) {
+    throw new RangeError(INVALID_ENTRY_COUNT_MESSAGE);
   }
 }
 
@@ -17,10 +22,10 @@ function assertValidState(state: MonthlyState): void {
     throw new TypeError("monthly state must be an object");
   }
 
-  assertValidLevel(state.level);
+  assertValidEntryCount(state.entryCount);
 
   if (
-    typeof state.monthlyPlusOneUsed !== "boolean" ||
+    typeof state.monthlyEntryCountIncrementUsed !== "boolean" ||
     typeof state.lotteryParticipationOccurred !== "boolean"
   ) {
     throw new TypeError("monthly state flags must be boolean values");
@@ -28,41 +33,36 @@ function assertValidState(state: MonthlyState): void {
 }
 
 function createState(
-  level: number,
-  monthlyPlusOneUsed: boolean,
+  entryCount: number,
+  monthlyEntryCountIncrementUsed: boolean,
   lotteryParticipationOccurred: boolean,
 ): MonthlyState {
-  assertValidLevel(level);
+  assertValidEntryCount(entryCount);
 
   return Object.freeze({
-    level,
-    monthlyPlusOneUsed,
+    entryCount,
+    monthlyEntryCountIncrementUsed,
     lotteryParticipationOccurred,
   });
 }
 
-export function beginMonth(level: number): MonthlyState {
-  return createState(level, false, false);
-}
-
-export function entryCountForLevel(level: number): number {
-  assertValidLevel(level);
-  return level + 1;
+export function beginMonth(entryCount: number): MonthlyState {
+  return createState(entryCount, false, false);
 }
 
 export function applyLotteryLoss(state: MonthlyState): MonthlyState {
   assertValidState(state);
 
-  if (state.monthlyPlusOneUsed) {
-    return createState(state.level, true, true);
+  if (state.monthlyEntryCountIncrementUsed) {
+    return createState(state.entryCount, true, true);
   }
 
-  return createState(state.level + 1, true, true);
+  return createState(state.entryCount + 1, true, true);
 }
 
 export function applyLotteryWin(state: MonthlyState): MonthlyState {
   assertValidState(state);
-  return createState(0, state.monthlyPlusOneUsed, true);
+  return createState(1, state.monthlyEntryCountIncrementUsed, true);
 }
 
 export function applyMonthEnd(
@@ -78,15 +78,15 @@ export function applyMonthEnd(
   const shouldApplyMonthlyPlusOne =
     !state.lotteryParticipationOccurred &&
     supportingAtMonthEnd &&
-    !state.monthlyPlusOneUsed;
+    !state.monthlyEntryCountIncrementUsed;
 
   if (!shouldApplyMonthlyPlusOne) {
     return createState(
-      state.level,
-      state.monthlyPlusOneUsed,
+      state.entryCount,
+      state.monthlyEntryCountIncrementUsed,
       state.lotteryParticipationOccurred,
     );
   }
 
-  return createState(state.level + 1, true, false);
+  return createState(state.entryCount + 1, true, false);
 }

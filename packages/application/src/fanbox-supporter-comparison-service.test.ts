@@ -11,7 +11,7 @@ function supporterRecord(overrides: Partial<SupporterRecord> = {}): SupporterRec
     id: "supporter-id",
     fanboxRelationshipId: "relationship-id",
     displayName: "Stored supporter",
-    currentLevel: 0,
+    currentEntryCount: 1,
     supporting: true,
     latestMonthKey: null,
     createdAt: "2026-09-08T00:00:00.000Z",

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLotteryLevelService } from "./index.js";
+import { createLotteryEntryCountService } from "./index.js";
 import {
   StaleMonthError,
   SupporterNotFoundError,
@@ -18,22 +18,22 @@ function fixedClock(): Date {
   return new Date("2026-09-04T00:00:00.000Z");
 }
 
-function openService(): { service: ReturnType<typeof createLotteryLevelService>; store: LocalStore } {
+function openService(): { service: ReturnType<typeof createLotteryEntryCountService>; store: LocalStore } {
   const store = track(openLocalStore(":memory:", { clock: fixedClock }));
-  return { service: createLotteryLevelService(store), store };
+  return { service: createLotteryEntryCountService(store), store };
 }
 
 function createSupporter(
   store: LocalStore,
   relationshipId: string,
-  initialLevel = 0,
+  initialEntryCount = 1,
   supporting = true,
 ) {
   return store.createSupporter({
     fanboxRelationshipId: relationshipId,
     displayName: "Supporter",
     supporting,
-    initialLevel,
+    initialEntryCount,
   });
 }
 
@@ -43,7 +43,7 @@ afterEach(() => {
   }
 });
 
-describe("lottery level application service", () => {
+describe("lottery entryCount application service", () => {
   it("records mixed lottery results atomically in request order", () => {
     const { service, store } = openService();
     const winner = createSupporter(store, "batch-winner", 7);
@@ -89,28 +89,28 @@ describe("lottery level application service", () => {
     ]);
     expect(results.map((result) => result.outcome)).toEqual(["win", "loss"]);
     expect(results[0]?.state).toMatchObject({
-      level: 0,
-      monthlyPlusOneUsed: false,
+      entryCount: 1,
+      monthlyEntryCountIncrementUsed: false,
       lotteryParticipationOccurred: true,
     });
     expect(results[1]?.state).toMatchObject({
-      level: 1,
-      monthlyPlusOneUsed: true,
+      entryCount: 2,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     });
     expect(Object.isFrozen(results)).toBe(true);
     expect(Object.isFrozen(results[0])).toBe(true);
-    expect(store.listLevelOperations(winner.id)[0]).toMatchObject({
+    expect(store.listEntryCountOperations(winner.id)[0]).toMatchObject({
       kind: "lottery_win",
       occurredAt: occurredAt.toISOString(),
-      beforeLevel: 7,
-      afterLevel: 0,
+      beforeEntryCount: 7,
+      afterEntryCount: 1,
     });
-    expect(store.listLevelOperations(loser.id)[0]).toMatchObject({
+    expect(store.listEntryCountOperations(loser.id)[0]).toMatchObject({
       kind: "lottery_loss",
       occurredAt: occurredAt.toISOString(),
-      beforeLevel: 0,
-      afterLevel: 1,
+      beforeEntryCount: 1,
+      afterEntryCount: 2,
     });
   });
 
@@ -123,8 +123,8 @@ describe("lottery level application service", () => {
               state: Object.freeze({
                 supporterId: item.supporterId,
                 monthKey: item.monthKey,
-                level: 0,
-                monthlyPlusOneUsed: false,
+                entryCount: 1,
+                monthlyEntryCountIncrementUsed: false,
                 lotteryParticipationOccurred: true,
                 createdAt: "2026-09-04T00:00:00.000Z",
                 updatedAt: "2026-09-04T00:00:00.000Z",
@@ -137,7 +137,7 @@ describe("lottery level application service", () => {
     const store = {
       transitionMonthlyStatesWithOperations,
     } as unknown as LocalStore;
-    const service = createLotteryLevelService(store);
+    const service = createLotteryEntryCountService(store);
     const supporterId = "  exact supporter id  ";
 
     const results = service.recordLotteryResults(
@@ -171,7 +171,7 @@ describe("lottery level application service", () => {
 
     for (const participants of invalidParticipants) {
       const transitionMonthlyStatesWithOperations = vi.fn();
-      const service = createLotteryLevelService({
+      const service = createLotteryEntryCountService({
         transitionMonthlyStatesWithOperations,
       } as unknown as LocalStore);
 
@@ -187,7 +187,7 @@ describe("lottery level application service", () => {
 
   it("rejects invalid dates before storage", () => {
     const transitionMonthlyStatesWithOperations = vi.fn();
-    const service = createLotteryLevelService({
+    const service = createLotteryEntryCountService({
       transitionMonthlyStatesWithOperations,
     } as unknown as LocalStore);
 
@@ -205,7 +205,7 @@ describe("lottery level application service", () => {
     const transitionMonthlyStatesWithOperations = vi.fn(() => {
       throw failure;
     });
-    const service = createLotteryLevelService({
+    const service = createLotteryEntryCountService({
       transitionMonthlyStatesWithOperations,
     } as unknown as LocalStore);
 
@@ -229,11 +229,11 @@ describe("lottery level application service", () => {
     expect(result).toMatchObject({
       supporterId: supporter.id,
       monthKey: "2026-09",
-      level: 1,
-      monthlyPlusOneUsed: true,
+      entryCount: 2,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     });
-    expect(store.getSupporterById(supporter.id)?.currentLevel).toBe(1);
+    expect(store.getSupporterById(supporter.id)?.currentEntryCount).toBe(2);
     expect(store.getMonthlyState(supporter.id, "2026-09")).toEqual(result);
   });
 
@@ -245,12 +245,12 @@ describe("lottery level application service", () => {
     service.recordLotteryLoss(supporter.id, occurredAt);
     const result = service.recordLotteryLoss(supporter.id, occurredAt);
 
-    expect(result.level).toBe(1);
-    expect(result.monthlyPlusOneUsed).toBe(true);
-    expect(store.getSupporterById(supporter.id)?.currentLevel).toBe(1);
+    expect(result.entryCount).toBe(2);
+    expect(result.monthlyEntryCountIncrementUsed).toBe(true);
+    expect(store.getSupporterById(supporter.id)?.currentEntryCount).toBe(2);
   });
 
-  it("resets the persisted level on a win", () => {
+  it("resets the persisted entryCount on a win", () => {
     const { service, store } = openService();
     const supporter = createSupporter(store, "win-reset", 7);
 
@@ -259,11 +259,11 @@ describe("lottery level application service", () => {
       new Date("2026-09-15T00:00:00.000Z"),
     );
 
-    expect(result.level).toBe(0);
-    expect(store.getSupporterById(supporter.id)?.currentLevel).toBe(0);
+    expect(result.entryCount).toBe(1);
+    expect(store.getSupporterById(supporter.id)?.currentEntryCount).toBe(1);
   });
 
-  it("ends win then loss at level 1 when the allowance is unused", () => {
+  it("ends win then loss at entryCount 1 when the allowance is unused", () => {
     const { service, store } = openService();
     const supporter = createSupporter(store, "win-then-loss", 4);
     const occurredAt = new Date("2026-09-15T00:00:00.000Z");
@@ -271,11 +271,11 @@ describe("lottery level application service", () => {
     service.recordLotteryWin(supporter.id, occurredAt);
     const result = service.recordLotteryLoss(supporter.id, occurredAt);
 
-    expect(result.level).toBe(1);
-    expect(result.monthlyPlusOneUsed).toBe(true);
+    expect(result.entryCount).toBe(2);
+    expect(result.monthlyEntryCountIncrementUsed).toBe(true);
   });
 
-  it("ends loss then win then loss at level 0", () => {
+  it("ends loss then win then loss at entryCount 1", () => {
     const { service, store } = openService();
     const supporter = createSupporter(store, "loss-win-loss");
     const occurredAt = new Date("2026-09-15T00:00:00.000Z");
@@ -285,11 +285,11 @@ describe("lottery level application service", () => {
     const result = service.recordLotteryLoss(supporter.id, occurredAt);
 
     expect(result).toMatchObject({
-      level: 0,
-      monthlyPlusOneUsed: true,
+      entryCount: 1,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     });
-    expect(store.getSupporterById(supporter.id)?.currentLevel).toBe(0);
+    expect(store.getSupporterById(supporter.id)?.currentEntryCount).toBe(1);
   });
 
   it("applies one month-end increment for a non-participant who is supporting", () => {
@@ -299,11 +299,11 @@ describe("lottery level application service", () => {
     const result = service.processMonthEnd(supporter.id, "2026-09", true);
 
     expect(result).toMatchObject({
-      level: 3,
-      monthlyPlusOneUsed: true,
+      entryCount: 3,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: false,
     });
-    expect(store.getSupporterById(supporter.id)?.currentLevel).toBe(3);
+    expect(store.getSupporterById(supporter.id)?.currentEntryCount).toBe(3);
   });
 
   it("does not increment a non-participant who is not supporting", () => {
@@ -313,11 +313,11 @@ describe("lottery level application service", () => {
     const result = service.processMonthEnd(supporter.id, "2026-09", false);
 
     expect(result).toMatchObject({
-      level: 2,
-      monthlyPlusOneUsed: false,
+      entryCount: 2,
+      monthlyEntryCountIncrementUsed: false,
       lotteryParticipationOccurred: false,
     });
-    expect(store.getSupporterById(supporter.id)?.currentLevel).toBe(2);
+    expect(store.getSupporterById(supporter.id)?.currentEntryCount).toBe(2);
   });
 
   it("suppresses the month-end increment after lottery participation", () => {
@@ -330,8 +330,8 @@ describe("lottery level application service", () => {
     );
     const result = service.processMonthEnd(supporter.id, "2026-09", true);
 
-    expect(result.level).toBe(3);
-    expect(result.monthlyPlusOneUsed).toBe(true);
+    expect(result.entryCount).toBe(3);
+    expect(result.monthlyEntryCountIncrementUsed).toBe(true);
     expect(result.lotteryParticipationOccurred).toBe(true);
   });
 
@@ -342,9 +342,9 @@ describe("lottery level application service", () => {
     const first = service.processMonthEnd(supporter.id, "2026-09", true);
     const second = service.processMonthEnd(supporter.id, "2026-09", true);
 
-    expect(first.level).toBe(3);
-    expect(second.level).toBe(3);
-    expect(second.monthlyPlusOneUsed).toBe(true);
+    expect(first.entryCount).toBe(3);
+    expect(second.entryCount).toBe(3);
+    expect(second.monthlyEntryCountIncrementUsed).toBe(true);
   });
 
   it("uses the explicit month-end snapshot status without changing stored support status", () => {
@@ -373,8 +373,8 @@ describe("lottery level application service", () => {
       false,
     );
 
-    expect(supportingResult.level).toBe(3);
-    expect(notSupportingResult.level).toBe(2);
+    expect(supportingResult.entryCount).toBe(3);
+    expect(notSupportingResult.entryCount).toBe(2);
     expect(store.getSupporterById(notCurrentlySupporting.id)?.supporting).toBe(
       false,
     );
@@ -487,7 +487,7 @@ describe("lottery level application service", () => {
     ).toThrow(TypeError);
 
     expect(store.getSupporterById(supporter.id)).toEqual(before);
-    expect(store.getSupporterById(supporter.id)?.currentLevel).toBe(6);
+    expect(store.getSupporterById(supporter.id)?.currentEntryCount).toBe(6);
     expect(store.getSupporterById(supporter.id)?.latestMonthKey).toBeNull();
     expect(store.getMonthlyState(supporter.id, "2026-09")).toBeNull();
   });
@@ -506,14 +506,14 @@ describe("lottery level application service", () => {
     );
 
     expect(september).toMatchObject({
-      level: 1,
-      monthlyPlusOneUsed: true,
+      entryCount: 2,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     });
     expect(october).toMatchObject({
       monthKey: "2026-10",
-      level: 2,
-      monthlyPlusOneUsed: true,
+      entryCount: 3,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     });
   });

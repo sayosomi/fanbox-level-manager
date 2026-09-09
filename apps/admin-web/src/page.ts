@@ -6,12 +6,12 @@ export const ADMIN_PAGE = `<!doctype html>
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>FANBOX抽選レベル管理</title>
+    <title>FANBOX抽選口数管理</title>
     <link rel="stylesheet" href="/style.css">
   </head>
   <body>
     <main>
-      <h1>FANBOX抽選レベル管理</h1>
+      <h1>FANBOX抽選口数管理</h1>
       <p id="status" role="status">ローカル管理アプリケーションは起動しています。</p>
       <section aria-labelledby="backup-destination-heading">
         <h2 id="backup-destination-heading">バックアップ設定</h2>
@@ -75,8 +75,7 @@ const SUPPORTER_KEYS = [
   "id",
   "confirmationId",
   "displayName",
-  "currentLevel",
-  "nextLotteryEntryCount",
+  "entryCount",
   "supporting",
   "latestMonthKey",
   "legacyBaselineEligible",
@@ -368,6 +367,10 @@ function isNonNegativeInteger(value) {
     Number.isInteger(value) &&
     value >= 0
   );
+}
+
+function isPositiveInteger(value) {
+  return isNonNegativeInteger(value) && value >= 1;
 }
 
 function isNonBlankString(value) {
@@ -766,9 +769,7 @@ function validateSupporterResponse(value) {
       typeof supporter.confirmationId !== "string" ||
       !CONFIRMATION_ID_PATTERN.test(supporter.confirmationId) ||
       !isNonBlankString(supporter.displayName) ||
-      !isNonNegativeInteger(supporter.currentLevel) ||
-      !isNonNegativeInteger(supporter.nextLotteryEntryCount) ||
-      supporter.nextLotteryEntryCount !== supporter.currentLevel + 1 ||
+      !isPositiveInteger(supporter.entryCount) ||
       typeof supporter.supporting !== "boolean" ||
       typeof supporter.legacyBaselineEligible !== "boolean" ||
       !(
@@ -827,7 +828,6 @@ function setLotteryParticipantState(message) {
 function renderLotteryParticipant(supporter) {
   const item = document.createElement("li");
   const name = document.createElement("h3");
-  const level = document.createElement("p");
   const entries = document.createElement("p");
   const supportStatus = document.createElement("p");
   const resultLabel = document.createElement("label");
@@ -841,8 +841,7 @@ function renderLotteryParticipant(supporter) {
   });
 
   name.textContent = supporter.displayName;
-  level.textContent = \`現在のレベル: Lv.\${supporter.currentLevel}\`;
-  entries.textContent = \`次回抽選口数: \${supporter.nextLotteryEntryCount}口\`;
+  entries.textContent = \`現在の抽選口数: \${supporter.entryCount}口\`;
   supportStatus.textContent = supporter.supporting
     ? "現在の支援状態: 支援中"
     : "現在の支援状態: 支援停止";
@@ -854,7 +853,7 @@ function renderLotteryParticipant(supporter) {
 
   const control = { supporter, select };
   lotteryState.controls.push(control);
-  item.replaceChildren(name, level, entries, supportStatus, resultLabel);
+  item.replaceChildren(name, entries, supportStatus, resultLabel);
   return item;
 }
 
@@ -1423,44 +1422,44 @@ function renderExistingSupporterMigrationControl(
 ) {
   const migration = document.createElement("div");
   const label = document.createElement("label");
-  const levelInput = document.createElement("input");
+  const entryCountInput = document.createElement("input");
   const button = document.createElement("button");
   const status = document.createElement("p");
   const eligible = isNonBlankString(relationship.displayNameCandidate);
   const control = {
     button,
-    levelInput,
+    entryCountInput,
     eligible,
     inFlight: false,
     succeeded: false,
   };
 
-  label.textContent = "旧管理レベル";
-  levelInput.type = "number";
-  levelInput.min = "0";
-  levelInput.step = "1";
-  levelInput.value = "";
+  label.textContent = "旧管理口数";
+  entryCountInput.type = "number";
+  entryCountInput.min = "1";
+  entryCountInput.step = "1";
+  entryCountInput.value = "";
   button.type = "button";
-  button.textContent = "旧管理レベルで登録";
+  button.textContent = "旧管理口数で登録";
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
 
   if (!eligible) {
     status.textContent =
-      "表示名候補が必要なため、旧管理レベルで登録できません。";
+      "表示名候補が必要なため、旧管理口数で登録できません。";
   }
 
   pdfControls.state.migrationControls.push(control);
   button.addEventListener("click", () => {
     void migrateExistingSupporter(
       relationship,
-      levelInput,
+      entryCountInput,
       status,
       control,
       pdfControls,
     );
   });
-  migration.replaceChildren(label, levelInput, button, status);
+  migration.replaceChildren(label, entryCountInput, button, status);
   return migration;
 }
 
@@ -1700,7 +1699,7 @@ function updatePdfActionButtons(fileInput, inspectionButton, importButton, state
       control.inFlight ||
       control.succeeded ||
       !control.eligible;
-    control.levelInput.disabled =
+    control.entryCountInput.disabled =
       state.actionActive || control.inFlight || control.succeeded;
   }
   for (const control of state.relinkControls) {
@@ -1770,7 +1769,7 @@ async function relinkFanboxIdentity(
   if (
     !window.confirm(
       candidate +
-        \`を選択した既存ローカル支援者「\${selectedSupporter.storedDisplayName}」として扱います。FANBOXの関係IDを置き換えます。既存支援者の抽選レベル・履歴とポータルリンク状態はそのまま維持されます。続行しますか？\`,
+        \`を選択した既存ローカル支援者「\${selectedSupporter.storedDisplayName}」として扱います。FANBOXの関係IDを置き換えます。既存支援者の抽選口数・履歴とポータルリンク状態はそのまま維持されます。続行しますか？\`,
     )
   ) {
     return;
@@ -1849,18 +1848,18 @@ async function relinkFanboxIdentity(
   }
 }
 
-function parseExistingSupporterMigrationLevel(value) {
+function parseExistingSupporterMigrationEntryCount(value) {
   if (typeof value !== "string" || value.trim().length === 0) {
     return null;
   }
 
-  const level = Number(value);
-  return isNonNegativeInteger(level) ? level : null;
+  const entryCount = Number(value);
+  return isPositiveInteger(entryCount) ? entryCount : null;
 }
 
 async function migrateExistingSupporter(
   relationship,
-  levelInput,
+  entryCountInput,
   status,
   control,
   pdfControls,
@@ -1876,16 +1875,16 @@ async function migrateExistingSupporter(
     return;
   }
 
-  const currentLevel = parseExistingSupporterMigrationLevel(levelInput.value);
-  if (currentLevel === null) {
+  const entryCount = parseExistingSupporterMigrationEntryCount(entryCountInput.value);
+  if (entryCount === null) {
     status.textContent =
-      "旧管理レベルは0以上の整数を入力してください。";
+      "旧管理口数は1以上の整数を入力してください。";
     return;
   }
 
   if (!isNonBlankString(relationship.displayNameCandidate)) {
     status.textContent =
-      "表示名候補が必要なため、旧管理レベルで登録できません。";
+      "表示名候補が必要なため、旧管理口数で登録できません。";
     control.eligible = false;
     updatePdfActionButtons(
       fileInput,
@@ -1898,7 +1897,7 @@ async function migrateExistingSupporter(
 
   if (
     !window.confirm(
-      \`表示されている支援者「\${relationship.displayNameCandidate}」を、入力した旧管理用抽選レベル \${currentLevel} で登録します。続行しますか？\`,
+      \`表示されている支援者「\${relationship.displayNameCandidate}」を、入力した旧管理用抽選口数 \${entryCount} で登録します。続行しますか？\`,
     )
   ) {
     return;
@@ -1912,7 +1911,7 @@ async function migrateExistingSupporter(
     importButton,
     state,
   );
-  status.textContent = "旧管理レベルで登録しています。";
+  status.textContent = "旧管理口数で登録しています。";
 
   try {
     const response = await fetch("/api/supporters/migrate-existing", {
@@ -1923,7 +1922,7 @@ async function migrateExistingSupporter(
       body: JSON.stringify({
         fanboxRelationshipId: relationship.relationshipId,
         displayName: relationship.displayNameCandidate,
-        currentLevel,
+        entryCount,
       }),
       cache: "no-store",
       credentials: "omit",
@@ -1941,7 +1940,7 @@ async function migrateExistingSupporter(
       if (isExactBackupDestinationRequired(responseBody)) {
         markBackupDestinationUnavailable();
         status.textContent =
-          "バックアップ先を選択してから、旧管理レベルでの登録をもう一度実行してください。";
+          "バックアップ先を選択してから、旧管理口数での登録をもう一度実行してください。";
         return;
       }
       if (isExistingSupporterMigrationConflictResponse(responseBody)) {
@@ -1953,7 +1952,7 @@ async function migrateExistingSupporter(
     }
     if (response.status === 503 && isExactPortalNotConfigured(responseBody)) {
       status.textContent =
-        "ポータル連携を設定してから、旧管理レベルでの登録をもう一度実行してください。支援者はまだ登録されていません。";
+        "ポータル連携を設定してから、旧管理口数での登録をもう一度実行してください。支援者はまだ登録されていません。";
       return;
     }
     if (
@@ -1986,13 +1985,13 @@ async function migrateExistingSupporter(
     validateExistingSupporterMigrationResponse(responseBody);
     control.succeeded = true;
     status.textContent =
-      "旧管理レベルで登録しました。反映時に現在のローカル状態で再判定されます。";
+      "旧管理口数で登録しました。反映時に現在のローカル状態で再判定されます。";
     if (listStatus !== null && supporterList !== null) {
       await loadSupporters(listStatus, supporterList);
     }
     await refreshMonthEndSource(true);
   } catch {
-    status.textContent = "旧管理レベルで登録できませんでした。";
+    status.textContent = "旧管理口数で登録できませんでした。";
   } finally {
     control.inFlight = false;
     state.actionActive = false;
@@ -2271,18 +2270,18 @@ async function importSelectedPdf(
   }
 }
 
-function parseLegacyBaselineLevel(value) {
+function parseLegacyBaselineEntryCount(value) {
   if (typeof value !== "string" || value.trim().length === 0) {
     return null;
   }
 
-  const level = Number(value);
-  return isNonNegativeInteger(level) ? level : null;
+  const entryCount = Number(value);
+  return isPositiveInteger(entryCount) ? entryCount : null;
 }
 
 async function assignLegacyBaseline(
   supporter,
-  levelInput,
+  entryCountInput,
   button,
   status,
   listStatus,
@@ -2292,22 +2291,22 @@ async function assignLegacyBaseline(
     return;
   }
 
-  const currentLevel = parseLegacyBaselineLevel(levelInput.value);
-  if (currentLevel === null) {
-    status.textContent = "旧管理レベルは0以上の整数を入力してください。";
+  const entryCount = parseLegacyBaselineEntryCount(entryCountInput.value);
+  if (entryCount === null) {
+    status.textContent = "旧管理口数は1以上の整数を入力してください。";
     return;
   }
 
   if (
     !window.confirm(
-      \`支援者「\${supporter.displayName}」に旧管理レベル \${currentLevel} を設定します。既存の支援者ID・ポータル状態を維持したまま、1回限りの初期履歴を作成します。続行しますか？\`,
+      \`支援者「\${supporter.displayName}」に旧管理口数 \${entryCount} を設定します。既存の支援者ID・ポータル状態を維持したまま、1回限りの初期履歴を作成します。続行しますか？\`,
     )
   ) {
     return;
   }
 
   button.disabled = true;
-  status.textContent = "旧管理レベルを設定しています。";
+  status.textContent = "旧管理口数を設定しています。";
 
   try {
     const response = await fetch("/api/supporters/assign-legacy-baseline", {
@@ -2317,7 +2316,7 @@ async function assignLegacyBaseline(
       },
       body: JSON.stringify({
         supporterId: supporter.id,
-        currentLevel,
+        entryCount,
       }),
       cache: "no-store",
       credentials: "omit",
@@ -2337,7 +2336,7 @@ async function assignLegacyBaseline(
     ) {
       markBackupDestinationUnavailable();
       status.textContent =
-        "バックアップ先を選択してから、旧管理レベルを設定してください。支援者の状態は変更されていません。";
+        "バックアップ先を選択してから、旧管理口数を設定してください。支援者の状態は変更されていません。";
       return;
     }
 
@@ -2347,7 +2346,7 @@ async function assignLegacyBaseline(
       }
       await loadSupporters(listStatus, supporterList);
       listStatus.textContent =
-        "旧管理レベルを設定できませんでした。状態が変わっているため、支援者一覧を確認してください。";
+        "旧管理口数を設定できませんでした。状態が変わっているため、支援者一覧を確認してください。";
       return;
     }
 
@@ -2356,7 +2355,7 @@ async function assignLegacyBaseline(
         throw new Error("invalid portal configuration response");
       }
       status.textContent =
-        "ポータル連携を設定してから、旧管理レベルを設定してください。支援者の状態は変更されていません。";
+        "ポータル連携を設定してから、旧管理口数を設定してください。支援者の状態は変更されていません。";
       return;
     }
 
@@ -2366,7 +2365,7 @@ async function assignLegacyBaseline(
     ) {
       await loadSupporters(listStatus, supporterList);
       listStatus.textContent =
-        "旧管理レベルの設定は完了しています。同じ設定を再実行しないでください。処理後バックアップに失敗したため、「今すぐバックアップを作成」で復旧し、対象の支援者で「Cloudflareへ同期」を実行してください。";
+        "旧管理口数の設定は完了しています。同じ設定を再実行しないでください。処理後バックアップに失敗したため、「今すぐバックアップを作成」で復旧し、対象の支援者で「Cloudflareへ同期」を実行してください。";
       return;
     }
 
@@ -2376,7 +2375,7 @@ async function assignLegacyBaseline(
     ) {
       await loadSupporters(listStatus, supporterList);
       listStatus.textContent =
-        "旧管理レベルの設定と暗号化バックアップは完了しています。同じ設定を再実行しないでください。対象の支援者で「Cloudflareへ同期」を実行してください。";
+        "旧管理口数の設定と暗号化バックアップは完了しています。同じ設定を再実行しないでください。対象の支援者で「Cloudflareへ同期」を実行してください。";
       return;
     }
 
@@ -2392,10 +2391,10 @@ async function assignLegacyBaseline(
 
     validateLegacyBaselineResponse(responseBody);
     await loadSupporters(listStatus, supporterList);
-    listStatus.textContent = "旧管理レベルを設定しました。";
+    listStatus.textContent = "旧管理口数を設定しました。";
   } catch {
     status.textContent =
-      "旧管理レベルを設定できませんでした。入力内容と現在の状態を確認してください。";
+      "旧管理口数を設定できませんでした。入力内容と現在の状態を確認してください。";
   } finally {
     button.disabled = false;
   }
@@ -2404,29 +2403,29 @@ async function assignLegacyBaseline(
 function renderLegacyBaselineControl(supporter, listStatus, supporterList) {
   const control = document.createElement("div");
   const label = document.createElement("label");
-  const levelInput = document.createElement("input");
+  const entryCountInput = document.createElement("input");
   const button = document.createElement("button");
   const status = document.createElement("p");
 
-  label.textContent = "旧管理レベル";
-  levelInput.type = "number";
-  levelInput.min = "0";
-  levelInput.step = "1";
+  label.textContent = "旧管理口数";
+  entryCountInput.type = "number";
+  entryCountInput.min = "1";
+  entryCountInput.step = "1";
   button.type = "button";
-  button.textContent = "旧管理レベルを設定";
+  button.textContent = "旧管理口数を設定";
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
   button.addEventListener("click", () => {
     void assignLegacyBaseline(
       supporter,
-      levelInput,
+      entryCountInput,
       button,
       status,
       listStatus,
       supporterList,
     );
   });
-  control.replaceChildren(label, levelInput, button, status);
+  control.replaceChildren(label, entryCountInput, button, status);
   return control;
 }
 
@@ -2434,7 +2433,6 @@ function renderSupporter(supporter, listStatus, supporterList) {
   const item = document.createElement("li");
   const name = document.createElement("h3");
   const confirmationId = document.createElement("p");
-  const level = document.createElement("p");
   const entries = document.createElement("p");
   const supportStatus = document.createElement("p");
   const latestMonth = document.createElement("p");
@@ -2610,8 +2608,7 @@ function renderSupporter(supporter, listStatus, supporterList) {
 
   name.textContent = supporter.displayName;
   confirmationId.textContent = "確認ID: " + supporter.confirmationId;
-  level.textContent = \`Lv.\${supporter.currentLevel}\`;
-  entries.textContent = \`\${supporter.nextLotteryEntryCount}口\`;
+  entries.textContent = \`\${supporter.entryCount}口\`;
   supportStatus.textContent = supporter.supporting ? "支援中" : "支援停止";
   latestMonth.textContent = \`最新処理月: \${supporter.latestMonthKey ?? "未処理"}\`;
   portalDeliveryStatus.setAttribute("role", "status");
@@ -2637,7 +2634,6 @@ function renderSupporter(supporter, listStatus, supporterList) {
   item.replaceChildren(
     name,
     confirmationId,
-    level,
     entries,
     supportStatus,
     latestMonth,

@@ -6,7 +6,7 @@ import {
 } from "@sayosomi/storage";
 import type {
   FanboxSupporterImportRecord,
-  LevelOperationRecord,
+  EntryCountOperationRecord,
   LocalStore,
   MonthlyStateRecord,
   MonthlyTransitionWithOperationBatchItem,
@@ -48,7 +48,7 @@ function supporter(
     id: "supporter-id",
     fanboxRelationshipId: "relationship-id",
     displayName: "Synthetic supporter",
-    currentLevel: 2,
+    currentEntryCount: 2,
     supporting: true,
     latestMonthKey: null,
     createdAt: "2026-08-01T00:00:00.000Z",
@@ -65,8 +65,8 @@ function monthlyState(
   return Object.freeze({
     supporterId,
     monthKey,
-    level: 12,
-    monthlyPlusOneUsed: false,
+    entryCount: 12,
+    monthlyEntryCountIncrementUsed: false,
     lotteryParticipationOccurred: false,
     createdAt: "2026-09-08T09:00:00.000Z",
     updatedAt: "2026-09-08T09:00:00.000Z",
@@ -77,14 +77,14 @@ function monthlyState(
 function operationFor(
   item: MonthlyTransitionWithOperationBatchItem,
   index: number,
-): LevelOperationRecord {
+): EntryCountOperationRecord {
   return Object.freeze({
     id: `operation-${index}`,
     supporterId: item.supporterId,
     monthKey: item.monthKey,
     kind: item.operation.kind,
-    beforeLevel: 12,
-    afterLevel: 12,
+    beforeEntryCount: 12,
+    afterEntryCount: 12,
     occurredAt:
       item.operation.kind === "month_end"
         ? null
@@ -153,13 +153,13 @@ function createStoredSupporter(
   store: LocalStore,
   displayName: string,
   supporting: boolean,
-  initialLevel: number,
+  initialEntryCount: number,
 ): SupporterRecord {
   return store.createSupporter({
     fanboxRelationshipId: `relationship-${displayName}`,
     displayName,
     supporting,
-    initialLevel,
+    initialEntryCount,
   });
 }
 
@@ -202,21 +202,21 @@ describe("month-end processing service", () => {
         id: "  exact-id-a  ",
         fanboxRelationshipId: "relationship-a",
         displayName: "A",
-        currentLevel: 8,
+        currentEntryCount: 8,
         supporting: true,
       }),
       supporter({
         id: "exact-id-b",
         fanboxRelationshipId: "relationship-b",
         displayName: "B",
-        currentLevel: 3,
+        currentEntryCount: 3,
         supporting: false,
       }),
       supporter({
         id: "exact-id-c",
         fanboxRelationshipId: "relationship-c",
         displayName: "C",
-        currentLevel: 1,
+        currentEntryCount: 1,
         supporting: true,
       }),
     ];
@@ -245,7 +245,7 @@ describe("month-end processing service", () => {
     expect(source).not.toHaveProperty("id");
     expect(source).not.toHaveProperty("fanboxRelationshipId");
     expect(source).not.toHaveProperty("displayName");
-    expect(source).not.toHaveProperty("currentLevel");
+    expect(source).not.toHaveProperty("currentEntryCount");
     expect(source).not.toHaveProperty("supporting");
     expect(source).not.toHaveProperty("latestMonthKey");
     expect(source).not.toHaveProperty("portalDeliveryState");
@@ -412,8 +412,8 @@ describe("month-end processing service", () => {
 
   it("uses the storage-returned states and freezes the application result", () => {
     const storedState = monthlyState("supporter-id", "2026-09", {
-      level: 73,
-      monthlyPlusOneUsed: true,
+      entryCount: 73,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     });
     const { store, transition } = fakeStore({
@@ -422,7 +422,7 @@ describe("month-end processing service", () => {
         Object.freeze([
           Object.freeze({
             state: storedState,
-            operation: {} as LevelOperationRecord,
+            operation: {} as EntryCountOperationRecord,
           }),
         ]),
     });
@@ -464,8 +464,8 @@ describe("month-end processing service", () => {
       },
       (state) => ({
         ...state,
-        level: state.level + 1,
-        monthlyPlusOneUsed: true,
+        entryCount: state.entryCount + 1,
+        monthlyEntryCountIncrementUsed: true,
         lotteryParticipationOccurred: true,
       }),
     );
@@ -494,8 +494,8 @@ describe("month-end processing service", () => {
       participant.id,
       inactive.id,
     ]);
-    expect(result.supporters.map(({ state }) => state.level)).toEqual([3, 5, 6]);
-    expect(result.supporters.map(({ state }) => state.monthlyPlusOneUsed)).toEqual([
+    expect(result.supporters.map(({ state }) => state.entryCount)).toEqual([3, 5, 6]);
+    expect(result.supporters.map(({ state }) => state.monthlyEntryCountIncrementUsed)).toEqual([
       true,
       true,
       false,
@@ -514,7 +514,7 @@ describe("month-end processing service", () => {
     for (const stored of store.listSupporters()) {
       expect(beforeSupportFlags.get(stored.id)).toBe(stored.supporting);
       const monthEndOperations = store
-        .listLevelOperations(stored.id)
+        .listEntryCountOperations(stored.id)
         .filter((operation) => operation.kind === "month_end");
       expect(monthEndOperations).toHaveLength(1);
       expect(monthEndOperations[0]).toMatchObject({
@@ -525,13 +525,13 @@ describe("month-end processing service", () => {
       expect(Object.isFrozen(monthEndOperations[0])).toBe(true);
     }
     const inactiveMonthEnd = store
-      .listLevelOperations(inactive.id)
+      .listEntryCountOperations(inactive.id)
       .find((operation) => operation.kind === "month_end");
-    expect(inactiveMonthEnd?.beforeLevel).toBe(inactiveMonthEnd?.afterLevel);
-    expect(store.listLevelOperations(participant.id)).toHaveLength(2);
+    expect(inactiveMonthEnd?.beforeEntryCount).toBe(inactiveMonthEnd?.afterEntryCount);
+    expect(store.listEntryCountOperations(participant.id)).toHaveLength(2);
   });
 
-  it("allows repeated same-month processing without a second level increment", () => {
+  it("allows repeated same-month processing without a second entryCount increment", () => {
     const store = openStore();
     const stored = createStoredSupporter(store, "Repeated", true, 2);
     const importRecord = saveImport(store, 1);
@@ -540,12 +540,12 @@ describe("month-end processing service", () => {
     const first = service.processMonthEnd("2026-09", importRecord.sequence);
     const second = service.processMonthEnd("2026-09", importRecord.sequence);
 
-    expect(first.supporters[0]?.state.level).toBe(3);
-    expect(second.supporters[0]?.state.level).toBe(3);
-    expect(store.getSupporterById(stored.id)?.currentLevel).toBe(3);
+    expect(first.supporters[0]?.state.entryCount).toBe(3);
+    expect(second.supporters[0]?.state.entryCount).toBe(3);
+    expect(store.getSupporterById(stored.id)?.currentEntryCount).toBe(3);
     expect(
       store
-        .listLevelOperations(stored.id)
+        .listEntryCountOperations(stored.id)
         .filter((operation) => operation.kind === "month_end"),
     ).toHaveLength(2);
   });
@@ -564,7 +564,7 @@ describe("month-end processing service", () => {
     const beforeFirst = store.getSupporterById(first.id);
     const beforeStale = store.getSupporterById(stale.id);
     const beforeStaleState = store.getMonthlyState(stale.id, "2026-10");
-    const beforeStaleOperations = store.listLevelOperations(stale.id);
+    const beforeStaleOperations = store.listEntryCountOperations(stale.id);
     const batch = vi.spyOn(store, "transitionMonthlyStatesWithOperations");
     const service = createMonthEndProcessingService(store);
 
@@ -575,12 +575,12 @@ describe("month-end processing service", () => {
     expect(batch).toHaveBeenCalledTimes(1);
     expect(store.getSupporterById(first.id)).toEqual(beforeFirst);
     expect(store.getMonthlyState(first.id, "2026-09")).toBeNull();
-    expect(store.listLevelOperations(first.id)).toEqual([]);
+    expect(store.listEntryCountOperations(first.id)).toEqual([]);
     expect(store.getSupporterById(stale.id)).toEqual(beforeStale);
     expect(store.getMonthlyState(stale.id, "2026-10")).toEqual(
       beforeStaleState,
     );
-    expect(store.listLevelOperations(stale.id)).toEqual(beforeStaleOperations);
+    expect(store.listEntryCountOperations(stale.id)).toEqual(beforeStaleOperations);
   });
 
   it("propagates a batch failure without producing a partial result", () => {

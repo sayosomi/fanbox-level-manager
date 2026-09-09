@@ -212,11 +212,11 @@ class SupporterPortalSyncServiceImplementation
       this.snapshotService.getSupporterPortalSnapshot(supporterId);
     const body = {
       supporterId,
-      currentLevel: snapshot.currentLevel,
+      entryCount: snapshot.entryCount,
       history: snapshot.history.map((entry) => ({
         id: entry.id,
         monthKey: entry.monthKey,
-        level: entry.level,
+        entryCount: entry.entryCount,
         reason: entry.reason,
         occurredAt: entry.occurredAt,
         recordedAt: entry.recordedAt,

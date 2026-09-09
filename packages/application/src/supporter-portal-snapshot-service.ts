@@ -1,4 +1,3 @@
-import { entryCountForLevel } from "@sayosomi/domain";
 import {
   SupporterNotFoundError,
   type LocalStore,
@@ -10,8 +9,7 @@ import {
 } from "./supporter-history-service.js";
 
 export type SupporterPortalSnapshot = Readonly<{
-  currentLevel: number;
-  nextLotteryEntryCount: number;
+  entryCount: number;
   history: readonly SupporterHistoryEntry[];
 }>;
 
@@ -34,12 +32,10 @@ export function createSupporterPortalSnapshotService(
         throw new SupporterNotFoundError(supporterId);
       }
 
-      const nextLotteryEntryCount = entryCountForLevel(supporter.currentLevel);
       const history = historyService.getSupporterHistory(supporterId);
 
       return Object.freeze({
-        currentLevel: supporter.currentLevel,
-        nextLotteryEntryCount,
+        entryCount: supporter.currentEntryCount,
         history,
       });
     },

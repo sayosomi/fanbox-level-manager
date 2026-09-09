@@ -2,7 +2,7 @@ export type SupporterRecord = Readonly<{
   id: string;
   fanboxRelationshipId: string;
   displayName: string;
-  currentLevel: number;
+  currentEntryCount: number;
   supporting: boolean;
   latestMonthKey: string | null;
   createdAt: string;
@@ -18,8 +18,8 @@ export type SupporterPortalAccessRecord = Readonly<{
 }>;
 
 export type MonthlyState = Readonly<{
-  level: number;
-  monthlyPlusOneUsed: boolean;
+  entryCount: number;
+  monthlyEntryCountIncrementUsed: boolean;
   lotteryParticipationOccurred: boolean;
 }>;
 
@@ -35,7 +35,7 @@ export type CreateSupporterInput = Readonly<{
   fanboxRelationshipId: string;
   displayName: string;
   supporting: boolean;
-  initialLevel?: number;
+  initialEntryCount?: number;
 }>;
 
 export type FanboxSupporterImportCreate = Readonly<{
@@ -75,24 +75,24 @@ export type CreateMigratedSupporterInput = Readonly<{
   fanboxRelationshipId: string;
   displayName: string;
   supporting: boolean;
-  currentLevel: number;
+  currentEntryCount: number;
   monthKey: string;
 }>;
 
 export type CreateMigratedSupporterResult = Readonly<{
   supporter: SupporterRecord;
-  operation: LevelOperationRecord;
+  operation: EntryCountOperationRecord;
 }>;
 
 export type AssignLegacyBaselineInput = Readonly<{
   supporterId: string;
-  currentLevel: number;
+  currentEntryCount: number;
   monthKey: string;
 }>;
 
 export type AssignLegacyBaselineResult = Readonly<{
   supporter: SupporterRecord;
-  operation: LevelOperationRecord;
+  operation: EntryCountOperationRecord;
 }>;
 
 export type SupporterProfilePatch = Readonly<{
@@ -104,25 +104,25 @@ export type MonthlyStateTransition = (state: MonthlyState) => MonthlyState;
 
 export type StoreClock = () => Date;
 
-export type LevelOperationKind =
+export type EntryCountOperationKind =
   | "lottery_loss"
   | "lottery_win"
   | "month_end"
   | "initial_import";
 
-export type LevelOperationRecord = Readonly<{
+export type EntryCountOperationRecord = Readonly<{
   id: string;
   supporterId: string;
   monthKey: string;
-  kind: LevelOperationKind;
-  beforeLevel: number;
-  afterLevel: number;
+  kind: EntryCountOperationKind;
+  beforeEntryCount: number;
+  afterEntryCount: number;
   occurredAt: string | null;
   supportingAtMonthEnd: boolean | null;
   createdAt: string;
 }>;
 
-export type LevelTransitionOperationInput =
+export type EntryCountTransitionOperationInput =
   | Readonly<{
       kind: "lottery_loss" | "lottery_win";
       occurredAt: Date;
@@ -134,13 +134,13 @@ export type LevelTransitionOperationInput =
 
 export type MonthlyTransitionWithOperationResult = Readonly<{
   state: MonthlyStateRecord;
-  operation: LevelOperationRecord;
+  operation: EntryCountOperationRecord;
 }>;
 
 export type MonthlyTransitionWithOperationBatchItem = Readonly<{
   supporterId: string;
   monthKey: string;
-  operation: LevelTransitionOperationInput;
+  operation: EntryCountTransitionOperationInput;
   transition: MonthlyStateTransition;
 }>;
 
@@ -203,13 +203,13 @@ export interface LocalStore {
   transitionMonthlyStateWithOperation(
     supporterId: string,
     monthKey: string,
-    operation: LevelTransitionOperationInput,
+    operation: EntryCountTransitionOperationInput,
     transition: MonthlyStateTransition,
   ): MonthlyTransitionWithOperationResult;
   transitionMonthlyStatesWithOperations(
     items: readonly MonthlyTransitionWithOperationBatchItem[],
   ): readonly MonthlyTransitionWithOperationResult[];
-  listLevelOperations(
+  listEntryCountOperations(
     supporterId: string,
-  ): readonly LevelOperationRecord[];
+  ): readonly EntryCountOperationRecord[];
 }

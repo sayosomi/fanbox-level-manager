@@ -4,29 +4,20 @@ import {
   applyLotteryWin,
   applyMonthEnd,
   beginMonth,
-  entryCountForLevel,
 } from "./index.js";
 
 describe("monthly lottery state", () => {
-  it.each([
-    [0, 1],
-    [7, 8],
-  ])("derives %i entries from level %i", (level, expectedEntries) => {
-    expect(entryCountForLevel(level)).toBe(expectedEntries);
-  });
-
-  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
-    "rejects invalid level %s",
-    (level) => {
-      expect(() => beginMonth(level)).toThrow(RangeError);
-      expect(() => entryCountForLevel(level)).toThrow(RangeError);
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])(
+    "rejects invalid entry count %s",
+    (entryCount) => {
+      expect(() => beginMonth(entryCount)).toThrow(RangeError);
     },
   );
 
   it("starts a month with both monthly flags unused", () => {
     expect(beginMonth(3)).toEqual({
-      level: 3,
-      monthlyPlusOneUsed: false,
+      entryCount: 3,
+      monthlyEntryCountIncrementUsed: false,
       lotteryParticipationOccurred: false,
     });
   });
@@ -36,83 +27,83 @@ describe("monthly lottery state", () => {
     const afterLoss = applyLotteryLoss(initial);
 
     expect(afterLoss).toEqual({
-      level: 3,
-      monthlyPlusOneUsed: true,
+      entryCount: 3,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     });
     expect(afterLoss).not.toBe(initial);
     expect(initial).toEqual({
-      level: 2,
-      monthlyPlusOneUsed: false,
+      entryCount: 2,
+      monthlyEntryCountIncrementUsed: false,
       lotteryParticipationOccurred: false,
     });
     expect(Object.isFrozen(afterLoss)).toBe(true);
   });
 
-  it("does not increase level on a second loss", () => {
-    const afterTwoLosses = applyLotteryLoss(applyLotteryLoss(beginMonth(0)));
+  it("does not increase entry count on a second loss", () => {
+    const afterTwoLosses = applyLotteryLoss(applyLotteryLoss(beginMonth(1)));
 
     expect(afterTwoLosses).toEqual({
-      level: 1,
-      monthlyPlusOneUsed: true,
+      entryCount: 2,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     });
   });
 
-  it("resets level on a win without consuming an unused monthly plus one", () => {
+  it("resets entry count on a win without consuming an unused monthly increment", () => {
     expect(applyLotteryWin(beginMonth(5))).toEqual({
-      level: 0,
-      monthlyPlusOneUsed: false,
+      entryCount: 1,
+      monthlyEntryCountIncrementUsed: false,
       lotteryParticipationOccurred: true,
     });
   });
 
   it("keeps the monthly plus one used after a win", () => {
     expect(applyLotteryWin(applyLotteryLoss(beginMonth(5)))).toEqual({
-      level: 0,
-      monthlyPlusOneUsed: true,
+      entryCount: 1,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     });
   });
 
-  it("ends win then loss at level 1 when the plus one was unused", () => {
+  it("ends win then loss at entry count 2 when the increment was unused", () => {
     const state = applyLotteryLoss(applyLotteryWin(beginMonth(4)));
 
-    expect(state.level).toBe(1);
+    expect(state.entryCount).toBe(2);
   });
 
-  it("ends loss then win then loss at level 0", () => {
+  it("ends loss then win then loss at entry count 1", () => {
     const state = applyLotteryLoss(
       applyLotteryWin(applyLotteryLoss(beginMonth(4))),
     );
 
     expect(state).toEqual({
-      level: 0,
-      monthlyPlusOneUsed: true,
+      entryCount: 1,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: true,
     });
   });
 
   it("applies a month-end plus one for a supporting non-participant", () => {
     expect(applyMonthEnd(beginMonth(2), true)).toEqual({
-      level: 3,
-      monthlyPlusOneUsed: true,
+      entryCount: 3,
+      monthlyEntryCountIncrementUsed: true,
       lotteryParticipationOccurred: false,
     });
   });
 
   it("does not apply a month-end plus one to a non-supporter", () => {
     expect(applyMonthEnd(beginMonth(2), false)).toEqual({
-      level: 2,
-      monthlyPlusOneUsed: false,
+      entryCount: 2,
+      monthlyEntryCountIncrementUsed: false,
       lotteryParticipationOccurred: false,
     });
   });
 
   it("does not apply a month-end plus one after lottery participation", () => {
     expect(applyMonthEnd(applyLotteryWin(beginMonth(2)), true)).toEqual({
-      level: 0,
-      monthlyPlusOneUsed: false,
+      entryCount: 1,
+      monthlyEntryCountIncrementUsed: false,
       lotteryParticipationOccurred: true,
     });
   });

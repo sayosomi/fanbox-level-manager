@@ -17,7 +17,7 @@ import {
   createExistingSupporterMigrationService,
   createLegacyBaselineService,
   createFanboxSupporterImportService,
-  createLotteryLevelService,
+  createLotteryEntryCountService,
   createMonthEndProcessingService,
   createSupporterPortalSyncService,
   createSupporterPortalLinkService,
@@ -35,7 +35,7 @@ import {
   type FanboxPdfSupporterComparison,
   type ExistingSupporterMigrationService,
   type LegacyBaselineService,
-  type LotteryLevelService,
+  type LotteryEntryCountService,
   type MonthEndProcessingService,
   type SupporterPortalLinkService,
   type SupporterPortalSyncService,
@@ -168,8 +168,8 @@ const LEGACY_BASELINE_FAILED_BODY = JSON.stringify({
 const LEGACY_BASELINE_SUCCESS_BODY = JSON.stringify({
   status: "ok",
 });
-const LOTTERY_LEVEL_UNAVAILABLE_BODY = JSON.stringify({
-  error: "lottery_level_unavailable",
+const LOTTERY_ENTRY_COUNT_UNAVAILABLE_BODY = JSON.stringify({
+  error: "lottery_entry_count_unavailable",
 });
 const LOTTERY_RESULT_CONFLICT_BODY = JSON.stringify({
   error: "lottery_result_conflict",
@@ -257,7 +257,7 @@ export type ProductionAdminServerDependencies = Readonly<{
   createExistingSupporterMigrationService?:
     typeof createExistingSupporterMigrationService;
   createLegacyBaselineService?: typeof createLegacyBaselineService;
-  createLotteryLevelService?: typeof createLotteryLevelService;
+  createLotteryEntryCountService?: typeof createLotteryEntryCountService;
   createMonthEndProcessingService?: typeof createMonthEndProcessingService;
   createBackupDestinationService?: typeof createBackupDestinationService;
   createBackupExecutionService?: typeof createBackupExecutionService;
@@ -1006,7 +1006,7 @@ async function sendFanboxIdentityRelink(
 type ExistingSupporterMigrationRequest = Readonly<{
   fanboxRelationshipId: string;
   displayName: string;
-  currentLevel: number;
+  entryCount: number;
 }>;
 
 function parseExistingSupporterMigrationRequest(
@@ -1032,15 +1032,15 @@ function parseExistingSupporterMigrationRequest(
     Object.keys(record).length !== 3 ||
     !Object.hasOwn(record, "fanboxRelationshipId") ||
     !Object.hasOwn(record, "displayName") ||
-    !Object.hasOwn(record, "currentLevel") ||
+    !Object.hasOwn(record, "entryCount") ||
     typeof record.fanboxRelationshipId !== "string" ||
     !/^[A-Za-z0-9_-]+$/.test(record.fanboxRelationshipId) ||
     typeof record.displayName !== "string" ||
     record.displayName.trim().length === 0 ||
-    typeof record.currentLevel !== "number" ||
-    !Number.isFinite(record.currentLevel) ||
-    !Number.isInteger(record.currentLevel) ||
-    record.currentLevel < 0
+    typeof record.entryCount !== "number" ||
+    !Number.isFinite(record.entryCount) ||
+    !Number.isInteger(record.entryCount) ||
+    record.entryCount < 1
   ) {
     return null;
   }
@@ -1048,7 +1048,7 @@ function parseExistingSupporterMigrationRequest(
   return {
     fanboxRelationshipId: record.fanboxRelationshipId,
     displayName: record.displayName,
-    currentLevel: record.currentLevel,
+    entryCount: record.entryCount,
   };
 }
 
@@ -1101,7 +1101,7 @@ async function sendExistingSupporterMigration(
     result = migrationService.registerExistingSupporter({
       fanboxRelationshipId: input.fanboxRelationshipId,
       displayName: input.displayName,
-      currentLevel: input.currentLevel,
+      currentEntryCount: input.entryCount,
       supporting: true,
       migratedAt: new Date(),
     });
@@ -1131,7 +1131,7 @@ async function sendExistingSupporterMigration(
 
 type LegacyBaselineRequest = Readonly<{
   supporterId: string;
-  currentLevel: number;
+  entryCount: number;
 }>;
 
 function parseLegacyBaselineRequest(body: string): LegacyBaselineRequest | null {
@@ -1154,20 +1154,20 @@ function parseLegacyBaselineRequest(body: string): LegacyBaselineRequest | null 
   if (
     Object.keys(record).length !== 2 ||
     !Object.hasOwn(record, "supporterId") ||
-    !Object.hasOwn(record, "currentLevel") ||
+    !Object.hasOwn(record, "entryCount") ||
     typeof record.supporterId !== "string" ||
     record.supporterId.trim().length === 0 ||
-    typeof record.currentLevel !== "number" ||
-    !Number.isFinite(record.currentLevel) ||
-    !Number.isInteger(record.currentLevel) ||
-    record.currentLevel < 0
+    typeof record.entryCount !== "number" ||
+    !Number.isFinite(record.entryCount) ||
+    !Number.isInteger(record.entryCount) ||
+    record.entryCount < 1
   ) {
     return null;
   }
 
   return {
     supporterId: record.supporterId,
-    currentLevel: record.currentLevel,
+    entryCount: record.entryCount,
   };
 }
 
@@ -1216,7 +1216,7 @@ async function sendLegacyBaseline(
   try {
     legacyBaselineService.assignLegacyBaseline({
       supporterId: input.supporterId,
-      currentLevel: input.currentLevel,
+      currentEntryCount: input.entryCount,
       migratedAt: new Date(),
     });
   } catch (error: unknown) {
@@ -1340,7 +1340,7 @@ function parseLotteryResultRequest(body: string): LotteryResultRequest | null {
 async function sendLotteryResults(
   request: IncomingMessage,
   response: ServerResponse,
-  lotteryLevelService: LotteryLevelService | undefined,
+  lotteryEntryCountService: LotteryEntryCountService | undefined,
   backupDestinationService: BackupDestinationService | undefined,
   backupExecutionService: BackupExecutionService | undefined,
   supporterPortalSyncService: SupporterPortalSyncService | undefined,
@@ -1359,8 +1359,8 @@ async function sendLotteryResults(
     return;
   }
 
-  if (lotteryLevelService === undefined) {
-    sendPortalJson(response, 500, LOTTERY_LEVEL_UNAVAILABLE_BODY);
+  if (lotteryEntryCountService === undefined) {
+    sendPortalJson(response, 500, LOTTERY_ENTRY_COUNT_UNAVAILABLE_BODY);
     return;
   }
 
@@ -1380,7 +1380,7 @@ async function sendLotteryResults(
   }
 
   try {
-    lotteryLevelService.recordLotteryResults(input.participants, input.occurredAt);
+    lotteryEntryCountService.recordLotteryResults(input.participants, input.occurredAt);
   } catch (error: unknown) {
     if (
       error instanceof SupporterNotFoundError ||
@@ -1708,7 +1708,7 @@ export function createAdminServer(
   fanboxSupporterComparisonService?: FanboxSupporterComparisonService,
   fanboxSupporterImportService?: FanboxSupporterImportService,
   existingSupporterMigrationService?: ExistingSupporterMigrationService,
-  lotteryLevelService?: LotteryLevelService,
+  lotteryEntryCountService?: LotteryEntryCountService,
   monthEndProcessingService?: MonthEndProcessingService,
   backupDestinationService?: BackupDestinationService,
   backupExecutionService?: BackupExecutionService,
@@ -1783,7 +1783,7 @@ export function createAdminServer(
       void sendLotteryResults(
         request,
         response,
-        lotteryLevelService,
+        lotteryEntryCountService,
         backupDestinationService,
         backupExecutionService,
         supporterPortalSyncService,
@@ -1967,7 +1967,7 @@ export function startAdminServer(
   fanboxSupporterComparisonService?: FanboxSupporterComparisonService,
   fanboxSupporterImportService?: FanboxSupporterImportService,
   existingSupporterMigrationService?: ExistingSupporterMigrationService,
-  lotteryLevelService?: LotteryLevelService,
+  lotteryEntryCountService?: LotteryEntryCountService,
   monthEndProcessingService?: MonthEndProcessingService,
   backupDestinationService?: BackupDestinationService,
   backupExecutionService?: BackupExecutionService,
@@ -1984,7 +1984,7 @@ export function startAdminServer(
     fanboxSupporterComparisonService,
     fanboxSupporterImportService,
     existingSupporterMigrationService,
-    lotteryLevelService,
+    lotteryEntryCountService,
     monthEndProcessingService,
     backupDestinationService,
     backupExecutionService,
@@ -2053,8 +2053,8 @@ export function startProductionAdminServer(
   try {
     const supporterListService = createService(store);
     const createLotteryService =
-      dependencies.createLotteryLevelService ?? createLotteryLevelService;
-    const lotteryLevelService = createLotteryService(store);
+      dependencies.createLotteryEntryCountService ?? createLotteryEntryCountService;
+    const lotteryEntryCountService = createLotteryService(store);
     const createMonthEndService =
       dependencies.createMonthEndProcessingService ??
       createMonthEndProcessingService;
@@ -2119,7 +2119,7 @@ export function startProductionAdminServer(
       fanboxSupporterComparisonService,
       fanboxSupporterImportService,
       existingSupporterMigrationService,
-      lotteryLevelService,
+      lotteryEntryCountService,
       monthEndProcessingService,
       backupDestinationService,
       backupExecutionService,
