@@ -153,6 +153,14 @@ Existing supporters each receive their personal portal URL once. New supporters
 receive one when registered. Exceptional lost-link handling uses token
 rotation/reissue.
 
+After the required encrypted post-update backup succeeds, a successful
+existing-supporter migration or registration automatically synchronizes the
+newly created supporter to Cloudflare. Known missing portal configuration
+blocks the migration before local mutation starts. If automatic synchronization
+fails after the local registration is committed, the registration and completed
+backup are not rolled back or repeated. The manual per-supporter
+`Cloudflareへ同期` action is the explicit recovery path.
+
 ## Admin workflows
 
 The admin workflows support:
@@ -227,9 +235,8 @@ post-update backup failure.
 The remaining encryption implementation details are deferred to a later
 implementation contract.
 
-Automatic synchronization after FANBOX PDF import, existing-supporter
-migration, and month-end processing remains separate later work unless settled
-by a later implementation contract.
+Automatic synchronization after FANBOX PDF import and month-end processing
+remains separate later work unless settled by a later implementation contract.
 
 ## Deferred implementation choices and non-goals
 

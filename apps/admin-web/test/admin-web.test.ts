@@ -406,11 +406,17 @@ function createPdfImportService(
 }
 
 function createExistingSupporterMigrationService(
-  implementation: (input: ExistingSupporterMigrationInput) => void,
+  implementation: (
+    input: ExistingSupporterMigrationInput,
+  ) => ReturnType<ExistingSupporterMigrationService["registerExistingSupporter"]> | void,
 ): ExistingSupporterMigrationService {
   return {
-    registerExistingSupporter: implementation,
-  } as unknown as ExistingSupporterMigrationService;
+    registerExistingSupporter: (input) =>
+      implementation(input) ??
+      ({ supporter: { id: "synthetic-returned-supporter-id" } } as unknown as ReturnType<
+        ExistingSupporterMigrationService["registerExistingSupporter"]
+      >),
+  };
 }
 
 function createLotteryLevelService(
@@ -1277,6 +1283,7 @@ describe("existing supporter migration route", () => {
     });
     const backupDestinationService = createBackupDestinationService();
     const backupExecutionService = createBackupExecutionService();
+    const syncService = createPortalSyncService();
     const migrationServer = createAdminServer(
       sampleSupporterListService,
       undefined,
@@ -1289,6 +1296,7 @@ describe("existing supporter migration route", () => {
       undefined,
       backupDestinationService,
       backupExecutionService,
+      syncService,
     );
     const migrationPort = await listenOnEphemeralPort(migrationServer);
 
@@ -1312,6 +1320,10 @@ describe("existing supporter migration route", () => {
       expect(inputs[0]?.supporting).toBe(true);
       expect(inputs[0]?.migratedAt).toBeInstanceOf(Date);
       expect(Number.isNaN(inputs[0]?.migratedAt.getTime())).toBe(false);
+      expect(syncService.syncSupporter).toHaveBeenCalledTimes(1);
+      expect(syncService.syncSupporter).toHaveBeenCalledWith(
+        "synthetic-returned-supporter-id",
+      );
     } finally {
       await closeServer(migrationServer);
     }
@@ -1397,12 +1409,54 @@ describe("existing supporter migration route", () => {
     },
   );
 
+  it("blocks before backup readiness, migration, backup, and sync when portal sync is unavailable", async () => {
+    const registerExistingSupporter = vi.fn();
+    const getBackupDestinationDirectory = vi.fn(() => "/synthetic/backup/");
+    const createBackup = vi.fn(async () => {});
+    const migrationServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createExistingSupporterMigrationService(registerExistingSupporter),
+      undefined,
+      undefined,
+      {
+        getBackupDestinationDirectory,
+        selectBackupDestinationDirectory: vi.fn(async () => "/synthetic/backup/"),
+      },
+      createBackupExecutionService(createBackup),
+      undefined,
+    );
+    const migrationPort = await listenOnEphemeralPort(migrationServer);
+
+    try {
+      const response = await requestOnPort(
+        migrationPort,
+        "POST",
+        "/api/supporters/migrate-existing",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(503);
+      expect(response.body).toBe('{"error":"portal_not_configured"}');
+      expect(getBackupDestinationDirectory).not.toHaveBeenCalled();
+      expect(registerExistingSupporter).not.toHaveBeenCalled();
+      expect(createBackup).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(migrationServer);
+    }
+  });
+
   it("returns generic unavailable, duplicate, and unexpected failure responses", async () => {
     const unavailable = await request(
       "POST",
       "/api/supporters/migrate-existing",
       validBody,
     );
+    const duplicateSyncService = createPortalSyncService();
     const duplicateServer = createAdminServer(
       undefined,
       undefined,
@@ -1417,7 +1471,9 @@ describe("existing supporter migration route", () => {
       undefined,
       createBackupDestinationService(),
       createBackupExecutionService(),
+      duplicateSyncService,
     );
+    const failureSyncService = createPortalSyncService();
     const failureServer = createAdminServer(
       undefined,
       undefined,
@@ -1434,6 +1490,7 @@ describe("existing supporter migration route", () => {
       undefined,
       createBackupDestinationService(),
       createBackupExecutionService(),
+      failureSyncService,
     );
     const duplicatePort = await listenOnEphemeralPort(duplicateServer);
     const failurePort = await listenOnEphemeralPort(failureServer);
@@ -1462,6 +1519,8 @@ describe("existing supporter migration route", () => {
       expect(failure.body).toBe(
         '{"error":"existing_supporter_migration_failed"}',
       );
+      expect(duplicateSyncService.syncSupporter).not.toHaveBeenCalled();
+      expect(failureSyncService.syncSupporter).not.toHaveBeenCalled();
       for (const body of [unavailable.body, duplicate.body, failure.body]) {
         expect(body).not.toContain("legacy_relationship_52");
         expect(body).not.toContain("Legacy synthetic display name");
@@ -1505,6 +1564,7 @@ describe("existing supporter migration route", () => {
 
     for (const testCase of cases) {
       const registerExistingSupporter = vi.fn();
+      const syncService = createPortalSyncService();
       const migrationServer = createAdminServer(
         undefined,
         undefined,
@@ -1517,6 +1577,7 @@ describe("existing supporter migration route", () => {
         undefined,
         testCase.destination,
         testCase.execution,
+        syncService,
       );
       const migrationPort = await listenOnEphemeralPort(migrationServer);
 
@@ -1531,6 +1592,7 @@ describe("existing supporter migration route", () => {
         expect(response.statusCode).toBe(testCase.statusCode);
         expect(response.body).toBe(testCase.body);
         expect(registerExistingSupporter).not.toHaveBeenCalled();
+        expect(syncService.syncSupporter).not.toHaveBeenCalled();
       } finally {
         await closeServer(migrationServer);
       }
@@ -1546,6 +1608,18 @@ describe("existing supporter migration route", () => {
       callOrder.push("backup");
       await Promise.resolve();
     });
+    const syncService = createPortalSyncService(async () => {
+      callOrder.push("sync");
+      await Promise.resolve();
+      return { verifiedAt: "2026-09-09T09:00:00.000Z" };
+    });
+    const backupDestinationService: BackupDestinationService = {
+      getBackupDestinationDirectory: vi.fn(() => {
+        callOrder.push("backup-readiness");
+        return "/synthetic/backup/";
+      }),
+      selectBackupDestinationDirectory: vi.fn(async () => "/synthetic/backup/"),
+    };
     const migrationServer = createAdminServer(
       undefined,
       undefined,
@@ -1556,8 +1630,9 @@ describe("existing supporter migration route", () => {
       createExistingSupporterMigrationService(registerExistingSupporter),
       undefined,
       undefined,
-      createBackupDestinationService(),
+      backupDestinationService,
       createBackupExecutionService(createBackup),
+      syncService,
     );
     const migrationPort = await listenOnEphemeralPort(migrationServer);
 
@@ -1570,9 +1645,15 @@ describe("existing supporter migration route", () => {
       );
 
       expect(response.statusCode).toBe(200);
-      expect(callOrder).toEqual(["mutation", "backup"]);
+      expect(callOrder).toEqual([
+        "backup-readiness",
+        "mutation",
+        "backup",
+        "sync",
+      ]);
       expect(registerExistingSupporter).toHaveBeenCalledTimes(1);
       expect(createBackup).toHaveBeenCalledTimes(1);
+      expect(syncService.syncSupporter).toHaveBeenCalledTimes(1);
     } finally {
       await closeServer(migrationServer);
     }
@@ -1583,6 +1664,7 @@ describe("existing supporter migration route", () => {
     const createBackup = vi.fn(async () => {
       throw new Error("private backup failure");
     });
+    const syncService = createPortalSyncService();
     const migrationServer = createAdminServer(
       undefined,
       undefined,
@@ -1595,6 +1677,7 @@ describe("existing supporter migration route", () => {
       undefined,
       createBackupDestinationService(),
       createBackupExecutionService(createBackup),
+      syncService,
     );
     const migrationPort = await listenOnEphemeralPort(migrationServer);
 
@@ -1610,6 +1693,57 @@ describe("existing supporter migration route", () => {
       expect(response.body).toBe('{"error":"backup_failed_after_update"}');
       expect(registerExistingSupporter).toHaveBeenCalledTimes(1);
       expect(createBackup).toHaveBeenCalledTimes(1);
+      expect(syncService.syncSupporter).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(migrationServer);
+    }
+  });
+
+  it("returns committed sync failure without retrying migration, backup, or sync", async () => {
+    const registerExistingSupporter = vi.fn();
+    const createBackup = vi.fn(async () => {});
+    const syncService = createPortalSyncService(async () => {
+      throw new Error(
+        "Worker 500 opaque-supporter-id token AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA /private/admin.sqlite",
+      );
+    });
+    const migrationServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createExistingSupporterMigrationService(registerExistingSupporter),
+      undefined,
+      undefined,
+      createBackupDestinationService(),
+      createBackupExecutionService(createBackup),
+      syncService,
+    );
+    const migrationPort = await listenOnEphemeralPort(migrationServer);
+
+    try {
+      const response = await requestOnPort(
+        migrationPort,
+        "POST",
+        "/api/supporters/migrate-existing",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(502);
+      expect(response.body).toBe(
+        '{"error":"portal_sync_failed_after_update"}',
+      );
+      expect(response.body).not.toContain("synthetic-returned-supporter-id");
+      expect(response.body).not.toContain("legacy_relationship_52");
+      expect(response.body).not.toContain("Legacy synthetic display name");
+      expect(response.body).not.toContain("opaque-supporter-id");
+      expect(response.body).not.toContain("token");
+      expect(response.body).not.toContain("sqlite");
+      expect(registerExistingSupporter).toHaveBeenCalledTimes(1);
+      expect(createBackup).toHaveBeenCalledTimes(1);
+      expect(syncService.syncSupporter).toHaveBeenCalledTimes(1);
     } finally {
       await closeServer(migrationServer);
     }
@@ -6011,26 +6145,71 @@ describe("admin server configuration", () => {
         ({ url }) => url === "/api/supporters/migrate-existing",
       ),
     ).toHaveLength(2);
-    migrationResolvers[1]?.(
-      response(500, { error: "private remote diagnostic" }),
+    migrationResolvers[1]?.(response(503, { error: "portal_not_configured" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(migrationStatus?.textContent).toBe(
+      "ポータル連携を設定してから、旧管理レベルでの登録をもう一度実行してください。支援者はまだ登録されていません。",
+    );
+    expect(migrationLevelInput?.value).toBe("4");
+    expect(migrationButton?.disabled).toBe(false);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(1);
+    expect(
+      fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
+    ).toHaveLength(1);
+
+    migrationButton?.click();
+    expect(confirmMock).toHaveBeenCalledTimes(3);
+    migrationResolvers[2]?.(
+      response(503, { error: "portal_not_configured", extra: "invalid" }),
     );
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(migrationStatus?.textContent).toBe(
       "旧管理レベルで登録できませんでした。",
     );
-    expect(migrationStatus?.textContent).not.toContain(
-      "private remote diagnostic",
+    expect(migrationButton?.disabled).toBe(false);
+
+    migrationButton?.click();
+    expect(confirmMock).toHaveBeenCalledTimes(4);
+    migrationResolvers[3]?.(response(503, { error: "wrong_error" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(migrationStatus?.textContent).toBe(
+      "旧管理レベルで登録できませんでした。",
     );
     expect(migrationButton?.disabled).toBe(false);
 
     migrationButton?.click();
-    expect(confirmMock).toHaveBeenCalledTimes(3);
+    expect(confirmMock).toHaveBeenCalledTimes(5);
     expect(
       fetchCalls.filter(
         ({ url }) => url === "/api/supporters/migrate-existing",
       ),
-    ).toHaveLength(3);
-    migrationResolvers[2]?.(
+    ).toHaveLength(5);
+    migrationResolvers[4]?.(
+      response(502, {
+        error: "portal_sync_failed_after_update",
+        extra: "invalid",
+      }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(migrationStatus?.textContent).toBe(
+      "旧管理レベルで登録できませんでした。",
+    );
+    expect(migrationButton?.disabled).toBe(false);
+
+    migrationButton?.click();
+    expect(confirmMock).toHaveBeenCalledTimes(6);
+    migrationResolvers[5]?.(
+      response(500, { error: "portal_sync_failed_after_update" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(migrationStatus?.textContent).toBe(
+      "旧管理レベルで登録できませんでした。",
+    );
+    expect(migrationButton?.disabled).toBe(false);
+
+    migrationButton?.click();
+    expect(confirmMock).toHaveBeenCalledTimes(7);
+    migrationResolvers[6]?.(
       response(409, { error: "backup_destination_required" }),
     );
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -6042,28 +6221,58 @@ describe("admin server configuration", () => {
     expect(importButton.disabled).toBe(false);
 
     migrationButton?.click();
-    expect(confirmMock).toHaveBeenCalledTimes(4);
+    expect(confirmMock).toHaveBeenCalledTimes(8);
     expect(
       fetchCalls.filter(
         ({ url }) => url === "/api/supporters/migrate-existing",
       ),
-    ).toHaveLength(4);
-    migrationResolvers[3]?.(
-      response(500, { error: "backup_failed_after_update" }),
+    ).toHaveLength(8);
+    migrationResolvers[7]?.(
+      response(502, { error: "portal_sync_failed_after_update" }),
     );
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(migrationStatus?.textContent).toBe(
-      "支援者の登録は完了しましたが、バックアップを作成できませんでした。同じ支援者を再登録しないでください。「今すぐバックアップを作成」を実行してください。",
+      "支援者の登録はすでに完了しています。同じ支援者を再登録しないでください。暗号化された処理後バックアップは作成済みです。対象の支援者は一覧の「Cloudflareへ同期」を実行してください。",
     );
     expect(migrationButton?.disabled).toBe(true);
-    expect(importButton.disabled).toBe(false);
     expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(2);
     expect(
       fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
     ).toHaveLength(2);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-sync")).toHaveLength(0);
 
     inspectionButton.click();
     inspectionResolvers[1]?.(response(200, inspectionResponseBody));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const backupFailureRelationship = inspectionResult.children[0];
+    const backupFailureMigrationRow = backupFailureRelationship?.children.at(-1);
+    const backupFailureMigrationLevel = backupFailureMigrationRow?.children[1];
+    const backupFailureMigrationButton = backupFailureMigrationRow?.children[2];
+    const backupFailureMigrationStatus = backupFailureMigrationRow?.children[3];
+    if (
+      backupFailureMigrationLevel !== undefined &&
+      backupFailureMigrationButton !== undefined
+    ) {
+      backupFailureMigrationLevel.value = "5";
+      backupFailureMigrationButton.click();
+    }
+    expect(confirmMock).toHaveBeenCalledTimes(9);
+    migrationResolvers[8]?.(
+      response(500, { error: "backup_failed_after_update" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(backupFailureMigrationStatus?.textContent).toBe(
+      "支援者の登録は完了しましたが、バックアップを作成できませんでした。同じ支援者を再登録しないでください。「今すぐバックアップを作成」を実行してください。Cloudflare自動同期は試行されていません。バックアップ復旧後に対象の支援者で「Cloudflareへ同期」を実行してください。",
+    );
+    expect(backupFailureMigrationButton?.disabled).toBe(true);
+    expect(importButton.disabled).toBe(false);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(3);
+    expect(
+      fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
+    ).toHaveLength(3);
+
+    inspectionButton.click();
+    inspectionResolvers[2]?.(response(200, inspectionResponseBody));
     await new Promise<void>((resolve) => setImmediate(resolve));
     const retryRelationship = inspectionResult.children[0];
     const retryMigrationRow = retryRelationship?.children.at(-1);
@@ -6073,13 +6282,13 @@ describe("admin server configuration", () => {
       retryMigrationLevel.value = "5";
       retryMigrationButton.click();
     }
-    expect(confirmMock).toHaveBeenCalledTimes(5);
-    migrationResolvers[4]?.(response(200, { status: "ok" }));
+    expect(confirmMock).toHaveBeenCalledTimes(10);
+    migrationResolvers[9]?.(response(200, { status: "ok" }));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(retryMigrationButton?.disabled).toBe(true);
     expect(
       fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
 
     fileInput.files = [otherFile];
     fileInput.dispatch("change");
@@ -6093,7 +6302,7 @@ describe("admin server configuration", () => {
     fileInput.files = [previewedFile];
     fileInput.dispatch("change");
     inspectionButton.click();
-    inspectionResolvers[2]?.(response(200, inspectionResponseBody));
+    inspectionResolvers[3]?.(response(200, inspectionResponseBody));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(importButton.disabled).toBe(false);
 
@@ -6164,7 +6373,7 @@ describe("admin server configuration", () => {
     expect(importButton.disabled).toBe(false);
     expect(
       fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
 
     importButton.click();
     importResolvers[4]?.(
@@ -6176,13 +6385,13 @@ describe("admin server configuration", () => {
     );
     expect(inspectionResult.children).toHaveLength(0);
     expect(importButton.disabled).toBe(true);
-    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(4);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(5);
     expect(
       fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
-    ).toHaveLength(4);
+    ).toHaveLength(5);
 
     inspectionButton.click();
-    inspectionResolvers[3]?.(response(200, inspectionResponseBody));
+    inspectionResolvers[4]?.(response(200, inspectionResponseBody));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(importButton.disabled).toBe(false);
 
@@ -6200,10 +6409,10 @@ describe("admin server configuration", () => {
     expect(inspectionResult.children).toHaveLength(0);
     expect(importButton.disabled).toBe(true);
     expect(fileInput.files[0]).toBe(previewedFile);
-    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(5);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(6);
     expect(
       fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
-    ).toHaveLength(5);
+    ).toHaveLength(6);
   });
 
   it("opens the original configured path and closes the production store once", async () => {
