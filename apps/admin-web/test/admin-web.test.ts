@@ -16,6 +16,7 @@ import {
 } from "@sayosomi/application";
 import type {
   CreateSupporterPortalLinkServiceOptions,
+  CreateSupporterPortalSyncServiceOptions,
   ExistingSupporterMigrationInput,
   ExistingSupporterMigrationService,
   FanboxPdfInspection,
@@ -27,6 +28,7 @@ import type {
   MonthEndProcessingService,
   SupporterPortalDeliveryService,
   SupporterPortalLinkService,
+  SupporterPortalSyncService,
   SupporterListItem,
   SupporterListService,
 } from "@sayosomi/application";
@@ -3466,6 +3468,148 @@ describe("portal link route", () => {
   });
 });
 
+describe("portal sync route", () => {
+  it("passes the exact supporter ID and returns exact success JSON", async () => {
+    const verifiedAt = "2026-09-05T12:34:56.789Z";
+    const supporterIds: string[] = [];
+    const syncService: SupporterPortalSyncService = {
+      syncSupporter: async (supporterId) => {
+        supporterIds.push(supporterId);
+        return { verifiedAt };
+      },
+      provisionSupporterPortalAccess: async () => {
+        throw new Error("not used");
+      },
+    };
+    const syncServer = createAdminServer(
+      sampleSupporterListService,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      syncService,
+    );
+    const syncPort = await listenOnEphemeralPort(syncServer);
+
+    try {
+      const response = await requestOnPort(
+        syncPort,
+        "POST",
+        "/api/portal-sync",
+        JSON.stringify({ supporterId: "internal-supporter-id" }),
+      );
+
+      expect(supporterIds).toEqual(["internal-supporter-id"]);
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toBe(
+        "application/json; charset=UTF-8",
+      );
+      expectCommonSecurityHeaders(response.headers);
+      expect(response.body).toBe(JSON.stringify({ verifiedAt }));
+      expect(Object.keys(JSON.parse(response.body))).toEqual(["verifiedAt"]);
+    } finally {
+      await closeServer(syncServer);
+    }
+  });
+
+  it.each([
+    "",
+    "{not-json",
+    "null",
+    "[]",
+    "1",
+    JSON.stringify({}),
+    JSON.stringify({ supporterId: "id", extra: true }),
+    JSON.stringify({ supporterId: 123 }),
+    JSON.stringify({ supporterId: "   " }),
+  ])("returns the exact 400 response for invalid body %j", async (body) => {
+    const response = await request(
+      "POST",
+      "/api/portal-sync",
+      body,
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(response.headers["content-type"]).toBe(
+      "application/json; charset=UTF-8",
+    );
+    expectCommonSecurityHeaders(response.headers);
+    expect(response.body).toBe('{"error":"invalid_request"}');
+  });
+
+  it.each(["GET", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])(
+    "returns 405 and Allow: POST for %s",
+    async (method) => {
+      const response = await request(method, "/api/portal-sync");
+
+      expect(response.statusCode).toBe(405);
+      expect(response.headers.allow).toBe("POST");
+    },
+  );
+
+  it("returns unavailable when the sync service is not configured", async () => {
+    const response = await request(
+      "POST",
+      "/api/portal-sync",
+      JSON.stringify({ supporterId: "internal-supporter-id" }),
+    );
+
+    expect(response.statusCode).toBe(503);
+    expect(response.body).toBe('{"error":"portal_not_configured"}');
+  });
+
+  it("returns a generic 502 without leaking service failure details", async () => {
+    const failureMessage =
+      "Worker 500 supporter internal-supporter-id token AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA /private/admin.sqlite";
+    const syncService: SupporterPortalSyncService = {
+      syncSupporter: async () => {
+        throw new Error(failureMessage);
+      },
+      provisionSupporterPortalAccess: async () => {
+        throw new Error("not used");
+      },
+    };
+    const syncServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      syncService,
+    );
+    const syncPort = await listenOnEphemeralPort(syncServer);
+
+    try {
+      const response = await requestOnPort(
+        syncPort,
+        "POST",
+        "/api/portal-sync",
+        JSON.stringify({ supporterId: "internal-supporter-id" }),
+      );
+
+      expect(response.statusCode).toBe(502);
+      expect(response.body).toBe('{"error":"portal_operation_failed"}');
+      expect(response.body).not.toContain(failureMessage);
+      expect(response.body).not.toContain("internal-supporter-id");
+      expectCommonSecurityHeaders(response.headers);
+    } finally {
+      await closeServer(syncServer);
+    }
+  });
+});
+
 describe("portal sent route", () => {
   it("passes the exact supporter ID and returns one-key success JSON", async () => {
     const supporterIds: string[] = [];
@@ -3776,6 +3920,12 @@ describe("admin server configuration", () => {
         "/api/portal-link",
         JSON.stringify({ supporterId: "internal-supporter-id" }),
       );
+      const syncResponse = await requestOnPort(
+        productionPort,
+        "POST",
+        "/api/portal-sync",
+        JSON.stringify({ supporterId: "internal-supporter-id" }),
+      );
       const sourceResponse = await requestOnPort(
         productionPort,
         "GET",
@@ -3794,6 +3944,8 @@ describe("admin server configuration", () => {
       expect(listResponse.statusCode).toBe(200);
       expect(portalResponse.statusCode).toBe(503);
       expect(portalResponse.body).toBe('{"error":"portal_not_configured"}');
+      expect(syncResponse.statusCode).toBe(503);
+      expect(syncResponse.body).toBe('{"error":"portal_not_configured"}');
       expect(sourceResponse.statusCode).toBe(200);
       expect(sourceResponse.body).toBe(
         JSON.stringify({ source: monthEndSource }),
@@ -3990,6 +4142,22 @@ describe("admin server configuration", () => {
         return portalService;
       },
     );
+    const syncService: SupporterPortalSyncService = {
+      syncSupporter: async () => ({ verifiedAt: "2026-09-05T12:34:56.789Z" }),
+      provisionSupporterPortalAccess: async () => {
+        throw new Error("not used");
+      },
+    };
+    const createSyncService = vi.fn(
+      (
+        suppliedStore: LocalStore,
+        options: CreateSupporterPortalSyncServiceOptions,
+      ) => {
+        expect(suppliedStore).toBe(store);
+        expect(options).toEqual({ portalOrigin, syncApiToken });
+        return syncService;
+      },
+    );
     const deliveryService: SupporterPortalDeliveryService = {
       getSupporterPortalDeliveryState: () => "not_issued",
       markCurrentSupporterPortalAccessSent: () => "sent",
@@ -4021,6 +4189,7 @@ describe("admin server configuration", () => {
         openLocalStore: () => store,
         createSupporterListService: () => sampleSupporterListService,
         createSupporterPortalLinkService: createPortalService,
+        createSupporterPortalSyncService: createSyncService,
         createSupporterPortalDeliveryService: createDeliveryService,
         createExistingSupporterMigrationService: createMigrationService,
         createLotteryLevelService: createLotteryService,
@@ -4031,6 +4200,7 @@ describe("admin server configuration", () => {
       });
 
       expect(createPortalService).toHaveBeenCalledTimes(1);
+      expect(createSyncService).toHaveBeenCalledTimes(1);
       expect(createDeliveryService).toHaveBeenCalledTimes(1);
       expect(createMigrationService).toHaveBeenCalledTimes(1);
       expect(createLotteryService).toHaveBeenCalledTimes(1);
@@ -4329,6 +4499,174 @@ describe("admin server configuration", () => {
     }
     expect(ADMIN_SCRIPT).not.toContain("textContent = supporter.id");
     expect(ADMIN_PAGE).not.toContain("/tmp/fanbox-level-manager-admin.sqlite");
+  });
+
+  it("renders and executes the per-supporter Cloudflare sync action", async () => {
+    type FakeListener = () => void;
+    type FakeResponse = Readonly<{
+      ok: boolean;
+      status: number;
+      json: () => Promise<unknown>;
+    }>;
+
+    class FakeElement {
+      readonly children: FakeElement[] = [];
+      readonly listeners = new Map<string, FakeListener>();
+      readonly attributes = new Map<string, string>();
+      readonly dataset: Record<string, string> = {};
+      disabled = false;
+      files: readonly unknown[] = [];
+      tagName = "";
+      textContent = "";
+      type = "";
+      value = "";
+
+      addEventListener(type: string, listener: FakeListener): void {
+        this.listeners.set(type, listener);
+      }
+
+      click(): void {
+        if (!this.disabled) {
+          this.listeners.get("click")?.();
+        }
+      }
+
+      replaceChildren(...children: FakeElement[]): void {
+        this.children.splice(0, this.children.length, ...children);
+      }
+
+      setAttribute(name: string, value: string): void {
+        this.attributes.set(name, value);
+      }
+    }
+
+    class FakeInputElement extends FakeElement {}
+    class FakeButtonElement extends FakeElement {}
+    const elements = new Map<string, FakeElement>([
+      ["list-status", new FakeElement()],
+      ["list", new FakeElement()],
+    ]);
+    const documentElement = { dataset: {} as Record<string, string> };
+    const fakeDocument = {
+      documentElement,
+      getElementById: (id: string): FakeElement | null =>
+        elements.get(id) ?? null,
+      createElement: (tagName: string): FakeElement => {
+        const element = new FakeElement();
+        element.tagName = tagName;
+        return element;
+      },
+    };
+    const fetchCalls: Array<{
+      url: string;
+      body: unknown;
+      options: Readonly<Record<string, unknown>>;
+    }> = [];
+    const syncResolvers: Array<(response: FakeResponse) => void> = [];
+    const response = (status: number, body: unknown): FakeResponse => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    });
+    const fetchMock = vi.fn(
+      (
+        url: string,
+        options: Readonly<Record<string, unknown>> = {},
+      ): Promise<FakeResponse> => {
+        fetchCalls.push({ url, body: options.body, options });
+        if (url === "/api/supporters") {
+          return Promise.resolve(
+            response(200, {
+              supporters: [
+                {
+                  id: "internal-supporter-id",
+                  displayName: "支援者A",
+                  currentLevel: 2,
+                  nextLotteryEntryCount: 3,
+                  supporting: false,
+                  latestMonthKey: null,
+                  portalDeliveryState: "not_issued",
+                },
+              ],
+            }),
+          );
+        }
+        if (url === "/api/portal-sync") {
+          return new Promise((resolve) => syncResolvers.push(resolve));
+        }
+        return Promise.reject(new Error("unexpected synthetic request"));
+      },
+    );
+
+    runInNewContext(ADMIN_SCRIPT, {
+      Array,
+      Date,
+      document: fakeDocument,
+      Error,
+      fetch: fetchMock,
+      HTMLButtonElement: FakeButtonElement,
+      HTMLInputElement: FakeInputElement,
+      Map,
+      Number,
+      Object,
+      Set,
+      TypeError,
+      URL,
+      window: { confirm: vi.fn(() => true) },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const row = elements.get("list")?.children[0];
+    expect(row).toBeDefined();
+    const syncButton = row?.children[8];
+    const syncStatus = row?.children[9];
+    const portalButton = row?.children[6];
+    const sentButton = row?.children[10];
+    expect(syncButton?.textContent).toBe("Cloudflareへ同期");
+    expect(syncButton?.disabled).toBe(false);
+    expect(sentButton?.disabled).toBe(true);
+
+    syncButton?.click();
+    syncButton?.click();
+    expect(syncResolvers).toHaveLength(1);
+    expect(portalButton?.disabled).toBe(true);
+    expect(syncButton?.disabled).toBe(true);
+    const syncCall = fetchCalls.find(({ url }) => url === "/api/portal-sync");
+    expect(syncCall?.options).toEqual({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ supporterId: "internal-supporter-id" }),
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    syncResolvers[0]?.(response(200, { verifiedAt: "2026-09-05T12:34:56.789Z" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(syncStatus?.textContent).toBe(
+      "Cloudflare同期完了: 2026-09-05T12:34:56.789Z",
+    );
+    expect(syncButton?.disabled).toBe(false);
+
+    syncButton?.click();
+    syncResolvers[1]?.(response(503, { error: "unexpected" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(syncStatus?.textContent).toBe("ポータル連携が設定されていません。");
+
+    syncButton?.click();
+    syncResolvers[2]?.(
+      response(200, {
+        verifiedAt: "2026-09-05T12:34:56.789Z",
+        extra: "synthetic",
+      }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(syncStatus?.textContent).toBe("Cloudflareへ同期できませんでした。");
+
+    syncButton?.click();
+    syncResolvers[3]?.(response(200, { verifiedAt: "not-a-timestamp" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(syncStatus?.textContent).toBe("Cloudflareへ同期できませんでした。");
   });
 
   it("implements the settled month-end browser contract", async () => {

@@ -16,6 +16,7 @@ import {
   createFanboxSupporterImportService,
   createLotteryLevelService,
   createMonthEndProcessingService,
+  createSupporterPortalSyncService,
   createSupporterPortalLinkService,
   createSupporterPortalDeliveryService,
   createSupporterListService,
@@ -32,6 +33,7 @@ import {
   type LotteryLevelService,
   type MonthEndProcessingService,
   type SupporterPortalLinkService,
+  type SupporterPortalSyncService,
   type SupporterPortalDeliveryService,
   type SupporterListService,
 } from "@sayosomi/application";
@@ -91,6 +93,7 @@ const PORTAL_SENT_SUCCESS_BODY = JSON.stringify({
 });
 const PORTAL_LINK_PATH = "/api/portal-link";
 const PORTAL_SENT_PATH = "/api/portal-link/sent";
+const PORTAL_SYNC_PATH = "/api/portal-sync";
 const LOTTERY_RESULTS_PATH = "/api/lottery-results";
 const MONTH_END_SOURCE_PATH = "/api/month-end/source";
 const MONTH_END_PROCESS_PATH = "/api/month-end/process";
@@ -205,6 +208,7 @@ export type ProductionAdminServerDependencies = Readonly<{
   openLocalStore?: typeof openLocalStore;
   createSupporterListService?: typeof createSupporterListService;
   createSupporterPortalLinkService?: typeof createSupporterPortalLinkService;
+  createSupporterPortalSyncService?: typeof createSupporterPortalSyncService;
   createSupporterPortalDeliveryService?:
     typeof createSupporterPortalDeliveryService;
   createFanboxPdfInspectionService?: typeof createFanboxPdfInspectionService;
@@ -559,6 +563,38 @@ async function sendPortalLink(
         verifiedAt: result.verifiedAt,
       }),
     );
+  } catch {
+    sendPortalJson(response, 502, PORTAL_OPERATION_FAILED_BODY);
+  }
+}
+
+async function sendPortalSync(
+  request: IncomingMessage,
+  response: ServerResponse,
+  supporterPortalSyncService: SupporterPortalSyncService | undefined,
+): Promise<void> {
+  let body: string;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  const supporterId = parsePortalLinkRequest(body);
+  if (supporterId === null) {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  if (supporterPortalSyncService === undefined) {
+    sendPortalJson(response, 503, PORTAL_NOT_CONFIGURED_BODY);
+    return;
+  }
+
+  try {
+    const result = await supporterPortalSyncService.syncSupporter(supporterId);
+    sendPortalJson(response, 200, JSON.stringify({ verifiedAt: result.verifiedAt }));
   } catch {
     sendPortalJson(response, 502, PORTAL_OPERATION_FAILED_BODY);
   }
@@ -1344,6 +1380,7 @@ export function createAdminServer(
   monthEndProcessingService?: MonthEndProcessingService,
   backupDestinationService?: BackupDestinationService,
   backupExecutionService?: BackupExecutionService,
+  supporterPortalSyncService?: SupporterPortalSyncService,
 ): Server {
   return createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -1355,6 +1392,7 @@ export function createAdminServer(
       requestPath === "/api/supporters" ||
       requestPath === PORTAL_LINK_PATH ||
       requestPath === PORTAL_SENT_PATH ||
+      requestPath === PORTAL_SYNC_PATH ||
       requestPath === LOTTERY_RESULTS_PATH ||
       requestPath === MONTH_END_SOURCE_PATH ||
       requestPath === MONTH_END_PROCESS_PATH ||
@@ -1387,6 +1425,16 @@ export function createAdminServer(
       }
 
       void sendPortalSent(request, response, supporterPortalDeliveryService);
+      return;
+    }
+
+    if (requestPath === PORTAL_SYNC_PATH) {
+      if (request.method !== "POST") {
+        sendPortalMethodNotAllowed(response);
+        return;
+      }
+
+      void sendPortalSync(request, response, supporterPortalSyncService);
       return;
     }
 
@@ -1552,6 +1600,7 @@ export function startAdminServer(
   monthEndProcessingService?: MonthEndProcessingService,
   backupDestinationService?: BackupDestinationService,
   backupExecutionService?: BackupExecutionService,
+  supporterPortalSyncService?: SupporterPortalSyncService,
 ): Server {
   validateListenPort(port);
   const server = createAdminServer(
@@ -1566,6 +1615,7 @@ export function startAdminServer(
     monthEndProcessingService,
     backupDestinationService,
     backupExecutionService,
+    supporterPortalSyncService,
   );
   server.listen(port, ADMIN_HOST);
   return server;
@@ -1659,15 +1709,21 @@ export function startProductionAdminServer(
       createBackupExecutionService;
     const backupExecutionService = createBackupExecution(store);
     let supporterPortalLinkService: SupporterPortalLinkService | undefined;
+    let supporterPortalSyncService: SupporterPortalSyncService | undefined;
     if (portalConfiguration !== null) {
       const createPortalLinkService =
         dependencies.createSupporterPortalLinkService ??
         createSupporterPortalLinkService;
+      const createPortalSyncService =
+        dependencies.createSupporterPortalSyncService ??
+        createSupporterPortalSyncService;
       try {
-        supporterPortalLinkService = createPortalLinkService(store, {
+        const portalOptions = {
           portalOrigin: portalConfiguration.portalOrigin,
           syncApiToken: portalConfiguration.syncApiToken,
-        });
+        };
+        supporterPortalLinkService = createPortalLinkService(store, portalOptions);
+        supporterPortalSyncService = createPortalSyncService(store, portalOptions);
       } catch {
         throw new Error(INVALID_PORTAL_CONFIGURATION_ERROR);
       }
@@ -1685,6 +1741,7 @@ export function startProductionAdminServer(
       monthEndProcessingService,
       backupDestinationService,
       backupExecutionService,
+      supporterPortalSyncService,
     );
     server.once("close", closeStore);
 

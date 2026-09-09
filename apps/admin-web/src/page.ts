@@ -1079,6 +1079,18 @@ function validatePortalLinkResponse(value) {
   return value.portalUrl;
 }
 
+function validatePortalSyncResponse(value) {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["verifiedAt"]) ||
+    !isCanonicalTimestamp(value.verifiedAt)
+  ) {
+    throw new TypeError("invalid portal sync response");
+  }
+
+  return value.verifiedAt;
+}
+
 function validatePortalSentResponse(value) {
   if (
     !isRecord(value) ||
@@ -1889,6 +1901,8 @@ function renderSupporter(supporter) {
   const portalDeliveryStatus = document.createElement("p");
   const portalButton = document.createElement("button");
   const portalLinkStatus = document.createElement("p");
+  const syncButton = document.createElement("button");
+  const syncStatus = document.createElement("p");
   const sentButton = document.createElement("button");
   const sentStatus = document.createElement("p");
   let portalDeliveryState = supporter.portalDeliveryState;
@@ -1896,6 +1910,7 @@ function renderSupporter(supporter) {
 
   function updatePortalButtons() {
     portalButton.disabled = portalOperationActive;
+    syncButton.disabled = portalOperationActive;
     sentButton.disabled =
       portalOperationActive || portalDeliveryState !== "provisioned";
   }
@@ -1903,6 +1918,46 @@ function renderSupporter(supporter) {
   function updatePortalDeliveryState() {
     portalDeliveryStatus.textContent = PORTAL_DELIVERY_LABELS[portalDeliveryState];
     updatePortalButtons();
+  }
+
+  async function syncSupporterToCloudflare() {
+    if (portalOperationActive) {
+      return;
+    }
+
+    portalOperationActive = true;
+    updatePortalButtons();
+    syncStatus.textContent = "Cloudflareへ同期しています。";
+
+    try {
+      const { id: supporterId } = supporter;
+      const response = await fetch("/api/portal-sync", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ supporterId }),
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+      });
+      if (response.status === 503) {
+        syncStatus.textContent = "ポータル連携が設定されていません。";
+        return;
+      }
+      if (response.status !== 200) {
+        throw new Error("portal sync request failed");
+      }
+
+      const verifiedAt = validatePortalSyncResponse(await response.json());
+      syncStatus.textContent = "Cloudflare同期完了: " + verifiedAt;
+    } catch {
+      syncStatus.textContent = "Cloudflareへ同期できませんでした。";
+    } finally {
+      portalOperationActive = false;
+      updatePortalButtons();
+    }
   }
 
   async function prepareSupporterPortalLink() {
@@ -2018,11 +2073,18 @@ function renderSupporter(supporter) {
   portalDeliveryStatus.setAttribute("role", "status");
   portalButton.type = "button";
   portalButton.textContent = "ポータルURLを発行・再発行";
+  syncButton.type = "button";
+  syncButton.textContent = "Cloudflareへ同期";
+  syncStatus.setAttribute("role", "status");
+  syncStatus.setAttribute("aria-live", "polite");
   sentButton.type = "button";
   sentButton.textContent = "送信済みとして記録";
   sentStatus.setAttribute("role", "status");
   portalButton.addEventListener("click", () => {
     void prepareSupporterPortalLink();
+  });
+  syncButton.addEventListener("click", () => {
+    void syncSupporterToCloudflare();
   });
   sentButton.addEventListener("click", () => {
     void markPortalSent();
@@ -2037,6 +2099,8 @@ function renderSupporter(supporter) {
     portalDeliveryStatus,
     portalButton,
     portalLinkStatus,
+    syncButton,
+    syncStatus,
     sentButton,
     sentStatus,
   );
