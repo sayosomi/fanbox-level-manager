@@ -238,7 +238,8 @@ afterEach(async () => {
   }
 });
 
-describe("Mac production admin launcher", () => {
+// The production launcher is intentionally macOS/zsh-specific; Linux CI cannot execute /bin/zsh.
+describe.skipIf(process.platform !== "darwin")("Mac production admin launcher", () => {
   it("uses the default local DB path and production portal origin without prompting for an explicit token", async () => {
     const directory = await createTemporaryDirectory();
     const fakeBinDirectory = await createFakeNode(directory);
