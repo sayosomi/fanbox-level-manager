@@ -57,12 +57,22 @@ Automatic provisioning may write a real D1 resource ID into the operator's
 working-tree Wrangler configuration during the later first deployment. That
 account-specific mutation is not part of Issue #100.
 
-## Later Mac-local admin configuration
+## Mac admin production launch
 
-After the portal is verified, configure the existing Mac-local admin launch
-with the deployed portal origin and the same logical credential under
-`FANBOX_PORTAL_SYNC_API_TOKEN`. Use the existing local launch configuration
-mechanism; this runbook does not establish a new secret-storage contract.
+After the portal is verified, start the Mac-local admin from a clean, reviewed,
+merged `main` checkout:
+
+1. Run `npm run build`.
+2. Run `npm run admin:production`.
+3. If prompted, paste the KeePass-held production token. Input is hidden.
+4. Use `http://127.0.0.1:4310`.
+
+The live database defaults to
+`~/Library/Application Support/fanbox-level-manager/admin.sqlite3` and remains
+local to the Mac. Encrypted backups continue using the existing configured
+backup destination. The launcher never stores the token. Set
+`FANBOX_ADMIN_DB_PATH`, `FANBOX_PORTAL_ORIGIN`, `FANBOX_ADMIN_PORT`, or
+`FANBOX_PORTAL_SYNC_API_TOKEN` explicitly when an override is needed.
 
 ## Ongoing deployment order
 
