@@ -7,6 +7,7 @@ import {
 import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  FanboxIdentityRelinkError,
   FanboxPdfInspectionError,
   FanboxSupporterImportBlockedError,
   FanboxSupporterImportError,
@@ -23,6 +24,7 @@ import type {
   FanboxPdfInspectionService,
   FanboxPdfSupporterComparison,
   FanboxSupporterImportService,
+  FanboxIdentityRelinkService,
   FanboxSupporterComparisonService,
   LotteryLevelService,
   MonthEndProcessingService,
@@ -34,6 +36,7 @@ import type {
 } from "@sayosomi/application";
 import {
   DuplicateFanboxRelationshipError,
+  FanboxRelationshipNotFoundError,
   StaleMonthError,
   SupporterNotFoundError,
   type LocalStore,
@@ -152,6 +155,26 @@ function createBackupExecutionServer(
   service?: BackupExecutionService,
 ): Server {
   return createAdminServer(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    service,
+  );
+}
+
+function createFanboxIdentityRelinkServer(
+  service?: FanboxIdentityRelinkService,
+): Server {
+  return createAdminServer(
+    undefined,
+    undefined,
     undefined,
     undefined,
     undefined,
@@ -4165,6 +4188,209 @@ describe("PDF import route", () => {
   });
 });
 
+describe("FANBOX identity relink route", () => {
+  it.each(["GET", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])(
+    "returns 405 with Allow POST for %s without calling the service",
+    async (method) => {
+      const relink = vi.fn();
+      const relinkServer = createFanboxIdentityRelinkServer({
+        relinkSupporter: relink,
+      });
+      const relinkPort = await listenOnEphemeralPort(relinkServer);
+
+      try {
+        const response = await requestOnPort(
+          relinkPort,
+          method,
+          "/api/supporters/relink-fanbox-identity",
+          JSON.stringify({
+            currentFanboxRelationshipId: "current-synthetic",
+            replacementFanboxRelationshipId: "replacement-synthetic",
+          }),
+          { "Content-Type": "application/json" },
+        );
+
+        expect(response.statusCode).toBe(405);
+        expect(response.headers.allow).toBe("POST");
+        expect(relink).not.toHaveBeenCalled();
+      } finally {
+        await closeServer(relinkServer);
+      }
+    },
+  );
+
+  it.each([
+    [undefined, "{}"],
+    ["text/plain", "{}"],
+    ["application/json", "null"],
+    ["application/json", "[]"],
+    ["application/json", "{not-json"],
+    [
+      "application/json",
+      JSON.stringify({
+        currentFanboxRelationshipId: "current-synthetic",
+      }),
+    ],
+    [
+      "application/json",
+      JSON.stringify({
+        currentFanboxRelationshipId: "current synthetic",
+        replacementFanboxRelationshipId: "replacement-synthetic",
+      }),
+    ],
+    [
+      "application/json",
+      JSON.stringify({
+        currentFanboxRelationshipId: "same-synthetic",
+        replacementFanboxRelationshipId: "same-synthetic",
+      }),
+    ],
+  ] as const)(
+    "rejects invalid Content-Type or body before service invocation (%s, %s)",
+    async (contentType, body) => {
+      const relink = vi.fn();
+      const relinkServer = createFanboxIdentityRelinkServer({
+        relinkSupporter: relink,
+      });
+      const relinkPort = await listenOnEphemeralPort(relinkServer);
+
+      try {
+        const response = await requestOnPort(
+          relinkPort,
+          "POST",
+          "/api/supporters/relink-fanbox-identity",
+          body,
+          contentType === undefined ? {} : { "Content-Type": contentType },
+        );
+
+        expect(response.statusCode).toBe(
+          contentType === undefined || contentType === "text/plain" ? 415 : 400,
+        );
+        expect(response.body).toBe(
+          contentType === undefined || contentType === "text/plain"
+            ? '{"error":"unsupported_media_type"}'
+            : '{"error":"invalid_request"}',
+        );
+        expect(relink).not.toHaveBeenCalled();
+      } finally {
+        await closeServer(relinkServer);
+      }
+    },
+  );
+
+  it("delegates exactly the two validated relationship IDs and returns exact success JSON", async () => {
+    const relink = vi.fn();
+    const relinkServer = createFanboxIdentityRelinkServer({
+      relinkSupporter: relink,
+    });
+    const relinkPort = await listenOnEphemeralPort(relinkServer);
+
+    try {
+      const response = await requestOnPort(
+        relinkPort,
+        "POST",
+        "/api/supporters/relink-fanbox-identity",
+        JSON.stringify({
+          currentFanboxRelationshipId: "old_synthetic",
+          replacementFanboxRelationshipId: "new-synthetic",
+        }),
+        { "Content-Type": "application/json; charset=utf-8" },
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toBe('{"status":"ok"}');
+      expectCommonSecurityHeaders(response.headers);
+      expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+      expect(relink).toHaveBeenCalledTimes(1);
+      expect(relink).toHaveBeenCalledWith({
+        currentFanboxRelationshipId: "old_synthetic",
+        replacementFanboxRelationshipId: "new-synthetic",
+      });
+    } finally {
+      await closeServer(relinkServer);
+    }
+  });
+
+  it.each([
+    new FanboxRelationshipNotFoundError("missing-synthetic"),
+    new DuplicateFanboxRelationshipError("owned-synthetic"),
+  ])("maps typed %s conflicts to the same generic 409", async (error) => {
+    const relink = vi.fn(() => {
+      throw error;
+    });
+    const relinkServer = createFanboxIdentityRelinkServer({
+      relinkSupporter: relink,
+    });
+    const relinkPort = await listenOnEphemeralPort(relinkServer);
+
+    try {
+      const response = await requestOnPort(
+        relinkPort,
+        "POST",
+        "/api/supporters/relink-fanbox-identity",
+        JSON.stringify({
+          currentFanboxRelationshipId: "current-synthetic",
+          replacementFanboxRelationshipId: "replacement-synthetic",
+        }),
+        { "Content-Type": "application/json" },
+      );
+
+      expect(response.statusCode).toBe(409);
+      expect(response.body).toBe('{"error":"fanbox_identity_relink_conflict"}');
+      expect(response.body).not.toContain("missing-synthetic");
+      expect(response.body).not.toContain("owned-synthetic");
+    } finally {
+      await closeServer(relinkServer);
+    }
+  });
+
+  it("keeps missing and unexpected relink services generic", async () => {
+    const unavailableServer = createFanboxIdentityRelinkServer();
+    const unavailablePort = await listenOnEphemeralPort(unavailableServer);
+    const relink = vi.fn(() => {
+      throw new FanboxIdentityRelinkError();
+    });
+    const failedServer = createFanboxIdentityRelinkServer({
+      relinkSupporter: relink,
+    });
+    const failedPort = await listenOnEphemeralPort(failedServer);
+
+    try {
+      const body = JSON.stringify({
+        currentFanboxRelationshipId: "old-synthetic",
+        replacementFanboxRelationshipId: "new-synthetic",
+      });
+      const headers = { "Content-Type": "application/json" };
+      const unavailable = await requestOnPort(
+        unavailablePort,
+        "POST",
+        "/api/supporters/relink-fanbox-identity",
+        body,
+        headers,
+      );
+      const failed = await requestOnPort(
+        failedPort,
+        "POST",
+        "/api/supporters/relink-fanbox-identity",
+        body,
+        headers,
+      );
+
+      expect(unavailable.statusCode).toBe(500);
+      expect(unavailable.body).toBe(
+        '{"error":"fanbox_identity_relink_unavailable"}',
+      );
+      expect(failed.statusCode).toBe(500);
+      expect(failed.body).toBe('{"error":"fanbox_identity_relink_failed"}');
+      expect(failed.body).not.toContain("old-synthetic");
+      expect(failed.body).not.toContain("new-synthetic");
+    } finally {
+      await closeServer(unavailableServer);
+      await closeServer(failedServer);
+    }
+  });
+});
+
 describe("portal link route", () => {
   it("passes the exact supporter ID to the injected service and returns exact success JSON", async () => {
     const result = Object.freeze({
@@ -4671,6 +4897,13 @@ describe("admin server configuration", () => {
       expect(suppliedStore).toBe(store);
       return importService;
     });
+    const identityRelinkService: FanboxIdentityRelinkService = {
+      relinkSupporter: vi.fn(),
+    };
+    const createIdentityRelinkService = vi.fn((suppliedStore: LocalStore) => {
+      expect(suppliedStore).toBe(store);
+      return identityRelinkService;
+    });
     const createListService = vi.fn((suppliedStore: LocalStore) => {
       expect(suppliedStore).toBe(store);
       return sampleSupporterListService;
@@ -4714,6 +4947,7 @@ describe("admin server configuration", () => {
         createFanboxPdfInspectionService: createInspectionService,
         createFanboxSupporterComparisonService: createComparisonService,
         createFanboxSupporterImportService: createImportService,
+        createFanboxIdentityRelinkService: createIdentityRelinkService,
         createExistingSupporterMigrationService: createMigrationService,
         createLotteryLevelService: createLotteryService,
         createMonthEndProcessingService: createMonthEndService,
@@ -4781,6 +5015,8 @@ describe("admin server configuration", () => {
       expect(createInspectionService).toHaveBeenCalledTimes(1);
       expect(createComparisonService).toHaveBeenCalledTimes(1);
       expect(createImportService).toHaveBeenCalledTimes(1);
+      expect(createIdentityRelinkService).toHaveBeenCalledTimes(1);
+      expect(createIdentityRelinkService).toHaveBeenCalledWith(store);
       expect(createMigrationService).toHaveBeenCalledTimes(1);
       expect(createLotteryService).toHaveBeenCalledTimes(1);
       expect(createMonthEndService).toHaveBeenCalledTimes(1);
@@ -7058,6 +7294,319 @@ describe("admin server configuration", () => {
     ).toHaveLength(monthEndSourceBeforePortalRecovery + 1);
     expect(fetchCalls.filter(({ url }) => url === "/api/portal-sync")).toHaveLength(
       0,
+    );
+  });
+
+  it("renders and confirms identity relink controls without changing stale preview evidence", async () => {
+    type FakeListener = () => void;
+    type FakeResponse = Readonly<{
+      ok: boolean;
+      status: number;
+      json: () => Promise<unknown>;
+    }>;
+
+    class FakeElement {
+      readonly children: FakeElement[] = [];
+      readonly listeners = new Map<string, FakeListener>();
+      className = "";
+      disabled = false;
+      files: readonly unknown[] = [];
+      textContent = "";
+      type = "";
+      value = "";
+
+      addEventListener(type: string, listener: FakeListener): void {
+        this.listeners.set(type, listener);
+      }
+
+      click(): void {
+        if (this.disabled) {
+          return;
+        }
+        this.listeners.get("click")?.();
+      }
+
+      dispatch(type: string): void {
+        this.listeners.get(type)?.();
+      }
+
+      replaceChildren(...children: FakeElement[]): void {
+        this.children.splice(0, this.children.length, ...children);
+      }
+
+      setAttribute(): void {}
+    }
+
+    class FakeInputElement extends FakeElement {}
+    class FakeButtonElement extends FakeElement {}
+
+    const elements = new Map<string, FakeElement>([
+      ["pdf-inspection-file", new FakeInputElement()],
+      ["pdf-inspection-button", new FakeButtonElement()],
+      ["pdf-import-button", new FakeButtonElement()],
+      ["pdf-inspection-status", new FakeElement()],
+      ["pdf-inspection-result", new FakeElement()],
+    ]);
+    const fakeDocument = {
+      documentElement: { dataset: {} as Record<string, string> },
+      getElementById: (id: string): FakeElement | null =>
+        elements.get(id) ?? null,
+      createElement: (): FakeElement => new FakeElement(),
+    };
+    const inspectionResponseBody = {
+      pageCount: 1,
+      relationshipLinks: [
+        {
+          pageNumber: 1,
+          relationshipId: "new-synthetic-relationship",
+          displayNameCandidate: "new synthetic candidate",
+          rect: [0, 0, 10, 10],
+          textRuns: [],
+        },
+        {
+          pageNumber: 1,
+          relationshipId: "continuing-synthetic-relationship",
+          displayNameCandidate: "continuing synthetic candidate",
+          rect: [10, 10, 20, 20],
+          textRuns: [],
+        },
+        {
+          pageNumber: 1,
+          relationshipId: "returning-synthetic-relationship",
+          displayNameCandidate: null,
+          rect: [20, 20, 30, 30],
+          textRuns: [],
+        },
+      ],
+      comparison: {
+        presentSupporters: [
+          {
+            status: "new",
+            relationshipId: "new-synthetic-relationship",
+            storedDisplayName: null,
+          },
+          {
+            status: "continuing",
+            relationshipId: "continuing-synthetic-relationship",
+            storedDisplayName: "continuing stored name",
+          },
+          {
+            status: "returning",
+            relationshipId: "returning-synthetic-relationship",
+            storedDisplayName: "returning stored name",
+          },
+        ],
+        absentSupporters: [
+          {
+            status: "absent",
+            relationshipId: "absent-first-relationship",
+            storedDisplayName: "Absent first synthetic name",
+            wasSupporting: true,
+          },
+          {
+            status: "absent",
+            relationshipId: "absent-second-relationship",
+            storedDisplayName: "Absent second synthetic name",
+            wasSupporting: false,
+          },
+        ],
+      },
+    };
+    const fetchCalls: Array<{
+      url: string;
+      body: unknown;
+      options: Readonly<Record<string, unknown>>;
+    }> = [];
+    let nextInspectionResponseBody = inspectionResponseBody;
+    const relinkResolvers: Array<(response: FakeResponse) => void> = [];
+    let confirmValue = false;
+    const confirmMock = vi.fn<(message: string) => boolean>(() => confirmValue);
+    const response = (status: number, body: unknown): FakeResponse => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    });
+    const fetchMock = vi.fn(
+      (
+        url: string,
+        options: Readonly<Record<string, unknown>> = {},
+      ): Promise<FakeResponse> => {
+        fetchCalls.push({ url, body: options.body, options });
+        if (url === "/api/fanbox-pdf/inspect") {
+          return Promise.resolve(response(200, nextInspectionResponseBody));
+        }
+        if (url === "/api/supporters/relink-fanbox-identity") {
+          return new Promise((resolve) => relinkResolvers.push(resolve));
+        }
+        return Promise.reject(new Error("unexpected synthetic request"));
+      },
+    );
+
+    runInNewContext(ADMIN_SCRIPT, {
+      Array,
+      Date,
+      document: fakeDocument,
+      Error,
+      fetch: fetchMock,
+      HTMLButtonElement: FakeButtonElement,
+      HTMLInputElement: FakeInputElement,
+      Number,
+      Object,
+      Set,
+      TypeError,
+      URL,
+      console,
+      window: { confirm: confirmMock },
+    });
+
+    const fileInput = elements.get("pdf-inspection-file") as FakeInputElement;
+    const inspectionButton = elements.get(
+      "pdf-inspection-button",
+    ) as FakeButtonElement;
+    const importButton = elements.get("pdf-import-button") as FakeButtonElement;
+    const inspectionResult = elements.get("pdf-inspection-result") as FakeElement;
+    const file = { name: "synthetic-preview.pdf" };
+    fileInput.files = [file];
+    fileInput.dispatch("change");
+    inspectionButton.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(inspectionResult.children).toHaveLength(4);
+    const newRelationship = inspectionResult.children[0];
+    const continuingRelationship = inspectionResult.children[1];
+    const returningRelationship = inspectionResult.children[2];
+    if (
+      newRelationship === undefined ||
+      continuingRelationship === undefined ||
+      returningRelationship === undefined
+    ) {
+      throw new Error("synthetic PDF relationship rows were not rendered");
+    }
+
+    const relinkRow = newRelationship.children.at(-2);
+    const relinkSelect = relinkRow?.children[1];
+    const relinkButton = relinkRow?.children[2];
+    const relinkStatus = relinkRow?.children[3];
+    expect(relinkRow?.children[0]?.textContent).toBe(
+      "既存支援者として関連付け",
+    );
+    if (
+      relinkSelect === undefined ||
+      relinkButton === undefined ||
+      relinkStatus === undefined
+    ) {
+      throw new Error("synthetic relink control was not rendered");
+    }
+    expect(relinkSelect?.children[0]?.value).toBe("");
+    expect(relinkSelect?.children.slice(1).map((option) => option.value)).toEqual([
+      "0",
+      "1",
+    ]);
+    expect(relinkSelect?.children[1]?.textContent).toContain(
+      "Absent first synthetic name",
+    );
+    expect(relinkSelect?.children[2]?.textContent).toContain(
+      "Absent second synthetic name",
+    );
+    expect(continuingRelationship.children).toHaveLength(6);
+    expect(returningRelationship.children).toHaveLength(6);
+    expect(JSON.stringify(newRelationship)).not.toContain("internal-supporter-id");
+    expect(relinkButton.disabled).toBe(false);
+
+    relinkButton!.click();
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(fetchCalls.filter(({ url }) => url.includes("relink-fanbox-identity"))).toHaveLength(
+      0,
+    );
+    expect(relinkStatus?.textContent).toBe("既存支援者を選択してください。");
+
+    relinkSelect!.value = "1";
+    relinkButton!.click();
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(fetchCalls.filter(({ url }) => url.includes("relink-fanbox-identity"))).toHaveLength(
+      0,
+    );
+    expect(relinkStatus?.textContent).toBe("既存支援者を選択してください。");
+
+    confirmValue = true;
+    relinkButton!.click();
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters/relink-fanbox-identity")).toHaveLength(1);
+    expect(inspectionButton.disabled).toBe(true);
+    expect(importButton.disabled).toBe(true);
+    expect(relinkButton.disabled).toBe(true);
+    const relinkCall = fetchCalls.find(
+      ({ url }) => url === "/api/supporters/relink-fanbox-identity",
+    );
+    expect(relinkCall?.body).toBe(
+      JSON.stringify({
+        currentFanboxRelationshipId: "absent-second-relationship",
+        replacementFanboxRelationshipId: "new-synthetic-relationship",
+      }),
+    );
+    expect(relinkCall?.body).not.toContain("supporterId");
+    expect(relinkCall?.options).toMatchObject({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    expect(confirmMock.mock.invocationCallOrder[1]).toBeLessThan(
+      fetchMock.mock.invocationCallOrder[1] ?? Infinity,
+    );
+    relinkResolvers[0]?.(
+      response(409, { error: "fanbox_identity_relink_conflict" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(relinkStatus?.textContent).toBe(
+      "関係IDの競合が発生しました。PDFと現在のローカル状態を確認して再試行してください。",
+    );
+    expect(relinkButton.disabled).toBe(false);
+    expect(importButton.disabled).toBe(false);
+    expect(inspectionResult.children[0]).toBe(newRelationship);
+
+    relinkButton.click();
+    relinkResolvers[1]?.(response(500, { error: "private diagnostic" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(relinkStatus?.textContent).toBe(
+      "関係IDを更新できませんでした。現在の状態を確認して再試行してください。",
+    );
+    expect(relinkButton.disabled).toBe(false);
+    expect(importButton.disabled).toBe(false);
+
+    relinkButton.click();
+    relinkResolvers[2]?.(response(200, { status: "ok" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(relinkStatus?.textContent).toBe(
+      "既存支援者として関連付けました。反映時に現在のローカル状態で再判定されます。",
+    );
+    expect(relinkButton.disabled).toBe(true);
+    expect(importButton.disabled).toBe(false);
+    expect(inspectionResult.children[0]).toBe(newRelationship);
+    expect(newRelationship.children[2]?.textContent).toBe("分類: 新規");
+    expect(fileInput.files[0]).toBe(file);
+    expect(confirmMock.mock.calls[0]?.[0]).toContain("関係ID");
+    expect(confirmMock.mock.calls[0]?.[0]).not.toContain(
+      "absent-second-relationship",
+    );
+    expect(confirmMock.mock.calls[0]?.[0]).not.toContain("internal-supporter-id");
+
+    nextInspectionResponseBody = {
+      ...inspectionResponseBody,
+      comparison: {
+        ...inspectionResponseBody.comparison,
+        absentSupporters: [],
+      },
+    };
+    inspectionButton.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const noAbsentRelationship = inspectionResult.children[0];
+    const noAbsentRelinkRow = noAbsentRelationship?.children.at(-2);
+    expect(noAbsentRelinkRow?.children[2]?.disabled).toBe(true);
+    expect(noAbsentRelinkRow?.children[1]?.disabled).toBe(true);
+    expect(noAbsentRelinkRow?.children[3]?.textContent).toBe(
+      "PDFにいないローカル支援者がいないため、関連付けできません。",
     );
   });
 

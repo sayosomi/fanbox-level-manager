@@ -55,6 +55,11 @@ export type ApplyFanboxSupporterImportInput = Readonly<{
   presentSupporterCount: number;
 }>;
 
+export type RelinkSupporterFanboxRelationshipInput = Readonly<{
+  currentFanboxRelationshipId: string;
+  replacementFanboxRelationshipId: string;
+}>;
+
 export type FanboxSupporterImportRecord = Readonly<{
   sequence: number;
   importedAt: string;
@@ -141,6 +146,9 @@ export interface LocalStore {
   applyFanboxSupporterImport(
     input: ApplyFanboxSupporterImportInput,
   ): ApplyFanboxSupporterImportResult;
+  relinkSupporterFanboxRelationship(
+    input: RelinkSupporterFanboxRelationshipInput,
+  ): SupporterRecord;
   getLatestFanboxSupporterImport(): FanboxSupporterImportRecord | null;
   createMigratedSupporter(
     input: CreateMigratedSupporterInput,

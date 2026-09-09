@@ -8,6 +8,7 @@ import type {
   LevelOperationKind,
   MonthlyState,
   MonthlyTransitionWithOperationBatchItem,
+  RelinkSupporterFanboxRelationshipInput,
   SupporterProfilePatch,
   StoreClock,
 } from "./types.js";
@@ -228,6 +229,43 @@ export function assertValidApplyFanboxSupporterImportInput(
       throw new TypeError("fanbox supporter import updates must not contain duplicate supporter IDs");
     }
     updateSupporterIds.add(update.supporterId);
+  }
+}
+
+export function assertValidRelinkSupporterFanboxRelationshipInput(
+  input: unknown,
+): asserts input is RelinkSupporterFanboxRelationshipInput {
+  if (!isPlainObject(input)) {
+    throw new TypeError(
+      "relink supporter FANBOX relationship input must be an object",
+    );
+  }
+
+  if (
+    Object.keys(input).length !== 2 ||
+    !Object.hasOwn(input, "currentFanboxRelationshipId") ||
+    !Object.hasOwn(input, "replacementFanboxRelationshipId")
+  ) {
+    throw new TypeError(
+      "relink supporter FANBOX relationship input must contain exactly currentFanboxRelationshipId and replacementFanboxRelationshipId",
+    );
+  }
+
+  assertNonBlankString(
+    input.currentFanboxRelationshipId,
+    "currentFanboxRelationshipId",
+  );
+  assertNonBlankString(
+    input.replacementFanboxRelationshipId,
+    "replacementFanboxRelationshipId",
+  );
+  if (
+    input.currentFanboxRelationshipId ===
+    input.replacementFanboxRelationshipId
+  ) {
+    throw new TypeError(
+      "currentFanboxRelationshipId and replacementFanboxRelationshipId must differ",
+    );
   }
 }
 

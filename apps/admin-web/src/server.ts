@@ -8,7 +8,9 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   FanboxPdfInspectionError,
+  FanboxIdentityRelinkError,
   createFanboxPdfInspectionService,
+  createFanboxIdentityRelinkService,
   createFanboxSupporterComparisonService,
   FanboxSupporterImportBlockedError,
   FanboxSupporterImportError,
@@ -25,6 +27,7 @@ import {
   SupporterPortalDeliveryConflictError,
   type FanboxPdfInspection,
   type FanboxPdfInspectionService,
+  type FanboxIdentityRelinkService,
   type FanboxSupporterComparisonService,
   type FanboxSupporterImportBlockedReason,
   type FanboxSupporterImportService,
@@ -39,6 +42,7 @@ import {
 } from "@sayosomi/application";
 import {
   DuplicateFanboxRelationshipError,
+  FanboxRelationshipNotFoundError,
   openLocalStore,
   StaleMonthError,
   SupporterNotFoundError,
@@ -99,6 +103,8 @@ const MONTH_END_SOURCE_PATH = "/api/month-end/source";
 const MONTH_END_PROCESS_PATH = "/api/month-end/process";
 const PDF_INSPECTION_PATH = "/api/fanbox-pdf/inspect";
 const PDF_IMPORT_PATH = "/api/fanbox-pdf/import";
+const FANBOX_IDENTITY_RELINK_PATH =
+  "/api/supporters/relink-fanbox-identity";
 const BACKUP_DESTINATION_PATH = "/api/backup-destination";
 const BACKUP_DESTINATION_SELECT_PATH = "/api/backup-destination/select";
 const BACKUP_CREATE_PATH = "/api/backups/create";
@@ -122,6 +128,18 @@ const FANBOX_IMPORT_UNAVAILABLE_BODY = JSON.stringify({
 });
 const FANBOX_IMPORT_FAILED_BODY = JSON.stringify({
   error: "fanbox_import_failed",
+});
+const FANBOX_IDENTITY_RELINK_UNAVAILABLE_BODY = JSON.stringify({
+  error: "fanbox_identity_relink_unavailable",
+});
+const FANBOX_IDENTITY_RELINK_CONFLICT_BODY = JSON.stringify({
+  error: "fanbox_identity_relink_conflict",
+});
+const FANBOX_IDENTITY_RELINK_FAILED_BODY = JSON.stringify({
+  error: "fanbox_identity_relink_failed",
+});
+const FANBOX_IDENTITY_RELINK_SUCCESS_BODY = JSON.stringify({
+  status: "ok",
 });
 const EXISTING_SUPPORTER_MIGRATION_UNAVAILABLE_BODY = JSON.stringify({
   error: "existing_supporter_migration_unavailable",
@@ -219,6 +237,8 @@ export type ProductionAdminServerDependencies = Readonly<{
     typeof createFanboxSupporterComparisonService;
   createFanboxSupporterImportService?:
     typeof createFanboxSupporterImportService;
+  createFanboxIdentityRelinkService?:
+    typeof createFanboxIdentityRelinkService;
   createExistingSupporterMigrationService?:
     typeof createExistingSupporterMigrationService;
   createLotteryLevelService?: typeof createLotteryLevelService;
@@ -870,6 +890,103 @@ async function sendPdfImport(
   );
 }
 
+type FanboxIdentityRelinkRequest = Readonly<{
+  currentFanboxRelationshipId: string;
+  replacementFanboxRelationshipId: string;
+}>;
+
+function parseFanboxIdentityRelinkRequest(
+  body: string,
+): FanboxIdentityRelinkRequest | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    return null;
+  }
+
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value)
+  ) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (
+    Object.keys(record).length !== 2 ||
+    !Object.hasOwn(record, "currentFanboxRelationshipId") ||
+    !Object.hasOwn(record, "replacementFanboxRelationshipId") ||
+    typeof record.currentFanboxRelationshipId !== "string" ||
+    !/^[A-Za-z0-9_-]+$/.test(record.currentFanboxRelationshipId) ||
+    typeof record.replacementFanboxRelationshipId !== "string" ||
+    !/^[A-Za-z0-9_-]+$/.test(record.replacementFanboxRelationshipId) ||
+    record.currentFanboxRelationshipId ===
+      record.replacementFanboxRelationshipId
+  ) {
+    return null;
+  }
+
+  return {
+    currentFanboxRelationshipId: record.currentFanboxRelationshipId,
+    replacementFanboxRelationshipId: record.replacementFanboxRelationshipId,
+  };
+}
+
+async function sendFanboxIdentityRelink(
+  request: IncomingMessage,
+  response: ServerResponse,
+  relinkService: FanboxIdentityRelinkService | undefined,
+): Promise<void> {
+  if (!hasJsonContentType(request)) {
+    request.resume();
+    sendPortalJson(response, 415, PDF_UNSUPPORTED_MEDIA_TYPE_BODY);
+    return;
+  }
+
+  let body: string;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  const input = parseFanboxIdentityRelinkRequest(body);
+  if (input === null) {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  if (relinkService === undefined) {
+    sendPortalJson(response, 500, FANBOX_IDENTITY_RELINK_UNAVAILABLE_BODY);
+    return;
+  }
+
+  try {
+    relinkService.relinkSupporter(input);
+  } catch (error: unknown) {
+    if (
+      error instanceof FanboxRelationshipNotFoundError ||
+      error instanceof DuplicateFanboxRelationshipError
+    ) {
+      sendPortalJson(response, 409, FANBOX_IDENTITY_RELINK_CONFLICT_BODY);
+      return;
+    }
+
+    if (error instanceof FanboxIdentityRelinkError) {
+      sendPortalJson(response, 500, FANBOX_IDENTITY_RELINK_FAILED_BODY);
+      return;
+    }
+
+    sendPortalJson(response, 500, FANBOX_IDENTITY_RELINK_FAILED_BODY);
+    return;
+  }
+
+  sendPortalJson(response, 200, FANBOX_IDENTITY_RELINK_SUCCESS_BODY);
+}
+
 type ExistingSupporterMigrationRequest = Readonly<{
   fanboxRelationshipId: string;
   displayName: string;
@@ -1463,6 +1580,7 @@ export function createAdminServer(
   backupDestinationService?: BackupDestinationService,
   backupExecutionService?: BackupExecutionService,
   supporterPortalSyncService?: SupporterPortalSyncService,
+  fanboxIdentityRelinkService?: FanboxIdentityRelinkService,
 ): Server {
   return createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -1480,6 +1598,7 @@ export function createAdminServer(
       requestPath === MONTH_END_PROCESS_PATH ||
       requestPath === PDF_INSPECTION_PATH ||
       requestPath === PDF_IMPORT_PATH ||
+      requestPath === FANBOX_IDENTITY_RELINK_PATH ||
       requestPath === BACKUP_DESTINATION_PATH ||
       requestPath === BACKUP_DESTINATION_SELECT_PATH ||
       requestPath === BACKUP_CREATE_PATH ||
@@ -1587,6 +1706,20 @@ export function createAdminServer(
       return;
     }
 
+    if (requestPath === FANBOX_IDENTITY_RELINK_PATH) {
+      if (request.method !== "POST") {
+        sendPortalMethodNotAllowed(response);
+        return;
+      }
+
+      void sendFanboxIdentityRelink(
+        request,
+        response,
+        fanboxIdentityRelinkService,
+      );
+      return;
+    }
+
     if (requestPath === "/api/supporters/migrate-existing") {
       if (request.method !== "POST") {
         sendPortalMethodNotAllowed(response);
@@ -1687,6 +1820,7 @@ export function startAdminServer(
   backupDestinationService?: BackupDestinationService,
   backupExecutionService?: BackupExecutionService,
   supporterPortalSyncService?: SupporterPortalSyncService,
+  fanboxIdentityRelinkService?: FanboxIdentityRelinkService,
 ): Server {
   validateListenPort(port);
   const server = createAdminServer(
@@ -1702,6 +1836,7 @@ export function startAdminServer(
     backupDestinationService,
     backupExecutionService,
     supporterPortalSyncService,
+    fanboxIdentityRelinkService,
   );
   server.listen(port, ADMIN_HOST);
   return server;
@@ -1782,6 +1917,10 @@ export function startProductionAdminServer(
       dependencies.createFanboxSupporterImportService ??
       createFanboxSupporterImportService;
     const fanboxSupporterImportService = createImportService(store);
+    const createIdentityRelinkService =
+      dependencies.createFanboxIdentityRelinkService ??
+      createFanboxIdentityRelinkService;
+    const fanboxIdentityRelinkService = createIdentityRelinkService(store);
     const createMigrationService =
       dependencies.createExistingSupporterMigrationService ??
       createExistingSupporterMigrationService;
@@ -1828,6 +1967,7 @@ export function startProductionAdminServer(
       backupDestinationService,
       backupExecutionService,
       supporterPortalSyncService,
+      fanboxIdentityRelinkService,
     );
     server.once("close", closeStore);
 

@@ -1212,6 +1212,22 @@ function isExistingSupporterMigrationConflictResponse(value) {
   );
 }
 
+function isExactFanboxIdentityRelinkSuccess(value) {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["status"]) &&
+    value.status === "ok"
+  );
+}
+
+function isExactFanboxIdentityRelinkConflict(value) {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["error"]) &&
+    value.error === "fanbox_identity_relink_conflict"
+  );
+}
+
 function validatePdfInspectionResponse(value) {
   if (
     !isRecord(value) ||
@@ -1408,11 +1424,72 @@ function renderExistingSupporterMigrationControl(
   return migration;
 }
 
+function renderFanboxIdentityRelinkControl(
+  relationship,
+  absentSupporters,
+  pdfControls,
+) {
+  const relink = document.createElement("div");
+  const label = document.createElement("label");
+  const select = document.createElement("select");
+  const button = document.createElement("button");
+  const status = document.createElement("p");
+  const eligible = absentSupporters.length > 0;
+  const control = {
+    button,
+    select,
+    eligible,
+    inFlight: false,
+    succeeded: false,
+  };
+  const placeholder = document.createElement("option");
+
+  label.textContent = "既存支援者として関連付け";
+  placeholder.value = "";
+  placeholder.textContent = "既存支援者を選択してください";
+  const options = absentSupporters.map((supporter, index) => {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent =
+      supporter.storedDisplayName +
+      (supporter.wasSupporting
+        ? "（直前の支援状態: 支援中）"
+        : "（直前の支援状態: 非支援）");
+    return option;
+  });
+  select.replaceChildren(placeholder, ...options);
+  select.value = "";
+  button.type = "button";
+  button.textContent = "関係IDを更新";
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+
+  if (!eligible) {
+    status.textContent =
+      "PDFにいないローカル支援者がいないため、関連付けできません。";
+  }
+
+  pdfControls.state.relinkControls.push(control);
+  button.addEventListener("click", () => {
+    void relinkFanboxIdentity(
+      relationship,
+      absentSupporters,
+      select,
+      status,
+      control,
+      pdfControls,
+    );
+  });
+  relink.replaceChildren(label, select, button, status);
+  return relink;
+}
+
 function renderPdfInspectionRelationship(
   relationship,
   comparison,
   index,
   pdfControls,
+  absentSupporters,
 ) {
   const item = document.createElement("section");
   const heading = document.createElement("h3");
@@ -1439,15 +1516,26 @@ function renderPdfInspectionRelationship(
     relationship.displayNameCandidate === null
       ? "表示名候補を確定できません。"
       : \`表示名候補: \${relationship.displayNameCandidate}\`;
+  const relinkControl =
+    comparison.status === "new"
+      ? renderFanboxIdentityRelinkControl(
+          relationship,
+          absentSupporters,
+          pdfControls,
+        )
+      : null;
   const migrationControl =
     comparison.status === "new"
       ? renderExistingSupporterMigrationControl(relationship, pdfControls)
       : null;
+  const actionControls = [relinkControl, migrationControl].filter(
+    (control) => control !== null,
+  );
 
   if (relationship.textRuns.length === 0) {
     const empty = document.createElement("p");
     empty.textContent = "重なるテキストはありません。";
-    if (migrationControl === null) {
+    if (actionControls.length === 0) {
       item.replaceChildren(heading, page, classification, storedName, displayName, empty);
     } else {
       item.replaceChildren(
@@ -1457,7 +1545,7 @@ function renderPdfInspectionRelationship(
         storedName,
         displayName,
         empty,
-        migrationControl,
+        ...actionControls,
       );
     }
     return item;
@@ -1471,7 +1559,7 @@ function renderPdfInspectionRelationship(
   }
 
   runs.replaceChildren(...runItems);
-  if (migrationControl === null) {
+  if (actionControls.length === 0) {
     item.replaceChildren(heading, page, classification, storedName, displayName, runs);
   } else {
     item.replaceChildren(
@@ -1481,7 +1569,7 @@ function renderPdfInspectionRelationship(
       storedName,
       displayName,
       runs,
-      migrationControl,
+      ...actionControls,
     );
   }
   return item;
@@ -1539,6 +1627,7 @@ function showPdfInspectionResult(status, result, inspection, pdfControls) {
     relationshipEvidence.push(empty);
   } else {
     pdfControls.state.migrationControls = [];
+    pdfControls.state.relinkControls = [];
     relationshipEvidence.push(
       ...inspection.relationshipLinks.map((relationship, index) =>
         renderPdfInspectionRelationship(
@@ -1546,6 +1635,7 @@ function showPdfInspectionResult(status, result, inspection, pdfControls) {
           inspection.comparison.presentSupporters[index],
           index,
           pdfControls,
+          inspection.comparison.absentSupporters,
         ),
       ),
     );
@@ -1572,6 +1662,150 @@ function updatePdfActionButtons(fileInput, inspectionButton, importButton, state
       !control.eligible;
     control.levelInput.disabled =
       state.actionActive || control.inFlight || control.succeeded;
+  }
+  for (const control of state.relinkControls) {
+    control.button.disabled =
+      state.actionActive ||
+      control.inFlight ||
+      control.succeeded ||
+      !control.eligible;
+    control.select.disabled =
+      state.actionActive ||
+      control.inFlight ||
+      control.succeeded ||
+      !control.eligible;
+  }
+}
+
+async function relinkFanboxIdentity(
+  relationship,
+  absentSupporters,
+  select,
+  status,
+  control,
+  pdfControls,
+) {
+  const {
+    state,
+    fileInput,
+    inspectionButton,
+    importButton,
+  } = pdfControls;
+  if (
+    state.actionActive ||
+    control.inFlight ||
+    control.succeeded ||
+    !control.eligible
+  ) {
+    return;
+  }
+
+  if (
+    typeof select.value !== "string" ||
+    select.value.length === 0 ||
+    !/^\\d+$/.test(select.value)
+  ) {
+    status.textContent = "既存支援者を選択してください。";
+    return;
+  }
+
+  const selectedIndex = Number(select.value);
+  if (
+    !Number.isSafeInteger(selectedIndex) ||
+    String(selectedIndex) !== select.value
+  ) {
+    status.textContent = "既存支援者を選択してください。";
+    return;
+  }
+  const selectedSupporter = absentSupporters[selectedIndex];
+  if (selectedSupporter === undefined) {
+    status.textContent = "既存支援者を選択してください。";
+    return;
+  }
+
+  const candidate =
+    relationship.displayNameCandidate === null
+      ? "表示中のPDF支援者"
+      : \`表示中のPDF支援者「\${relationship.displayNameCandidate}」\`;
+  if (
+    !window.confirm(
+      candidate +
+        \`を選択した既存ローカル支援者「\${selectedSupporter.storedDisplayName}」として扱います。FANBOXの関係IDを置き換えます。既存支援者の抽選レベル・履歴とポータルリンク状態はそのまま維持されます。続行しますか？\`,
+    )
+  ) {
+    return;
+  }
+
+  state.actionActive = true;
+  control.inFlight = true;
+  updatePdfActionButtons(
+    fileInput,
+    inspectionButton,
+    importButton,
+    state,
+  );
+  status.textContent = "関係IDを更新しています。";
+
+  try {
+    const response = await fetch("/api/supporters/relink-fanbox-identity", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        currentFanboxRelationshipId: selectedSupporter.relationshipId,
+        replacementFanboxRelationshipId: relationship.relationshipId,
+      }),
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+
+    if (response.status === 409) {
+      let responseBody;
+      try {
+        responseBody = await response.json();
+      } catch {
+        throw new Error("invalid FANBOX identity relink conflict");
+      }
+      if (!isExactFanboxIdentityRelinkConflict(responseBody)) {
+        throw new Error("invalid FANBOX identity relink conflict");
+      }
+      status.textContent =
+        "関係IDの競合が発生しました。PDFと現在のローカル状態を確認して再試行してください。";
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error("FANBOX identity relink request failed");
+    }
+
+    let responseBody;
+    try {
+      responseBody = await response.json();
+    } catch {
+      throw new Error("invalid FANBOX identity relink response");
+    }
+    if (!isExactFanboxIdentityRelinkSuccess(responseBody)) {
+      throw new Error("invalid FANBOX identity relink response");
+    }
+
+    control.succeeded = true;
+    status.textContent =
+      "既存支援者として関連付けました。反映時に現在のローカル状態で再判定されます。";
+  } catch {
+    status.textContent =
+      "関係IDを更新できませんでした。現在の状態を確認して再試行してください。";
+  } finally {
+    control.inFlight = false;
+    state.actionActive = false;
+    updatePdfActionButtons(
+      fileInput,
+      inspectionButton,
+      importButton,
+      state,
+    );
   }
 }
 
@@ -1742,6 +1976,7 @@ function invalidatePdfPreview(
   state.selectedFile = fileInput.files?.[0] ?? null;
   state.previewedFile = null;
   state.migrationControls = [];
+  state.relinkControls = [];
   result.replaceChildren();
   status.textContent =
     state.selectedFile === null ? "" : "PDFを確認してください。";
@@ -1784,6 +2019,7 @@ async function inspectSelectedPdf(
   state.selectedFile = file;
   state.previewedFile = null;
   state.migrationControls = [];
+  state.relinkControls = [];
   state.actionActive = true;
   updatePdfActionButtons(
     fileInput,
@@ -1920,6 +2156,7 @@ async function importSelectedPdf(
       if (isExactBackupFailedAfterUpdate(responseBody)) {
         state.previewedFile = null;
         state.migrationControls = [];
+        state.relinkControls = [];
         result.replaceChildren();
         updatePdfActionButtons(
           fileInput,
@@ -1942,6 +2179,7 @@ async function importSelectedPdf(
       if (isExactPortalSyncFailedAfterUpdate(responseBody)) {
         state.previewedFile = null;
         state.migrationControls = [];
+        state.relinkControls = [];
         result.replaceChildren();
         updatePdfActionButtons(
           fileInput,
@@ -1966,6 +2204,7 @@ async function importSelectedPdf(
     const importResult = validatePdfImportResponse(await response.json());
     state.previewedFile = null;
     state.migrationControls = [];
+    state.relinkControls = [];
     result.replaceChildren();
     status.textContent =
       \`支援者状態を反映しました。支援者数: \${importResult.presentSupporterCount}人、取込日時: \${importResult.importedAt}\`;
@@ -2379,6 +2618,7 @@ if (
     selectedFile: pdfInspectionFile.files?.[0] ?? null,
     previewedFile: null,
     migrationControls: [],
+    relinkControls: [],
   };
   pdfInspectionFile.addEventListener("change", () => {
     invalidatePdfPreview(

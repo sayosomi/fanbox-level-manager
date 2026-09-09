@@ -18,6 +18,16 @@ export class DuplicateFanboxRelationshipError extends Error {
   }
 }
 
+export class FanboxRelationshipNotFoundError extends Error {
+  readonly fanboxRelationshipId: string;
+
+  constructor(fanboxRelationshipId: string) {
+    super(`FANBOX relationship not found: ${fanboxRelationshipId}`);
+    this.name = "FanboxRelationshipNotFoundError";
+    this.fanboxRelationshipId = fanboxRelationshipId;
+  }
+}
+
 export class StaleMonthError extends Error {
   readonly requestedMonthKey: string;
   readonly latestMonthKey: string;
