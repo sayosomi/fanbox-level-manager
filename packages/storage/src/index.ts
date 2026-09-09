@@ -1,6 +1,7 @@
 export { CURRENT_SCHEMA_VERSION } from "./migrations.js";
 export { openLocalStore } from "./store.js";
 export type {
+  ApplyFanboxSupporterImportResult,
   ApplyFanboxSupporterImportInput,
   CreateMigratedSupporterInput,
   CreateMigratedSupporterResult,

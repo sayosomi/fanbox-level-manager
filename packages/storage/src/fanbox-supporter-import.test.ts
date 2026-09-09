@@ -107,7 +107,8 @@ describe("FANBOX supporter import persistence", () => {
     };
     const beforeInput = JSON.stringify(input);
 
-    const receipt = store.applyFanboxSupporterImport(input);
+    const result = store.applyFanboxSupporterImport(input);
+    const receipt = result.importRecord;
     const supporters = store.listSupporters();
     const created = store.getSupporterByRelationshipId(
       "  exact relationship \u0301  ",
@@ -121,6 +122,10 @@ describe("FANBOX supporter import persistence", () => {
       importedAt: "2026-09-08T09:00:00.000Z",
       presentSupporterCount: 1,
     });
+    expect(result.createdSupporterIds).toEqual([created?.id]);
+    expect(result.createdSupporterIds).not.toContain(existing.id);
+    expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.createdSupporterIds)).toBe(true);
     expect(Object.isFrozen(receipt)).toBe(true);
     expect(created).toMatchObject({
       fanboxRelationshipId: "  exact relationship \u0301  ",
@@ -141,6 +146,75 @@ describe("FANBOX supporter import persistence", () => {
     expect(supporters).toHaveLength(2);
   });
 
+  it("returns the exact generated ID for a create-only import", () => {
+    const store = openStore();
+
+    const result = store.applyFanboxSupporterImport({
+      creates: [
+        {
+          fanboxRelationshipId: "create-only-relationship",
+          displayName: "Create-only supporter",
+        },
+      ],
+      updates: [],
+      presentSupporterCount: 1,
+    });
+    const created = store.getSupporterByRelationshipId(
+      "create-only-relationship",
+    );
+
+    expect(created).not.toBeNull();
+    expect(result.createdSupporterIds).toEqual([created?.id]);
+    expect(created).toMatchObject({
+      fanboxRelationshipId: "create-only-relationship",
+      displayName: "Create-only supporter",
+      currentLevel: 0,
+      supporting: true,
+      latestMonthKey: null,
+    });
+  });
+
+  it("returns created IDs in exact create-input order with existing defaults", () => {
+    const store = openStore();
+    const creates = [
+      {
+        fanboxRelationshipId: "first-create",
+        displayName: "First create",
+      },
+      {
+        fanboxRelationshipId: "second-create",
+        displayName: "Second create",
+      },
+    ];
+
+    const result = store.applyFanboxSupporterImport({
+      creates,
+      updates: [],
+      presentSupporterCount: 2,
+    });
+
+    const created = creates.map((input) =>
+      store.getSupporterByRelationshipId(input.fanboxRelationshipId),
+    );
+    expect(result.createdSupporterIds).toEqual(created.map((supporter) => supporter?.id));
+    expect(created).toEqual([
+      expect.objectContaining({
+        fanboxRelationshipId: "first-create",
+        displayName: "First create",
+        currentLevel: 0,
+        supporting: true,
+        latestMonthKey: null,
+      }),
+      expect.objectContaining({
+        fanboxRelationshipId: "second-create",
+        displayName: "Second create",
+        currentLevel: 0,
+        supporting: true,
+        latestMonthKey: null,
+      }),
+    ]);
+  });
+
   it("changes only requested profile fields and preserves unrelated supporter state", () => {
     const store = openStore();
     const existing = store.createSupporter({
@@ -158,7 +232,7 @@ describe("FANBOX supporter import persistence", () => {
     const beforeMonthlyState = store.getMonthlyState(existing.id, "2026-09");
     const beforeHistory = store.listLevelOperations(existing.id);
 
-    const receipt = store.applyFanboxSupporterImport({
+    const result = store.applyFanboxSupporterImport({
       creates: [],
       updates: [{ supporterId: existing.id, supporting: false }],
       presentSupporterCount: 1,
@@ -167,7 +241,7 @@ describe("FANBOX supporter import persistence", () => {
     expect(store.getSupporterById(existing.id)).toEqual({
       ...before,
       supporting: false,
-      updatedAt: receipt.importedAt,
+      updatedAt: result.importRecord.importedAt,
     });
     expect(store.getMonthlyState(existing.id, "2026-09")).toEqual(
       beforeMonthlyState,
@@ -190,9 +264,11 @@ describe("FANBOX supporter import persistence", () => {
       presentSupporterCount: 12,
     });
 
-    expect(first.sequence).toBe(1);
-    expect(second.sequence).toBe(2);
-    expect(store.getLatestFanboxSupporterImport()).toEqual(second);
+    expect(first.createdSupporterIds).toEqual([]);
+    expect(Object.isFrozen(first.createdSupporterIds)).toBe(true);
+    expect(first.importRecord.sequence).toBe(1);
+    expect(second.importRecord.sequence).toBe(2);
+    expect(store.getLatestFanboxSupporterImport()).toEqual(second.importRecord);
     expect(Object.isFrozen(store.getLatestFanboxSupporterImport())).toBe(true);
   });
 

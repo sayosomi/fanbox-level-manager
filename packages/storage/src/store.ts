@@ -22,6 +22,7 @@ import {
   readUserVersion,
 } from "./migrations.js";
 import type {
+  ApplyFanboxSupporterImportResult,
   ApplyFanboxSupporterImportInput,
   CreateMigratedSupporterInput,
   CreateMigratedSupporterResult,
@@ -299,78 +300,96 @@ class LocalStoreImplementation implements LocalStore {
 
   applyFanboxSupporterImport(
     input: ApplyFanboxSupporterImportInput,
-  ): FanboxSupporterImportRecord {
+  ): ApplyFanboxSupporterImportResult & FanboxSupporterImportRecord {
     assertValidApplyFanboxSupporterImportInput(input);
     const timestamp = timestampFromClock(this.clock);
 
-    const apply = this.database.transaction((): FanboxSupporterImportRecord => {
-      for (const create of input.creates) {
-        this.insertSupporterRow({
-          id: randomUUID(),
-          fanboxRelationshipId: create.fanboxRelationshipId,
-          displayName: create.displayName,
-          currentLevel: 0,
-          supporting: true,
-          timestamp,
-        });
-      }
-
-      for (const update of input.updates) {
-        const existing = this.database
-          .prepare("SELECT id FROM supporters WHERE id = ?")
-          .get(update.supporterId) as { id: string } | undefined;
-        if (existing === undefined) {
-          throw new SupporterNotFoundError(update.supporterId);
+    const apply = this.database.transaction(
+      (): ApplyFanboxSupporterImportResult & FanboxSupporterImportRecord => {
+        const createdSupporterIds: string[] = [];
+        for (const create of input.creates) {
+          const id = randomUUID();
+          this.insertSupporterRow({
+            id,
+            fanboxRelationshipId: create.fanboxRelationshipId,
+            displayName: create.displayName,
+            currentLevel: 0,
+            supporting: true,
+            timestamp,
+          });
+          createdSupporterIds.push(id);
         }
 
-        const fields: string[] = [];
-        const values: Array<string | number> = [];
-        if ("displayName" in update) {
-          fields.push("display_name = ?");
-          values.push(update.displayName as string);
-        }
-        if ("supporting" in update) {
-          fields.push("supporting = ?");
-          values.push(update.supporting ? 1 : 0);
-        }
-        values.push(timestamp, update.supporterId);
+        for (const update of input.updates) {
+          const existing = this.database
+            .prepare("SELECT id FROM supporters WHERE id = ?")
+            .get(update.supporterId) as { id: string } | undefined;
+          if (existing === undefined) {
+            throw new SupporterNotFoundError(update.supporterId);
+          }
 
-        const result = this.database
+          const fields: string[] = [];
+          const values: Array<string | number> = [];
+          if ("displayName" in update) {
+            fields.push("display_name = ?");
+            values.push(update.displayName as string);
+          }
+          if ("supporting" in update) {
+            fields.push("supporting = ?");
+            values.push(update.supporting ? 1 : 0);
+          }
+          values.push(timestamp, update.supporterId);
+
+          const result = this.database
+            .prepare(
+              `UPDATE supporters
+               SET ${fields.join(", ")}, updated_at = ?
+               WHERE id = ?`,
+            )
+            .run(...values);
+          if (result.changes !== 1) {
+            throw new SupporterNotFoundError(update.supporterId);
+          }
+        }
+
+        const insertResult = this.database
           .prepare(
-            `UPDATE supporters
-             SET ${fields.join(", ")}, updated_at = ?
-             WHERE id = ?`,
+            `INSERT INTO fanbox_supporter_imports (
+               imported_at,
+               present_supporter_count
+             ) VALUES (?, ?)`,
           )
-          .run(...values);
-        if (result.changes !== 1) {
-          throw new SupporterNotFoundError(update.supporterId);
+          .run(timestamp, input.presentSupporterCount);
+        const sequence = Number(insertResult.lastInsertRowid);
+        const row = this.database
+          .prepare(
+            `SELECT sequence,
+                    imported_at,
+                    present_supporter_count
+             FROM fanbox_supporter_imports
+             WHERE sequence = ?`,
+          )
+          .get(sequence) as FanboxSupporterImportRow | undefined;
+        if (row === undefined) {
+          throw new Error("created FANBOX supporter import could not be loaded");
         }
-      }
 
-      const insertResult = this.database
-        .prepare(
-          `INSERT INTO fanbox_supporter_imports (
-             imported_at,
-             present_supporter_count
-           ) VALUES (?, ?)`,
-        )
-        .run(timestamp, input.presentSupporterCount);
-      const sequence = Number(insertResult.lastInsertRowid);
-      const row = this.database
-        .prepare(
-          `SELECT sequence,
-                  imported_at,
-                  present_supporter_count
-           FROM fanbox_supporter_imports
-           WHERE sequence = ?`,
-        )
-        .get(sequence) as FanboxSupporterImportRow | undefined;
-      if (row === undefined) {
-        throw new Error("created FANBOX supporter import could not be loaded");
-      }
-
-      return toFanboxSupporterImportRecord(row);
-    });
+        const importRecord = toFanboxSupporterImportRecord(row);
+        const result = {
+          importRecord,
+          createdSupporterIds: Object.freeze([...createdSupporterIds]),
+        };
+        Object.defineProperties(result, {
+          sequence: { value: importRecord.sequence },
+          importedAt: { value: importRecord.importedAt },
+          presentSupporterCount: { value: importRecord.presentSupporterCount },
+        });
+        return Object.freeze(
+          result as ApplyFanboxSupporterImportResult &
+            FanboxSupporterImportRecord,
+        );
+      },
+    );
 
     return apply();
   }

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  ApplyFanboxSupporterImportResult,
   FanboxSupporterImportRecord,
   LocalStore,
   SupporterRecord,
@@ -66,20 +67,40 @@ function receipt(sequence = 1, presentSupporterCount = 1): FanboxSupporterImport
   });
 }
 
+function storageResult(
+  createdSupporterIds: readonly string[] = [],
+  importRecord: FanboxSupporterImportRecord = receipt(),
+): ApplyFanboxSupporterImportResult {
+  return Object.freeze({
+    importRecord,
+    createdSupporterIds: Object.freeze([...createdSupporterIds]),
+  });
+}
+
 function fakeStore(records: readonly SupporterRecord[] = []): {
   store: LocalStore;
   listSupporters: ReturnType<typeof vi.fn>;
   apply: ReturnType<typeof vi.fn>;
+  getSupporterByRelationshipId: ReturnType<typeof vi.fn>;
+  getSupporterById: ReturnType<typeof vi.fn>;
 } {
   const listSupporters = vi.fn(() => records);
-  const apply = vi.fn(() => receipt());
+  const apply = vi.fn((input: Parameters<LocalStore["applyFanboxSupporterImport"]>[0]) =>
+    storageResult(input.creates.map((_, index) => `created-${index + 1}`)),
+  );
+  const getSupporterByRelationshipId = vi.fn(() => null);
+  const getSupporterById = vi.fn(() => null);
   return {
     store: {
       listSupporters,
       applyFanboxSupporterImport: apply,
+      getSupporterByRelationshipId,
+      getSupporterById,
     } as unknown as LocalStore,
     listSupporters,
     apply,
+    getSupporterByRelationshipId,
+    getSupporterById,
   };
 }
 
@@ -178,6 +199,7 @@ describe("FANBOX supporter import service", () => {
       status: "new",
       relationshipId: "  new relationship  ",
     });
+    expect(result.affectedSupporterIds).toEqual(["created-1"]);
   });
 
   it("builds a continuing no-op and continuing rename plan", () => {
@@ -190,8 +212,10 @@ describe("FANBOX supporter import service", () => {
     const { store, apply } = fakeStore([stored]);
     const service = createFanboxSupporterImportService(store);
 
-    service.applyInspection(inspection([relationship("continuing", null)]));
-    service.applyInspection(
+    const noOpResult = service.applyInspection(
+      inspection([relationship("continuing", null)]),
+    );
+    const renameResult = service.applyInspection(
       inspection([relationship("continuing", "  Renamed exactly  ")]),
     );
 
@@ -200,6 +224,8 @@ describe("FANBOX supporter import service", () => {
       updates: [],
       presentSupporterCount: 1,
     });
+    expect(noOpResult.affectedSupporterIds).toEqual([]);
+    expect(renameResult.affectedSupporterIds).toEqual(["continuing-id"]);
     expect(apply).toHaveBeenNthCalledWith(2, {
       creates: [],
       updates: [{ supporterId: "continuing-id", displayName: "  Renamed exactly  " }],
@@ -221,7 +247,7 @@ describe("FANBOX supporter import service", () => {
     const { store, apply } = fakeStore([withoutRename, withRename]);
     const service = createFanboxSupporterImportService(store);
 
-    service.applyInspection(
+    const result = service.applyInspection(
       inspection([
         relationship("returning-without-rename-rel", null),
         relationship("returning-with-rename-rel", "  Returned name  "),
@@ -240,6 +266,10 @@ describe("FANBOX supporter import service", () => {
       ],
       presentSupporterCount: 2,
     });
+    expect(result.affectedSupporterIds).toEqual([
+      "returning-without-rename",
+      "returning-with-rename",
+    ]);
   });
 
   it("deactivates active absent supporters and leaves inactive absent supporters out of the plan", () => {
@@ -261,13 +291,14 @@ describe("FANBOX supporter import service", () => {
     const { store, apply } = fakeStore([activeAbsent, inactiveAbsent, present]);
     const service = createFanboxSupporterImportService(store);
 
-    service.applyInspection(inspection([relationship("present-rel")]));
+    const result = service.applyInspection(inspection([relationship("present-rel")]));
 
     expect(apply).toHaveBeenCalledWith({
       creates: [],
       updates: [{ supporterId: "active-absent", supporting: false }],
       presentSupporterCount: 1,
     });
+    expect(result.affectedSupporterIds).toEqual(["active-absent"]);
   });
 
   it("compares exactly once and calls storage exactly once only after full plan validation", () => {
@@ -296,18 +327,104 @@ describe("FANBOX supporter import service", () => {
     const before = JSON.stringify(inspectionInput);
     const { store, apply } = fakeStore();
     const importRecord = receipt(9, 1);
-    apply.mockReturnValue(importRecord);
+    apply.mockReturnValue(storageResult(["created-id"], importRecord));
     const service = createFanboxSupporterImportService(store);
 
     const result = service.applyInspection(inspectionInput);
 
     expect(JSON.stringify(inspectionInput)).toBe(before);
     expect(result.importRecord).toBe(importRecord);
+    expect(result.affectedSupporterIds).toEqual(["created-id"]);
     expect(result).toEqual({
       comparison: result.comparison,
       importRecord,
+      affectedSupporterIds: ["created-id"],
     });
     expect(Object.isFrozen(result)).toBe(true);
+    expect(Object.isFrozen(result.affectedSupporterIds)).toBe(true);
+  });
+
+  it("orders created IDs before update IDs and does not reconstruct them after commit", () => {
+    const updated = supporter({
+      id: "updated-id",
+      fanboxRelationshipId: "updated-rel",
+      supporting: false,
+    });
+    const { store, apply, getSupporterByRelationshipId, getSupporterById } =
+      fakeStore([updated]);
+    apply.mockReturnValue(storageResult(["created-id"]));
+    const service = createFanboxSupporterImportService(store);
+
+    const result = service.applyInspection(
+      inspection([
+        relationship("new-rel", "New supporter"),
+        relationship("updated-rel", "Renamed supporter"),
+      ]),
+    );
+
+    expect(result.affectedSupporterIds).toEqual(["created-id", "updated-id"]);
+    expect(getSupporterByRelationshipId).not.toHaveBeenCalled();
+    expect(getSupporterById).not.toHaveBeenCalled();
+  });
+
+  it("maps inconsistent storage creation metadata to the generic error", () => {
+    const cases = [
+      {
+        inspection: [relationship("new-rel", "Name")],
+        ids: ["created-id", "extra-id"],
+        malformedId: "created-id",
+      },
+      {
+        inspection: [relationship("new-rel", "Name")],
+        ids: ["  "],
+        malformedId: "  ",
+      },
+      {
+        inspection: [
+          relationship("first-new-rel", "First name"),
+          relationship("second-new-rel", "Second name"),
+        ],
+        ids: ["duplicate-id", "duplicate-id"],
+        malformedId: "duplicate-id",
+      },
+    ];
+
+    for (const { inspection: input, ids, malformedId } of cases) {
+      const { store, apply } = fakeStore();
+      apply.mockReturnValue(storageResult(ids));
+      const service = createFanboxSupporterImportService(store);
+
+      let error: unknown;
+      try {
+        service.applyInspection(inspection(input));
+      } catch (caught: unknown) {
+        error = caught;
+      }
+      expect(error).toEqual(new FanboxSupporterImportError());
+      expect(String(error)).not.toContain(malformedId);
+    }
+
+    const updated = supporter({
+      id: "updated-id",
+      fanboxRelationshipId: "updated-rel",
+      supporting: false,
+    });
+    const { store, apply } = fakeStore([updated]);
+    apply.mockReturnValue(storageResult(["updated-id"]));
+    const service = createFanboxSupporterImportService(store);
+
+    let collisionError: unknown;
+    try {
+      service.applyInspection(
+        inspection([
+          relationship("new-rel", "Name"),
+          relationship("updated-rel", "Renamed"),
+        ]),
+      );
+    } catch (error: unknown) {
+      collisionError = error;
+    }
+    expect(collisionError).toEqual(new FanboxSupporterImportError());
   });
 
   it("maps comparison, storage, and unexpected failures to one generic error", () => {
@@ -367,13 +484,21 @@ describe("FANBOX supporter import service", () => {
     });
     const service = createFanboxSupporterImportService(store);
 
-    service.applyInspection(
+    const result = service.applyInspection(
       inspection([
         relationship("continuing-rel", "  Continuing exact  "),
         relationship("returning-rel", "  Returning exact  "),
         relationship("new-rel", "  New exact  "),
       ]),
     );
+
+    expect(result.affectedSupporterIds).toHaveLength(3);
+    expect(result.affectedSupporterIds![0]).not.toBe(continuing.id);
+    expect(result.affectedSupporterIds).toEqual([
+      result.affectedSupporterIds![0],
+      continuing.id,
+      returning.id,
+    ]);
 
     expect(store.getSupporterById(continuing.id)).toMatchObject({
       displayName: "  Continuing exact  ",
