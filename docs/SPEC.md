@@ -187,6 +187,12 @@ Create an encrypted backup from a consistent SQLite snapshot and encrypt it
 before writing it to the selected backup directory. The decryption secret or
 private key must not be stored only beside the encrypted backups.
 
+The backup AES key is stored separately from backup artifacts in the current
+user's macOS Keychain. It is generated on first backup-key-provider use and
+reused thereafter rather than automatically rotated. It is not stored in
+SQLite or in the selected backup directory. Key recovery, export, and rotation
+remain later concerns.
+
 Required backup triggers are:
 
 - after lottery result confirmation;
@@ -194,8 +200,8 @@ Required backup triggers are:
   restore point; and
 - after adding or registering a new supporter.
 
-The exact encryption tool or library and key-storage implementation are deferred
-to a later implementation contract.
+The remaining encryption implementation details are deferred to a later
+implementation contract.
 
 ## Deferred implementation choices and non-goals
 
