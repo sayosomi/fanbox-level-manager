@@ -174,6 +174,11 @@ The live SQLite database remains local on the Mac and stays outside any
 synchronized backup folder. Encrypted backup artifacts are written to a backup
 directory selected by the human.
 
+The localhost admin can create an encrypted current-state backup on demand.
+Manual backups and future automatic backups use the same selected directory,
+Keychain-backed key, consistent SQLite snapshot, authenticated encryption, and
+encrypted filesystem persistence pipeline.
+
 The human-selected backup destination is persisted in the local Mac SQLite
 admin state so it survives localhost admin restarts. Browser storage and
 directory handles are not the source of truth for this setting.
@@ -199,6 +204,9 @@ Required backup triggers are:
 - around month-end processing, with both a pre-processing and a post-processing
   restore point; and
 - after adding or registering a new supporter.
+
+These automatic triggers remain required, and their production wiring is the
+next implementation slice.
 
 The remaining encryption implementation details are deferred to a later
 implementation contract.

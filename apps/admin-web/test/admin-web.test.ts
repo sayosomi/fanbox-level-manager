@@ -37,6 +37,10 @@ import {
   type LocalStore,
 } from "@sayosomi/storage";
 import {
+  BackupDestinationNotConfiguredError,
+  type BackupExecutionService,
+} from "../src/backup-execution.js";
+import {
   ADMIN_HOST,
   createAdminServer,
   DEFAULT_ADMIN_PORT,
@@ -139,6 +143,24 @@ function request(
   headers: Record<string, string> = {},
 ): Promise<HttpResponse> {
   return requestOnPort(serverPort, method, path, body, headers);
+}
+
+function createBackupExecutionServer(
+  service?: BackupExecutionService,
+): Server {
+  return createAdminServer(
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    service,
+  );
 }
 
 function ephemeralPort(): Promise<number> {
@@ -580,6 +602,342 @@ describe("admin web server", () => {
     } finally {
       await closeServer(failingServer);
     }
+  });
+});
+
+describe("manual backup route", () => {
+  it("creates a backup on the exact valid request and returns secure JSON", async () => {
+    const createBackup = vi.fn(async () => {});
+    const backupServer = createBackupExecutionServer({ createBackup });
+    const backupPort = await listenOnEphemeralPort(backupServer);
+
+    try {
+      const response = await requestOnPort(
+        backupPort,
+        "POST",
+        "/api/backups/create",
+        "{}",
+        { "Content-Type": "application/json; charset=utf-8" },
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["content-type"]).toBe(
+        "application/json; charset=UTF-8",
+      );
+      expectCommonSecurityHeaders(response.headers);
+      expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+      expect(response.body).toBe('{"status":"ok"}');
+      expect(createBackup).toHaveBeenCalledTimes(1);
+    } finally {
+      await closeServer(backupServer);
+    }
+  });
+
+  it.each(["GET", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])(
+    "rejects %s before calling the backup service",
+    async (method) => {
+      const createBackup = vi.fn(async () => {});
+      const backupServer = createBackupExecutionServer({ createBackup });
+      const backupPort = await listenOnEphemeralPort(backupServer);
+
+      try {
+        const response = await requestOnPort(
+          backupPort,
+          method,
+          "/api/backups/create",
+        );
+
+        expect(response.statusCode).toBe(405);
+        expect(response.headers.allow).toBe("POST");
+        expect(createBackup).not.toHaveBeenCalled();
+      } finally {
+        await closeServer(backupServer);
+      }
+    },
+  );
+
+  it.each([undefined, "text/plain", "application/octet-stream"])(
+    "rejects unsupported media type %j before body and service work",
+    async (contentType) => {
+      const createBackup = vi.fn(async () => {});
+      const backupServer = createBackupExecutionServer({ createBackup });
+      const backupPort = await listenOnEphemeralPort(backupServer);
+
+      try {
+        const response = await requestOnPort(
+          backupPort,
+          "POST",
+          "/api/backups/create",
+          "{}",
+          contentType === undefined ? {} : { "Content-Type": contentType },
+        );
+
+        expect(response.statusCode).toBe(415);
+        expect(response.body).toBe('{"error":"unsupported_media_type"}');
+        expect(createBackup).not.toHaveBeenCalled();
+      } finally {
+        await closeServer(backupServer);
+      }
+    },
+  );
+
+  it.each([
+    "{not-json",
+    "null",
+    "[]",
+    "1",
+    '"text"',
+    '{"unexpected":true}',
+  ])("rejects invalid manual backup body %s before service work", async (body) => {
+    const createBackup = vi.fn(async () => {});
+    const backupServer = createBackupExecutionServer({ createBackup });
+    const backupPort = await listenOnEphemeralPort(backupServer);
+
+    try {
+      const response = await requestOnPort(
+        backupPort,
+        "POST",
+        "/api/backups/create",
+        body,
+        { "Content-Type": "application/json" },
+      );
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toBe('{"error":"invalid_request"}');
+      expect(createBackup).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(backupServer);
+    }
+  });
+
+  it("reports an unavailable service after valid request parsing", async () => {
+    const backupServer = createBackupExecutionServer();
+    const backupPort = await listenOnEphemeralPort(backupServer);
+
+    try {
+      const response = await requestOnPort(
+        backupPort,
+        "POST",
+        "/api/backups/create",
+        "{}",
+        { "Content-Type": "application/json" },
+      );
+
+      expect(response.statusCode).toBe(500);
+      expect(response.body).toBe('{"error":"backup_unavailable"}');
+    } finally {
+      await closeServer(backupServer);
+    }
+  });
+
+  it("maps only the typed missing-destination failure to 409", async () => {
+    const createBackup = vi.fn(async () => {
+      throw new BackupDestinationNotConfiguredError("/private/admin.sqlite");
+    });
+    const backupServer = createBackupExecutionServer({ createBackup });
+    const backupPort = await listenOnEphemeralPort(backupServer);
+
+    try {
+      const response = await requestOnPort(
+        backupPort,
+        "POST",
+        "/api/backups/create",
+        "{}",
+        { "Content-Type": "application/json" },
+      );
+
+      expect(response.statusCode).toBe(409);
+      expect(response.body).toBe('{"error":"backup_destination_required"}');
+      expect(response.body).not.toContain("/private/admin.sqlite");
+    } finally {
+      await closeServer(backupServer);
+    }
+  });
+
+  it("maps every other backup failure to a privacy-minimized 500", async () => {
+    const failureMessage =
+      "Keychain /private/admin.sqlite /backups/final.fblmbkup snapshot bytes";
+    const createBackup = vi.fn(async () => {
+      throw new Error(failureMessage);
+    });
+    const backupServer = createBackupExecutionServer({ createBackup });
+    const backupPort = await listenOnEphemeralPort(backupServer);
+
+    try {
+      const response = await requestOnPort(
+        backupPort,
+        "POST",
+        "/api/backups/create",
+        "{}",
+        { "Content-Type": "application/json" },
+      );
+
+      expect(response.statusCode).toBe(500);
+      expect(response.body).toBe('{"error":"backup_failed"}');
+      expect(response.body).not.toContain("Keychain");
+      expect(response.body).not.toContain("admin.sqlite");
+      expect(response.body).not.toContain("fblmbkup");
+      expect(response.body).not.toContain("snapshot");
+      expect(response.body).not.toContain("stack");
+    } finally {
+      await closeServer(backupServer);
+    }
+  });
+});
+
+describe("manual backup browser UI", () => {
+  it("shares the active guard with destination selection and validates exact responses", async () => {
+    type Listener = () => void;
+    type Response = Readonly<{
+      ok: boolean;
+      status: number;
+      json: () => Promise<unknown>;
+    }>;
+
+    class FakeElement {
+      readonly listeners = new Map<string, Listener>();
+      disabled = false;
+      textContent = "";
+
+      addEventListener(type: string, listener: Listener): void {
+        this.listeners.set(type, listener);
+      }
+
+      click(): void {
+        if (!this.disabled) {
+          this.listeners.get("click")?.();
+        }
+      }
+    }
+
+    class FakeButtonElement extends FakeElement {}
+    class FakeInputElement extends FakeElement {}
+
+    const current = new FakeElement();
+    const destinationButton = new FakeButtonElement();
+    const destinationStatus = new FakeElement();
+    const createButton = new FakeButtonElement();
+    const createStatus = new FakeElement();
+    const elements = new Map([
+      ["backup-destination-current", current],
+      ["backup-destination-button", destinationButton],
+      ["backup-destination-status", destinationStatus],
+      ["backup-create-button", createButton],
+      ["backup-create-status", createStatus],
+    ]);
+    const fetchCalls: Array<{
+      url: string;
+      options: Readonly<Record<string, unknown>>;
+    }> = [];
+    const selectionResolvers: Array<(response: Response) => void> = [];
+    const backupResolvers: Array<(response: Response) => void> = [];
+    const response = (statusCode: number, body: unknown): Response => ({
+      ok: statusCode >= 200 && statusCode < 300,
+      status: statusCode,
+      json: async () => body,
+    });
+    const fetchMock = vi.fn(
+      (
+        url: string,
+        options: Readonly<Record<string, unknown>> = {},
+      ): Promise<Response> => {
+        fetchCalls.push({ url, options });
+        if (url === "/api/backup-destination") {
+          return new Promise((resolve) => {
+            selectionResolvers.push(resolve);
+          });
+        }
+        if (url === "/api/backup-destination/select") {
+          return new Promise((resolve) => {
+            selectionResolvers.push(resolve);
+          });
+        }
+        return new Promise((resolve) => backupResolvers.push(resolve));
+      },
+    );
+    const fakeDocument = {
+      documentElement: { dataset: {} as Record<string, string> },
+      getElementById: (id: string): FakeElement | null => elements.get(id) ?? null,
+    };
+
+    expect(ADMIN_PAGE).toContain(
+      '<button id="backup-create-button" type="button" disabled>今すぐバックアップを作成</button>',
+    );
+    expect(ADMIN_PAGE).toContain(
+      '<p id="backup-create-status" role="status" aria-live="polite"></p>',
+    );
+    runInNewContext(ADMIN_SCRIPT, {
+      Array,
+      document: fakeDocument,
+      Error,
+      fetch: fetchMock,
+      HTMLButtonElement: FakeButtonElement,
+      HTMLInputElement: FakeInputElement,
+      Object,
+      Set,
+      TypeError,
+    });
+
+    expect(createButton.disabled).toBe(true);
+    selectionResolvers[0]?.(response(200, { directory: "/synthetic/current/" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(current.textContent).toBe("バックアップ先: /synthetic/current/");
+    expect(createButton.disabled).toBe(false);
+
+    destinationButton.click();
+    createButton.click();
+    expect(destinationButton.disabled).toBe(true);
+    expect(createButton.disabled).toBe(true);
+    expect(fetchCalls.filter(({ url }) => url === "/api/backups/create")).toHaveLength(0);
+    selectionResolvers[1]?.(
+      response(200, {
+        status: "selected",
+        directory: "/synthetic/selected/",
+      }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(current.textContent).toBe("バックアップ先: /synthetic/selected/");
+    expect(createButton.disabled).toBe(false);
+
+    createButton.click();
+    createButton.click();
+    destinationButton.click();
+    expect(fetchCalls.filter(({ url }) => url === "/api/backups/create")).toHaveLength(1);
+    expect(fetchCalls.filter(({ url }) => url === "/api/backup-destination/select")).toHaveLength(1);
+    expect(fetchCalls[2]).toMatchObject({
+      url: "/api/backups/create",
+      options: {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+      },
+    });
+    backupResolvers[0]?.(response(200, { status: "ok" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(createStatus.textContent).toBe("バックアップを作成しました。");
+    expect(current.textContent).toBe("バックアップ先: /synthetic/selected/");
+    expect(createButton.disabled).toBe(false);
+
+    createButton.click();
+    backupResolvers[1]?.(response(200, { status: "ok", path: "/private/final.fblmbkup" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(createStatus.textContent).toBe("バックアップを作成できませんでした。");
+    expect(current.textContent).toBe("バックアップ先: /synthetic/selected/");
+
+    createButton.click();
+    backupResolvers[2]?.(
+      response(409, { error: "backup_destination_required" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(current.textContent).toBe("バックアップ先が未設定です。");
+    expect(createStatus.textContent).toBe(
+      "バックアップ先を選択してから、もう一度お試しください。",
+    );
+    expect(createButton.disabled).toBe(true);
   });
 });
 
@@ -2477,6 +2835,15 @@ describe("admin server configuration", () => {
     const originalPortalOrigin = process.env.FANBOX_PORTAL_ORIGIN;
     const originalSyncApiToken = process.env.FANBOX_PORTAL_SYNC_API_TOKEN;
     const store = { close: vi.fn() } as unknown as LocalStore;
+    const backupExecutionService: BackupExecutionService = {
+      createBackup: vi.fn(async () => {}),
+    };
+    const createBackupExecutionServiceFactory = vi.fn(
+      (suppliedStore: LocalStore) => {
+        expect(suppliedStore).toBe(store);
+        return backupExecutionService;
+      },
+    );
     let productionServer: Server | undefined;
 
     process.env.FANBOX_ADMIN_DB_PATH = "/tmp/issue-32-admin.sqlite";
@@ -2551,12 +2918,21 @@ describe("admin server configuration", () => {
         createExistingSupporterMigrationService: createMigrationService,
         createLotteryLevelService: createLotteryService,
         createMonthEndProcessingService: createMonthEndService,
+        createBackupExecutionService: createBackupExecutionServiceFactory,
       });
       await new Promise<void>((resolve, reject) => {
         productionServer?.once("listening", () => resolve());
         productionServer?.once("error", reject);
       });
       const productionPort = Number(process.env.FANBOX_ADMIN_PORT);
+      expect(backupExecutionService.createBackup).not.toHaveBeenCalled();
+      const backupResponse = await requestOnPort(
+        productionPort,
+        "POST",
+        "/api/backups/create",
+        "{}",
+        { "Content-Type": "application/json" },
+      );
 
       const listResponse = await requestOnPort(
         productionPort,
@@ -2602,6 +2978,11 @@ describe("admin server configuration", () => {
       expect(createLotteryService).toHaveBeenCalledTimes(1);
       expect(createMonthEndService).toHaveBeenCalledTimes(1);
       expect(createMonthEndService).toHaveBeenCalledWith(store);
+      expect(createBackupExecutionServiceFactory).toHaveBeenCalledTimes(1);
+      expect(createBackupExecutionServiceFactory).toHaveBeenCalledWith(store);
+      expect(backupResponse.statusCode).toBe(200);
+      expect(backupResponse.body).toBe('{"status":"ok"}');
+      expect(backupExecutionService.createBackup).toHaveBeenCalledTimes(1);
       expect(getMonthEndSource).toHaveBeenCalledTimes(1);
       expect(processMonthEnd).toHaveBeenCalledTimes(1);
       expect(processMonthEnd).toHaveBeenCalledWith("2026-09", 7);

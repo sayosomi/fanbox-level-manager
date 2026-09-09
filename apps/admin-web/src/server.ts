@@ -47,6 +47,11 @@ import {
   type BackupDestinationService,
 } from "./backup-destination.js";
 import {
+  BackupDestinationNotConfiguredError,
+  createBackupExecutionService,
+  type BackupExecutionService,
+} from "./backup-execution.js";
+import {
   ADMIN_CONTENT_SECURITY_POLICY,
   ADMIN_PAGE,
   ADMIN_SCRIPT,
@@ -93,6 +98,7 @@ const PDF_INSPECTION_PATH = "/api/fanbox-pdf/inspect";
 const PDF_IMPORT_PATH = "/api/fanbox-pdf/import";
 const BACKUP_DESTINATION_PATH = "/api/backup-destination";
 const BACKUP_DESTINATION_SELECT_PATH = "/api/backup-destination/select";
+const BACKUP_CREATE_PATH = "/api/backups/create";
 const MAX_PDF_BODY_BYTES = 25 * 1024 * 1024;
 const INCOMPLETE_PORTAL_CONFIGURATION_ERROR =
   "incomplete portal configuration";
@@ -171,6 +177,19 @@ const BACKUP_DESTINATION_SELECTION_FAILED_BODY = JSON.stringify({
 const BACKUP_DESTINATION_CANCELLED_BODY = JSON.stringify({
   status: "cancelled",
 });
+const BACKUP_UNSUPPORTED_MEDIA_TYPE_BODY = JSON.stringify({
+  error: "unsupported_media_type",
+});
+const BACKUP_UNAVAILABLE_BODY = JSON.stringify({
+  error: "backup_unavailable",
+});
+const BACKUP_DESTINATION_REQUIRED_BODY = JSON.stringify({
+  error: "backup_destination_required",
+});
+const BACKUP_FAILED_BODY = JSON.stringify({
+  error: "backup_failed",
+});
+const BACKUP_SUCCESS_BODY = JSON.stringify({ status: "ok" });
 const FANBOX_IMPORT_BLOCKED_REASONS: ReadonlySet<string> = new Set([
   "empty_relationships",
   "duplicate_relationship_id",
@@ -195,6 +214,7 @@ export type ProductionAdminServerDependencies = Readonly<{
   createLotteryLevelService?: typeof createLotteryLevelService;
   createMonthEndProcessingService?: typeof createMonthEndProcessingService;
   createBackupDestinationService?: typeof createBackupDestinationService;
+  createBackupExecutionService?: typeof createBackupExecutionService;
 }>;
 
 export function parseAdminPort(value: string | undefined): number {
@@ -1118,6 +1138,50 @@ async function sendBackupDestinationSelection(
   }
 }
 
+async function sendBackupCreation(
+  request: IncomingMessage,
+  response: ServerResponse,
+  backupExecutionService: BackupExecutionService | undefined,
+): Promise<void> {
+  if (!hasJsonContentType(request)) {
+    request.resume();
+    sendPortalJson(response, 415, BACKUP_UNSUPPORTED_MEDIA_TYPE_BODY);
+    return;
+  }
+
+  let body: string;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  if (!isEmptyJsonObject(body)) {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  if (backupExecutionService === undefined) {
+    sendPortalJson(response, 500, BACKUP_UNAVAILABLE_BODY);
+    return;
+  }
+
+  try {
+    await backupExecutionService.createBackup();
+  } catch (error: unknown) {
+    if (error instanceof BackupDestinationNotConfiguredError) {
+      sendPortalJson(response, 409, BACKUP_DESTINATION_REQUIRED_BODY);
+      return;
+    }
+
+    sendPortalJson(response, 500, BACKUP_FAILED_BODY);
+    return;
+  }
+
+  sendPortalJson(response, 200, BACKUP_SUCCESS_BODY);
+}
+
 export function createAdminServer(
   supporterListService?: SupporterListService,
   supporterPortalLinkService?: SupporterPortalLinkService,
@@ -1129,6 +1193,7 @@ export function createAdminServer(
   lotteryLevelService?: LotteryLevelService,
   monthEndProcessingService?: MonthEndProcessingService,
   backupDestinationService?: BackupDestinationService,
+  backupExecutionService?: BackupExecutionService,
 ): Server {
   return createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -1147,6 +1212,7 @@ export function createAdminServer(
       requestPath === PDF_IMPORT_PATH ||
       requestPath === BACKUP_DESTINATION_PATH ||
       requestPath === BACKUP_DESTINATION_SELECT_PATH ||
+      requestPath === BACKUP_CREATE_PATH ||
       requestPath === "/api/supporters/migrate-existing";
 
     if (!knownRoute) {
@@ -1252,6 +1318,16 @@ export function createAdminServer(
       return;
     }
 
+    if (requestPath === BACKUP_CREATE_PATH) {
+      if (request.method !== "POST") {
+        sendPortalMethodNotAllowed(response);
+        return;
+      }
+
+      void sendBackupCreation(request, response, backupExecutionService);
+      return;
+    }
+
     if (request.method !== "GET") {
       sendMethodNotAllowed(response);
       return;
@@ -1309,6 +1385,7 @@ export function startAdminServer(
   lotteryLevelService?: LotteryLevelService,
   monthEndProcessingService?: MonthEndProcessingService,
   backupDestinationService?: BackupDestinationService,
+  backupExecutionService?: BackupExecutionService,
 ): Server {
   validateListenPort(port);
   const server = createAdminServer(
@@ -1322,6 +1399,7 @@ export function startAdminServer(
     lotteryLevelService,
     monthEndProcessingService,
     backupDestinationService,
+    backupExecutionService,
   );
   server.listen(port, ADMIN_HOST);
   return server;
@@ -1410,6 +1488,10 @@ export function startProductionAdminServer(
       dependencies.createBackupDestinationService ??
       createBackupDestinationService;
     const backupDestinationService = createBackupService(store);
+    const createBackupExecution =
+      dependencies.createBackupExecutionService ??
+      createBackupExecutionService;
+    const backupExecutionService = createBackupExecution(store);
     let supporterPortalLinkService: SupporterPortalLinkService | undefined;
     if (portalConfiguration !== null) {
       const createPortalLinkService =
@@ -1436,6 +1518,7 @@ export function startProductionAdminServer(
       lotteryLevelService,
       monthEndProcessingService,
       backupDestinationService,
+      backupExecutionService,
     );
     server.once("close", closeStore);
 

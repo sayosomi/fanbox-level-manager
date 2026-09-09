@@ -20,6 +20,8 @@ export const ADMIN_PAGE = `<!doctype html>
         </p>
         <button id="backup-destination-button" type="button">バックアップ先フォルダを選択</button>
         <p id="backup-destination-status" role="status" aria-live="polite"></p>
+        <button id="backup-create-button" type="button" disabled>今すぐバックアップを作成</button>
+        <p id="backup-create-status" role="status" aria-live="polite"></p>
       </section>
       <section aria-labelledby="pdf-inspection-heading">
         <h2 id="pdf-inspection-heading">FANBOX PDF確認</h2>
@@ -164,6 +166,12 @@ function renderBackupDestinationDirectory() {
 function updateBackupDestinationButton() {
   if (backupDestinationUi !== null) {
     backupDestinationUi.button.disabled = backupDestinationState.active;
+    if (backupDestinationUi.createButton !== null) {
+      backupDestinationUi.createButton.disabled =
+        !backupDestinationState.loaded ||
+        backupDestinationState.directory === null ||
+        backupDestinationState.active;
+    }
   }
 }
 
@@ -189,11 +197,13 @@ async function loadBackupDestination() {
     );
     backupDestinationState.loaded = true;
     renderBackupDestinationDirectory();
+    updateBackupDestinationButton();
   } catch {
     backupDestinationState.loaded = false;
     renderBackupDestinationDirectory();
     backupDestinationUi.status.textContent =
       "バックアップ先を読み込めませんでした。";
+    updateBackupDestinationButton();
   }
 }
 
@@ -239,6 +249,72 @@ async function selectBackupDestination() {
   } catch {
     backupDestinationUi.status.textContent =
       "バックアップ先を変更できませんでした。";
+  } finally {
+    backupDestinationState.active = false;
+    updateBackupDestinationButton();
+  }
+}
+
+function isExactBackupSuccess(value) {
+  return isRecord(value) && hasExactKeys(value, ["status"]) && value.status === "ok";
+}
+
+function isExactBackupDestinationRequired(value) {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["error"]) &&
+    value.error === "backup_destination_required"
+  );
+}
+
+async function createBackup() {
+  if (
+    backupDestinationUi === null ||
+    backupDestinationUi.createButton === null ||
+    backupDestinationUi.createStatus === null ||
+    backupDestinationState.active ||
+    !backupDestinationState.loaded ||
+    backupDestinationState.directory === null
+  ) {
+    return;
+  }
+
+  backupDestinationState.active = true;
+  updateBackupDestinationButton();
+  backupDestinationUi.createStatus.textContent = "バックアップを作成しています。";
+
+  try {
+    const response = await fetch("/api/backups/create", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    const result = await response.json();
+    if (response.status === 200 && isExactBackupSuccess(result)) {
+      backupDestinationUi.createStatus.textContent =
+        "バックアップを作成しました。";
+      return;
+    }
+
+    if (response.status === 409 && isExactBackupDestinationRequired(result)) {
+      backupDestinationState.loaded = true;
+      backupDestinationState.directory = null;
+      renderBackupDestinationDirectory();
+      backupDestinationUi.createStatus.textContent =
+        "バックアップ先を選択してから、もう一度お試しください。";
+      return;
+    }
+
+    throw new Error("backup creation request failed");
+  } catch {
+    backupDestinationUi.createStatus.textContent =
+      "バックアップを作成できませんでした。";
   } finally {
     backupDestinationState.active = false;
     updateBackupDestinationButton();
@@ -1639,6 +1715,8 @@ const backupDestinationButton = document.getElementById(
 const backupDestinationStatus = document.getElementById(
   "backup-destination-status",
 );
+const backupCreateButton = document.getElementById("backup-create-button");
+const backupCreateStatus = document.getElementById("backup-create-status");
 if (
   backupDestinationCurrent !== null &&
   backupDestinationButton instanceof HTMLButtonElement &&
@@ -1648,10 +1726,20 @@ if (
     current: backupDestinationCurrent,
     button: backupDestinationButton,
     status: backupDestinationStatus,
+    createButton:
+      backupCreateButton instanceof HTMLButtonElement
+        ? backupCreateButton
+        : null,
+    createStatus: backupCreateStatus,
   };
   backupDestinationButton.addEventListener("click", () => {
     void selectBackupDestination();
   });
+  if (backupDestinationUi.createButton !== null) {
+    backupDestinationUi.createButton.addEventListener("click", () => {
+      void createBackup();
+    });
+  }
   updateBackupDestinationButton();
   void loadBackupDestination();
 }
