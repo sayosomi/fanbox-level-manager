@@ -200,13 +200,21 @@ remain later concerns.
 
 Required backup triggers are:
 
-- after lottery result confirmation;
-- around month-end processing, with both a pre-processing and a post-processing
-  restore point; and
-- after adding or registering a new supporter.
+- one post-backup for each successfully committed lottery result batch;
+- one real pre-processing backup and one post-processing backup for successful
+  month-end processing;
+- one post-backup for a FANBOX import only when at least one new local
+  supporter is created; and
+- one post-backup for each successful existing-supporter migration or
+  registration.
 
-These automatic triggers remain required, and their production wiring is the
-next implementation slice.
+Continuing and returning supporter updates do not count as new-supporter
+registration triggers. For post-only protected operations, a known missing
+backup destination blocks the mutation before it starts. Month-end processing
+cannot start unless its real pre-processing backup succeeds. A post-backup
+failure does not roll back an already committed business update. The manual
+`今すぐバックアップを作成` action is the explicit recovery path after a
+post-update backup failure.
 
 The remaining encryption implementation details are deferred to a later
 implementation contract.

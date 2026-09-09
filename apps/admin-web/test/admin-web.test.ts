@@ -40,6 +40,7 @@ import {
   BackupDestinationNotConfiguredError,
   type BackupExecutionService,
 } from "../src/backup-execution.js";
+import type { BackupDestinationService } from "../src/backup-destination.js";
 import {
   ADMIN_HOST,
   createAdminServer,
@@ -161,6 +162,25 @@ function createBackupExecutionServer(
     undefined,
     service,
   );
+}
+
+function createBackupDestinationService(
+  directory: string | null = "/synthetic/backup/",
+): BackupDestinationService {
+  return {
+    getBackupDestinationDirectory: vi.fn(() => directory),
+    selectBackupDestinationDirectory: vi.fn(async () => directory),
+  };
+}
+
+function createBackupExecutionService(
+  createBackup: BackupExecutionService["createBackup"] = async () => {},
+): BackupExecutionService {
+  return {
+    createBackup: vi.isMockFunction(createBackup)
+      ? createBackup
+      : vi.fn(createBackup),
+  };
 }
 
 function ephemeralPort(): Promise<number> {
@@ -399,6 +419,7 @@ function createLotteryLevelService(
 
 function createMonthEndAdminServer(
   monthEndProcessingService?: MonthEndProcessingService,
+  backupExecutionService?: BackupExecutionService,
 ): Server {
   return createAdminServer(
     undefined,
@@ -410,6 +431,8 @@ function createMonthEndAdminServer(
     undefined,
     undefined,
     monthEndProcessingService,
+    undefined,
+    backupExecutionService,
   );
 }
 
@@ -783,6 +806,288 @@ describe("manual backup route", () => {
       await closeServer(backupServer);
     }
   });
+
+  it("compares before import and uses the returned comparison for one post-backup", async () => {
+    const callOrder: string[] = [];
+    const inspect = vi.fn(async () => {
+      callOrder.push("inspect");
+      return samplePdfInspection;
+    });
+    const compare = vi.fn(() => {
+      callOrder.push("compare");
+      return samplePdfComparison;
+    });
+    const apply = vi.fn(() => {
+      callOrder.push("apply");
+      return samplePdfImportResult;
+    });
+    const getBackupDestinationDirectory = vi.fn(() => {
+      callOrder.push("readiness");
+      return "/synthetic/backup/";
+    });
+    const createBackup = vi.fn(async () => {
+      callOrder.push("backup");
+    });
+    const importServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      createPdfInspectionService(inspect),
+      createPdfComparisonService(compare),
+      createPdfImportService(apply),
+      undefined,
+      undefined,
+      undefined,
+      {
+        getBackupDestinationDirectory,
+        selectBackupDestinationDirectory: vi.fn(async () => "/synthetic/backup/"),
+      },
+      createBackupExecutionService(createBackup),
+    );
+    const importPort = await listenOnEphemeralPort(importServer);
+
+    try {
+      const response = await requestOnPort(
+        importPort,
+        "POST",
+        "/api/fanbox-pdf/import",
+        new Uint8Array([37, 80, 68, 70]),
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(callOrder).toEqual(["inspect", "compare", "apply", "backup"]);
+      expect(compare).toHaveBeenCalledTimes(1);
+      expect(apply).toHaveBeenCalledTimes(1);
+      expect(getBackupDestinationDirectory).not.toHaveBeenCalled();
+      expect(createBackup).toHaveBeenCalledTimes(1);
+    } finally {
+      await closeServer(importServer);
+    }
+  });
+
+  it("blocks PDF import when comparison is unavailable or fails", async () => {
+    const apply = vi.fn(() => samplePdfImportResult);
+    const unavailableServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      createPdfInspectionService(async () => samplePdfInspection),
+      undefined,
+      createPdfImportService(apply),
+    );
+    const failedServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      createPdfInspectionService(async () => samplePdfInspection),
+      createPdfComparisonService(() => {
+        throw new Error("private comparison diagnostics");
+      }),
+      createPdfImportService(apply),
+    );
+    const unavailablePort = await listenOnEphemeralPort(unavailableServer);
+    const failedPort = await listenOnEphemeralPort(failedServer);
+
+    try {
+      const unavailable = await requestOnPort(
+        unavailablePort,
+        "POST",
+        "/api/fanbox-pdf/import",
+        new Uint8Array([37, 80, 68, 70]),
+        { "Content-Type": "application/pdf" },
+      );
+      const failed = await requestOnPort(
+        failedPort,
+        "POST",
+        "/api/fanbox-pdf/import",
+        new Uint8Array([37, 80, 68, 70]),
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect(unavailable.statusCode).toBe(500);
+      expect(unavailable.body).toBe('{"error":"pdf_comparison_unavailable"}');
+      expect(failed.statusCode).toBe(500);
+      expect(failed.body).toBe('{"error":"pdf_comparison_failed"}');
+      expect(apply).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(unavailableServer);
+      await closeServer(failedServer);
+    }
+  });
+
+  it("requires readiness before a new-supporter PDF import mutation", async () => {
+    const apply = vi.fn(() => samplePdfImportResult);
+    const createBackup = vi.fn(async () => {});
+    const importServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      createPdfInspectionService(async () => samplePdfInspection),
+      createPdfComparisonService(() => comparisonResult),
+      createPdfImportService(apply),
+      undefined,
+      undefined,
+      undefined,
+      createBackupDestinationService(null),
+      createBackupExecutionService(createBackup),
+    );
+    const importPort = await listenOnEphemeralPort(importServer);
+
+    try {
+      const response = await requestOnPort(
+        importPort,
+        "POST",
+        "/api/fanbox-pdf/import",
+        new Uint8Array([37, 80, 68, 70]),
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect(response.statusCode).toBe(409);
+      expect(response.body).toBe('{"error":"backup_destination_required"}');
+      expect(apply).not.toHaveBeenCalled();
+      expect(createBackup).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(importServer);
+    }
+  });
+
+  it("does not back up a returning-only import", async () => {
+    const returningOnlyComparison: FanboxPdfSupporterComparison = {
+      presentSupporters: [
+        {
+          status: "returning",
+          relationshipId: "returning_relationship",
+          displayNameCandidate: null,
+          supporterId: "internal-returning-id",
+          storedDisplayName: "Returning stored synthetic name",
+        },
+      ],
+      absentSupporters: [],
+    };
+    const apply = vi.fn(() => ({
+      comparison: returningOnlyComparison,
+      importRecord: samplePdfImportResult.importRecord,
+    }));
+    const getBackupDestinationDirectory = vi.fn(() => "/synthetic/backup/");
+    const createBackup = vi.fn(async () => {});
+    const importServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      createPdfInspectionService(async () => samplePdfInspection),
+      createPdfComparisonService(() => returningOnlyComparison),
+      createPdfImportService(apply),
+      undefined,
+      undefined,
+      undefined,
+      { getBackupDestinationDirectory, selectBackupDestinationDirectory: vi.fn(async () => null) },
+      createBackupExecutionService(createBackup),
+    );
+    const importPort = await listenOnEphemeralPort(importServer);
+
+    try {
+      const response = await requestOnPort(
+        importPort,
+        "POST",
+        "/api/fanbox-pdf/import",
+        new Uint8Array([37, 80, 68, 70]),
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(getBackupDestinationDirectory).not.toHaveBeenCalled();
+      expect(createBackup).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(importServer);
+    }
+  });
+
+  it("backs up multiple new supporters once and reports post-backup failure without reapplying", async () => {
+    const multipleNewComparison: FanboxPdfSupporterComparison = {
+      ...comparisonResult,
+      presentSupporters: comparisonResult.presentSupporters.map((supporter) =>
+        supporter.status === "continuing"
+          ? {
+              ...supporter,
+              status: "new" as const,
+              supporterId: null,
+              storedDisplayName: null,
+            }
+          : supporter,
+      ),
+    };
+    const createBackup = vi.fn(async () => {});
+    const apply = vi.fn(() => ({
+      comparison: multipleNewComparison,
+      importRecord: samplePdfImportResult.importRecord,
+    }));
+    const importServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      createPdfInspectionService(async () => samplePdfInspection),
+      createPdfComparisonService(() => comparisonResult),
+      createPdfImportService(apply),
+      undefined,
+      undefined,
+      undefined,
+      createBackupDestinationService(),
+      createBackupExecutionService(createBackup),
+    );
+    const importPort = await listenOnEphemeralPort(importServer);
+
+    try {
+      const response = await requestOnPort(
+        importPort,
+        "POST",
+        "/api/fanbox-pdf/import",
+        new Uint8Array([37, 80, 68, 70]),
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(createBackup).toHaveBeenCalledTimes(1);
+    } finally {
+      await closeServer(importServer);
+    }
+
+    const failingBackup = vi.fn(async () => {
+      throw new Error("private post-backup diagnostics");
+    });
+    const failingApply = vi.fn(() => samplePdfImportResult);
+    const failingServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      createPdfInspectionService(async () => samplePdfInspection),
+      createPdfComparisonService(() => comparisonResult),
+      createPdfImportService(failingApply),
+      undefined,
+      undefined,
+      undefined,
+      createBackupDestinationService(),
+      createBackupExecutionService(failingBackup),
+    );
+    const failingPort = await listenOnEphemeralPort(failingServer);
+
+    try {
+      const response = await requestOnPort(
+        failingPort,
+        "POST",
+        "/api/fanbox-pdf/import",
+        new Uint8Array([37, 80, 68, 70]),
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect(response.statusCode).toBe(500);
+      expect(response.body).toBe('{"error":"backup_failed_after_update"}');
+      expect(failingApply).toHaveBeenCalledTimes(1);
+      expect(failingBackup).toHaveBeenCalledTimes(1);
+    } finally {
+      await closeServer(failingServer);
+    }
+  });
 });
 
 describe("manual backup browser UI", () => {
@@ -953,6 +1258,8 @@ describe("existing supporter migration route", () => {
     const migrationService = createExistingSupporterMigrationService((input) => {
       inputs.push(input);
     });
+    const backupDestinationService = createBackupDestinationService();
+    const backupExecutionService = createBackupExecutionService();
     const migrationServer = createAdminServer(
       sampleSupporterListService,
       undefined,
@@ -961,6 +1268,10 @@ describe("existing supporter migration route", () => {
       undefined,
       undefined,
       migrationService,
+      undefined,
+      undefined,
+      backupDestinationService,
+      backupExecutionService,
     );
     const migrationPort = await listenOnEphemeralPort(migrationServer);
 
@@ -1085,6 +1396,10 @@ describe("existing supporter migration route", () => {
       createExistingSupporterMigrationService(() => {
         throw new DuplicateFanboxRelationshipError("legacy_relationship_52");
       }),
+      undefined,
+      undefined,
+      createBackupDestinationService(),
+      createBackupExecutionService(),
     );
     const failureServer = createAdminServer(
       undefined,
@@ -1098,6 +1413,10 @@ describe("existing supporter migration route", () => {
           "SQL failed for /private/admin.sqlite legacy_relationship_52 operation-id month-key",
         );
       }),
+      undefined,
+      undefined,
+      createBackupDestinationService(),
+      createBackupExecutionService(),
     );
     const duplicatePort = await listenOnEphemeralPort(duplicateServer);
     const failurePort = await listenOnEphemeralPort(failureServer);
@@ -1139,6 +1458,145 @@ describe("existing supporter migration route", () => {
       await closeServer(failureServer);
     }
   });
+
+  it("blocks existing-supporter registration when backup readiness fails", async () => {
+    const cases = [
+      {
+        destination: undefined,
+        execution: undefined,
+        statusCode: 500,
+        body: '{"error":"backup_unavailable"}',
+      },
+      {
+        destination: createBackupDestinationService(null),
+        execution: createBackupExecutionService(),
+        statusCode: 409,
+        body: '{"error":"backup_destination_required"}',
+      },
+      {
+        destination: {
+          getBackupDestinationDirectory: vi.fn(() => {
+            throw new Error("private destination diagnostics");
+          }),
+          selectBackupDestinationDirectory: vi.fn(async () => null),
+        },
+        execution: createBackupExecutionService(),
+        statusCode: 500,
+        body: '{"error":"backup_failed"}',
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const registerExistingSupporter = vi.fn();
+      const migrationServer = createAdminServer(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        createExistingSupporterMigrationService(registerExistingSupporter),
+        undefined,
+        undefined,
+        testCase.destination,
+        testCase.execution,
+      );
+      const migrationPort = await listenOnEphemeralPort(migrationServer);
+
+      try {
+        const response = await requestOnPort(
+          migrationPort,
+          "POST",
+          "/api/supporters/migrate-existing",
+          validBody,
+        );
+
+        expect(response.statusCode).toBe(testCase.statusCode);
+        expect(response.body).toBe(testCase.body);
+        expect(registerExistingSupporter).not.toHaveBeenCalled();
+      } finally {
+        await closeServer(migrationServer);
+      }
+    }
+  });
+
+  it("creates one awaited post-backup after successful existing-supporter registration", async () => {
+    const callOrder: string[] = [];
+    const registerExistingSupporter = vi.fn(() => {
+      callOrder.push("mutation");
+    });
+    const createBackup = vi.fn(async () => {
+      callOrder.push("backup");
+      await Promise.resolve();
+    });
+    const migrationServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createExistingSupporterMigrationService(registerExistingSupporter),
+      undefined,
+      undefined,
+      createBackupDestinationService(),
+      createBackupExecutionService(createBackup),
+    );
+    const migrationPort = await listenOnEphemeralPort(migrationServer);
+
+    try {
+      const response = await requestOnPort(
+        migrationPort,
+        "POST",
+        "/api/supporters/migrate-existing",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(callOrder).toEqual(["mutation", "backup"]);
+      expect(registerExistingSupporter).toHaveBeenCalledTimes(1);
+      expect(createBackup).toHaveBeenCalledTimes(1);
+    } finally {
+      await closeServer(migrationServer);
+    }
+  });
+
+  it("reports migration post-backup failure without repeating registration", async () => {
+    const registerExistingSupporter = vi.fn();
+    const createBackup = vi.fn(async () => {
+      throw new Error("private backup failure");
+    });
+    const migrationServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createExistingSupporterMigrationService(registerExistingSupporter),
+      undefined,
+      undefined,
+      createBackupDestinationService(),
+      createBackupExecutionService(createBackup),
+    );
+    const migrationPort = await listenOnEphemeralPort(migrationServer);
+
+    try {
+      const response = await requestOnPort(
+        migrationPort,
+        "POST",
+        "/api/supporters/migrate-existing",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(500);
+      expect(response.body).toBe('{"error":"backup_failed_after_update"}');
+      expect(registerExistingSupporter).toHaveBeenCalledTimes(1);
+      expect(createBackup).toHaveBeenCalledTimes(1);
+    } finally {
+      await closeServer(migrationServer);
+    }
+  });
 });
 
 describe("lottery results route", () => {
@@ -1160,6 +1618,9 @@ describe("lottery results route", () => {
       undefined,
       undefined,
       createLotteryLevelService(recordLotteryResults),
+      undefined,
+      createBackupDestinationService(),
+      createBackupExecutionService(),
     );
     const lotteryPort = await listenOnEphemeralPort(lotteryServer);
 
@@ -1321,6 +1782,9 @@ describe("lottery results route", () => {
       createLotteryLevelService(() => {
         throw new SupporterNotFoundError("private-supporter-id");
       }),
+      undefined,
+      createBackupDestinationService(),
+      createBackupExecutionService(),
     );
     const staleServer = createAdminServer(
       undefined,
@@ -1333,6 +1797,9 @@ describe("lottery results route", () => {
       createLotteryLevelService(() => {
         throw new StaleMonthError("2026-08", "2026-09");
       }),
+      undefined,
+      createBackupDestinationService(),
+      createBackupExecutionService(),
     );
     const failureServer = createAdminServer(
       undefined,
@@ -1347,6 +1814,9 @@ describe("lottery results route", () => {
           "SQL failed for /private/admin.sqlite private-supporter-id operation-id month-key",
         );
       }),
+      undefined,
+      createBackupDestinationService(),
+      createBackupExecutionService(),
     );
     const [conflictPort, stalePort, failurePort] = await Promise.all([
       listenOnEphemeralPort(conflictServer),
@@ -1403,6 +1873,206 @@ describe("lottery results route", () => {
     }
   });
 
+  it("checks backup readiness before mutation and awaits one post-backup", async () => {
+    const callOrder: string[] = [];
+    const recordLotteryResults = vi.fn(() => {
+      callOrder.push("mutation");
+      return [];
+    });
+    const backupDestinationService: BackupDestinationService = {
+      getBackupDestinationDirectory: vi.fn(() => {
+        callOrder.push("readiness");
+        return "/synthetic/backup/";
+      }),
+      selectBackupDestinationDirectory: vi.fn(async () => "/synthetic/backup/"),
+    };
+    const backupExecutionService = createBackupExecutionService(async () => {
+      callOrder.push("backup-start");
+      await Promise.resolve();
+      callOrder.push("backup-end");
+    });
+    const lotteryServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createLotteryLevelService(recordLotteryResults),
+      undefined,
+      backupDestinationService,
+      backupExecutionService,
+    );
+    const lotteryPort = await listenOnEphemeralPort(lotteryServer);
+
+    try {
+      const response = await requestOnPort(
+        lotteryPort,
+        "POST",
+        "/api/lottery-results",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toBe('{"status":"ok"}');
+      expect(callOrder).toEqual([
+        "readiness",
+        "mutation",
+        "backup-start",
+        "backup-end",
+      ]);
+      expect(
+        backupDestinationService.getBackupDestinationDirectory,
+      ).toHaveBeenCalledTimes(1);
+      expect(recordLotteryResults).toHaveBeenCalledTimes(1);
+      expect(backupExecutionService.createBackup).toHaveBeenCalledTimes(1);
+    } finally {
+      await closeServer(lotteryServer);
+    }
+  });
+
+  it.each([
+    {
+      name: "backup services unavailable",
+      destination: undefined,
+      execution: undefined,
+      statusCode: 500,
+      body: '{"error":"backup_unavailable"}',
+    },
+    {
+      name: "destination missing",
+      destination: createBackupDestinationService(null),
+      execution: createBackupExecutionService(),
+      statusCode: 409,
+      body: '{"error":"backup_destination_required"}',
+    },
+    {
+      name: "destination getter failure",
+      destination: {
+        getBackupDestinationDirectory: vi.fn(() => {
+          throw new Error("private destination diagnostics");
+        }),
+        selectBackupDestinationDirectory: vi.fn(async () => null),
+      },
+      execution: createBackupExecutionService(),
+      statusCode: 500,
+      body: '{"error":"backup_failed"}',
+    },
+  ])("blocks lottery mutation for $name", async ({
+    destination,
+    execution,
+    statusCode,
+    body,
+  }) => {
+    const recordLotteryResults = vi.fn();
+    const lotteryServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createLotteryLevelService(recordLotteryResults),
+      undefined,
+      destination,
+      execution,
+    );
+    const lotteryPort = await listenOnEphemeralPort(lotteryServer);
+
+    try {
+      const response = await requestOnPort(
+        lotteryPort,
+        "POST",
+        "/api/lottery-results",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(statusCode);
+      expect(response.body).toBe(body);
+      expect(recordLotteryResults).not.toHaveBeenCalled();
+      if (execution !== undefined) {
+        expect(execution.createBackup).not.toHaveBeenCalled();
+      }
+    } finally {
+      await closeServer(lotteryServer);
+    }
+  });
+
+  it("does not create a backup after a lottery conflict", async () => {
+    const recordLotteryResults = vi.fn(() => {
+      throw new SupporterNotFoundError("synthetic-supporter-id");
+    });
+    const backupExecutionService = createBackupExecutionService();
+    const lotteryServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createLotteryLevelService(recordLotteryResults),
+      undefined,
+      createBackupDestinationService(),
+      backupExecutionService,
+    );
+    const lotteryPort = await listenOnEphemeralPort(lotteryServer);
+
+    try {
+      const response = await requestOnPort(
+        lotteryPort,
+        "POST",
+        "/api/lottery-results",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(409);
+      expect(response.body).toBe('{"error":"lottery_result_conflict"}');
+      expect(backupExecutionService.createBackup).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(lotteryServer);
+    }
+  });
+
+  it("reports a lottery post-backup failure without retrying the mutation", async () => {
+    const recordLotteryResults = vi.fn();
+    const createBackup = vi.fn(async () => {
+      throw new Error("private backup failure");
+    });
+    const lotteryServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createLotteryLevelService(recordLotteryResults),
+      undefined,
+      createBackupDestinationService(),
+      createBackupExecutionService(createBackup),
+    );
+    const lotteryPort = await listenOnEphemeralPort(lotteryServer);
+
+    try {
+      const response = await requestOnPort(
+        lotteryPort,
+        "POST",
+        "/api/lottery-results",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(500);
+      expect(response.body).toBe('{"error":"backup_failed_after_update"}');
+      expect(recordLotteryResults).toHaveBeenCalledTimes(1);
+      expect(createBackup).toHaveBeenCalledTimes(1);
+    } finally {
+      await closeServer(lotteryServer);
+    }
+  });
+
   it("does not expose application result data on success", async () => {
     const resultServer = createAdminServer(
       undefined,
@@ -1425,6 +2095,9 @@ describe("lottery results route", () => {
           },
         },
       ] as never),
+      undefined,
+      createBackupDestinationService(),
+      createBackupExecutionService(),
     );
     const resultPort = await listenOnEphemeralPort(resultServer);
 
@@ -1621,6 +2294,7 @@ describe("month-end routes", () => {
     } as never));
     const monthEndServer = createMonthEndAdminServer(
       createTestMonthEndService(undefined, processMonthEnd),
+      createBackupExecutionService(),
     );
     const monthEndPort = await listenOnEphemeralPort(monthEndServer);
 
@@ -1767,6 +2441,7 @@ describe("month-end routes", () => {
         createTestMonthEndService(undefined, () => {
           throw error;
         }),
+        createBackupExecutionService(),
       );
       const monthEndPort = await listenOnEphemeralPort(monthEndServer);
 
@@ -1805,6 +2480,152 @@ describe("month-end routes", () => {
       } finally {
         await closeServer(monthEndServer);
       }
+    }
+  });
+
+  it("blocks month-end processing when the pre-backup is unavailable or fails", async () => {
+    const cases = [
+      {
+        execution: undefined,
+        statusCode: 500,
+        body: '{"error":"backup_unavailable"}',
+      },
+      {
+        execution: createBackupExecutionService(async () => {
+          throw new BackupDestinationNotConfiguredError("/private/admin.sqlite");
+        }),
+        statusCode: 409,
+        body: '{"error":"backup_destination_required"}',
+      },
+      {
+        execution: createBackupExecutionService(async () => {
+          throw new Error("private pre-backup diagnostics");
+        }),
+        statusCode: 500,
+        body: '{"error":"backup_failed"}',
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const processMonthEnd = vi.fn(() => ({
+        source: sourceProjection,
+        supporters: [],
+      }));
+      const monthEndServer = createMonthEndAdminServer(
+        createTestMonthEndService(undefined, processMonthEnd),
+        testCase.execution,
+      );
+      const monthEndPort = await listenOnEphemeralPort(monthEndServer);
+
+      try {
+        const response = await requestOnPort(
+          monthEndPort,
+          "POST",
+          "/api/month-end/process",
+          validBody,
+        );
+
+        expect(response.statusCode).toBe(testCase.statusCode);
+        expect(response.body).toBe(testCase.body);
+        expect(processMonthEnd).not.toHaveBeenCalled();
+      } finally {
+        await closeServer(monthEndServer);
+      }
+    }
+  });
+
+  it("runs month-end in pre-backup, mutation, post-backup order", async () => {
+    const callOrder: string[] = [];
+    const processMonthEnd = vi.fn(() => {
+      callOrder.push("mutation");
+      return { source: sourceProjection, supporters: [] } as never;
+    });
+    const createBackup = vi.fn(async () => {
+      callOrder.push("backup");
+    });
+    const monthEndServer = createMonthEndAdminServer(
+      createTestMonthEndService(undefined, processMonthEnd),
+      createBackupExecutionService(createBackup),
+    );
+    const monthEndPort = await listenOnEphemeralPort(monthEndServer);
+
+    try {
+      const response = await requestOnPort(
+        monthEndPort,
+        "POST",
+        "/api/month-end/process",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toBe('{"status":"ok"}');
+      expect(callOrder).toEqual(["backup", "mutation", "backup"]);
+      expect(createBackup).toHaveBeenCalledTimes(2);
+      expect(processMonthEnd).toHaveBeenCalledTimes(1);
+    } finally {
+      await closeServer(monthEndServer);
+    }
+  });
+
+  it("does not create a post-backup after a month-end conflict", async () => {
+    const processMonthEnd = vi.fn(() => {
+      throw new MonthEndSourceConflictError();
+    });
+    const createBackup = vi.fn(async () => {});
+    const monthEndServer = createMonthEndAdminServer(
+      createTestMonthEndService(undefined, processMonthEnd),
+      createBackupExecutionService(createBackup),
+    );
+    const monthEndPort = await listenOnEphemeralPort(monthEndServer);
+
+    try {
+      const response = await requestOnPort(
+        monthEndPort,
+        "POST",
+        "/api/month-end/process",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(409);
+      expect(response.body).toBe('{"error":"month_end_conflict"}');
+      expect(createBackup).toHaveBeenCalledTimes(1);
+    } finally {
+      await closeServer(monthEndServer);
+    }
+  });
+
+  it("reports month-end post-backup failure without rollback or retry", async () => {
+    const processMonthEnd = vi.fn(() => ({
+      source: sourceProjection,
+      supporters: [],
+    }));
+    let backupCalls = 0;
+    const createBackup = vi.fn(async () => {
+      backupCalls += 1;
+      if (backupCalls === 2) {
+        throw new Error("private post-backup diagnostics");
+      }
+    });
+    const monthEndServer = createMonthEndAdminServer(
+      createTestMonthEndService(undefined, processMonthEnd),
+      createBackupExecutionService(createBackup),
+    );
+    const monthEndPort = await listenOnEphemeralPort(monthEndServer);
+
+    try {
+      const response = await requestOnPort(
+        monthEndPort,
+        "POST",
+        "/api/month-end/process",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(500);
+      expect(response.body).toBe('{"error":"backup_failed_after_update"}');
+      expect(processMonthEnd).toHaveBeenCalledTimes(1);
+      expect(createBackup).toHaveBeenCalledTimes(2);
+    } finally {
+      await closeServer(monthEndServer);
     }
   });
 });
@@ -2243,8 +3064,13 @@ describe("PDF import route", () => {
       undefined,
       undefined,
       createPdfInspectionService(inspect),
-      undefined,
+      createPdfComparisonService(() => samplePdfComparison),
       createPdfImportService(apply),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createBackupExecutionService(),
     );
     const importPort = await listenOnEphemeralPort(importServer);
     const body = Buffer.alloc(25 * 1024 * 1024 + 1, 1);
@@ -2339,8 +3165,13 @@ describe("PDF import route", () => {
       undefined,
       undefined,
       createPdfInspectionService(inspect),
-      undefined,
+      createPdfComparisonService(() => samplePdfComparison),
       createPdfImportService(apply),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createBackupExecutionService(),
     );
     const importPort = await listenOnEphemeralPort(importServer);
 
@@ -2396,7 +3227,7 @@ describe("PDF import route", () => {
       undefined,
       undefined,
       createPdfInspectionService(inspect),
-      undefined,
+      createPdfComparisonService(() => samplePdfComparison),
       createPdfImportService(apply),
     );
     const importPort = await listenOnEphemeralPort(importServer);
@@ -2436,7 +3267,7 @@ describe("PDF import route", () => {
       undefined,
       undefined,
       createPdfInspectionService(inspect),
-      undefined,
+      createPdfComparisonService(() => samplePdfComparison),
       createPdfImportService(apply),
     );
     const importPort = await listenOnEphemeralPort(importServer);
@@ -2485,7 +3316,7 @@ describe("PDF import route", () => {
       undefined,
       undefined,
       createPdfInspectionService(inspect),
-      undefined,
+      createPdfComparisonService(() => samplePdfComparison),
       createPdfImportService(apply),
     );
     const importPort = await listenOnEphemeralPort(importServer);
@@ -2982,7 +3813,7 @@ describe("admin server configuration", () => {
       expect(createBackupExecutionServiceFactory).toHaveBeenCalledWith(store);
       expect(backupResponse.statusCode).toBe(200);
       expect(backupResponse.body).toBe('{"status":"ok"}');
-      expect(backupExecutionService.createBackup).toHaveBeenCalledTimes(1);
+      expect(backupExecutionService.createBackup).toHaveBeenCalledTimes(3);
       expect(getMonthEndSource).toHaveBeenCalledTimes(1);
       expect(processMonthEnd).toHaveBeenCalledTimes(1);
       expect(processMonthEnd).toHaveBeenCalledWith("2026-09", 7);
@@ -3842,6 +4673,33 @@ describe("admin server configuration", () => {
     expect(resultStatus.textContent).toBe("抽選結果を反映しました。");
     expect(occurredAtInput.value).toBe("");
 
+    occurredAtInput.value = "2026-09-08T21:34";
+    participantList.children[0]!.children[4]!.children[1]!.value = "win";
+    resultButton.click();
+    lotteryResolvers[5]?.(
+      response(409, { error: "backup_destination_required" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(resultStatus.textContent).toBe(
+      "バックアップ先を選択してから、抽選結果をもう一度反映してください。",
+    );
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(4);
+    expect(occurredAtInput.value).toBe("2026-09-08T21:34");
+    expect(participantList.children[0]!.children[4]!.children[1]!.value).toBe(
+      "win",
+    );
+
+    resultButton.click();
+    lotteryResolvers[6]?.(
+      response(500, { error: "backup_failed_after_update" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(5);
+    expect(resultStatus.textContent).toBe(
+      "抽選結果は反映済みですが、バックアップを作成できませんでした。抽選結果を再登録しないでください。「今すぐバックアップを作成」を実行してください。",
+    );
+    expect(occurredAtInput.value).toBe("");
+
     const participantStatus = elements.get(
       "lottery-participant-status",
     ) as FakeElement;
@@ -4220,20 +5078,34 @@ describe("admin server configuration", () => {
         ({ url }) => url === "/api/supporters/migrate-existing",
       ),
     ).toHaveLength(3);
-    migrationResolvers[2]?.(response(200, { status: "ok" }));
+    migrationResolvers[2]?.(
+      response(409, { error: "backup_destination_required" }),
+    );
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(migrationStatus?.textContent).toBe(
-      "旧管理レベルで登録しました。反映時に現在のローカル状態で再判定されます。",
+      "バックアップ先を選択してから、旧管理レベルでの登録をもう一度実行してください。",
     );
-    expect(newRelationship.children[2]?.textContent).toBe("分類: 新規");
-    expect(migrationButton?.disabled).toBe(true);
+    expect(migrationLevelInput?.value).toBe("4");
+    expect(migrationButton?.disabled).toBe(false);
     expect(importButton.disabled).toBe(false);
+
     migrationButton?.click();
+    expect(confirmMock).toHaveBeenCalledTimes(4);
     expect(
       fetchCalls.filter(
         ({ url }) => url === "/api/supporters/migrate-existing",
       ),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
+    migrationResolvers[3]?.(
+      response(500, { error: "backup_failed_after_update" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(migrationStatus?.textContent).toBe(
+      "支援者の登録は完了しましたが、バックアップを作成できませんでした。同じ支援者を再登録しないでください。「今すぐバックアップを作成」を実行してください。",
+    );
+    expect(migrationButton?.disabled).toBe(true);
+    expect(importButton.disabled).toBe(false);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(2);
 
     fileInput.files = [otherFile];
     fileInput.dispatch("change");
@@ -4308,6 +5180,34 @@ describe("admin server configuration", () => {
 
     importButton.click();
     importResolvers[3]?.(
+      response(409, { error: "backup_destination_required" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(inspectionStatus.textContent).toBe(
+      "バックアップ先を選択してから、このPDFをもう一度支援者状態に反映してください。",
+    );
+    expect(inspectionResult.children.length).toBeGreaterThan(0);
+    expect(importButton.disabled).toBe(false);
+
+    importButton.click();
+    importResolvers[4]?.(
+      response(500, { error: "backup_failed_after_update" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(inspectionStatus.textContent).toBe(
+      "支援者状態は反映済みですが、バックアップを作成できませんでした。同じPDFを再度反映しないでください。「今すぐバックアップを作成」を実行してください。",
+    );
+    expect(inspectionResult.children).toHaveLength(0);
+    expect(importButton.disabled).toBe(true);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(3);
+
+    inspectionButton.click();
+    inspectionResolvers[2]?.(response(200, inspectionResponseBody));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(importButton.disabled).toBe(false);
+
+    importButton.click();
+    importResolvers[5]?.(
       response(200, {
         importedAt: "2026-09-08T09:00:00.000Z",
         presentSupporterCount: 4,
@@ -4320,7 +5220,7 @@ describe("admin server configuration", () => {
     expect(inspectionResult.children).toHaveLength(0);
     expect(importButton.disabled).toBe(true);
     expect(fileInput.files[0]).toBe(previewedFile);
-    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(3);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(4);
   });
 
   it("opens the original configured path and closes the production store once", async () => {
