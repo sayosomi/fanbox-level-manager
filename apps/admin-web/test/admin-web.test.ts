@@ -4074,6 +4074,16 @@ describe("admin server configuration", () => {
     expect(ADMIN_PAGE).toContain("抽選結果を反映");
     expect(ADMIN_PAGE).toContain("支援者一覧");
     expect(ADMIN_PAGE).toContain("支援者一覧を読み込んでいます。");
+    expect(ADMIN_PAGE).toContain('<h2 id="month-end-heading">月末処理</h2>');
+    expect(ADMIN_PAGE).toContain("FANBOX取込状態を再読み込み");
+    expect(ADMIN_PAGE).toContain("処理対象月");
+    expect(ADMIN_PAGE).toContain(
+      '<input id="month-end-month" type="month">',
+    );
+    expect(ADMIN_PAGE).toContain("月末処理を実行");
+    expect(ADMIN_PAGE).toContain("month-end-source-status");
+    expect(ADMIN_PAGE).toContain("month-end-source-details");
+    expect(ADMIN_PAGE).toContain("month-end-process-status");
     expect(ADMIN_PAGE).toContain("FANBOX PDF確認");
     expect(ADMIN_PAGE).toContain('type="file" accept="application/pdf"');
     expect(ADMIN_PAGE).toContain("PDFを確認");
@@ -4319,6 +4329,329 @@ describe("admin server configuration", () => {
     }
     expect(ADMIN_SCRIPT).not.toContain("textContent = supporter.id");
     expect(ADMIN_PAGE).not.toContain("/tmp/fanbox-level-manager-admin.sqlite");
+  });
+
+  it("implements the settled month-end browser contract", async () => {
+    type FakeListener = () => void;
+    type FakeResponse = Readonly<{
+      ok: boolean;
+      status: number;
+      json: () => Promise<unknown>;
+    }>;
+    type FetchCall = Readonly<{
+      url: string;
+      body: unknown;
+      options: Readonly<Record<string, unknown>>;
+    }>;
+
+    class FakeElement {
+      readonly children: FakeElement[] = [];
+      readonly listeners = new Map<string, FakeListener>();
+      readonly attributes = new Map<string, string>();
+      readonly dataset: Record<string, string> = {};
+      disabled = false;
+      files: readonly unknown[] = [];
+      tagName = "";
+      textContent = "";
+      type = "";
+      value = "";
+
+      addEventListener(type: string, listener: FakeListener): void {
+        this.listeners.set(type, listener);
+      }
+
+      click(): void {
+        if (!this.disabled) {
+          this.listeners.get("click")?.();
+        }
+      }
+
+      dispatch(type: string): void {
+        this.listeners.get(type)?.();
+      }
+
+      replaceChildren(...children: FakeElement[]): void {
+        this.children.splice(0, this.children.length, ...children);
+      }
+
+      setAttribute(name: string, value: string): void {
+        this.attributes.set(name, value);
+      }
+    }
+
+    class FakeInputElement extends FakeElement {}
+    class FakeButtonElement extends FakeElement {}
+
+    const elements = new Map<string, FakeElement>([
+      ["month-end-source-status", new FakeElement()],
+      ["month-end-source-details", new FakeElement()],
+      ["month-end-source-refresh-button", new FakeButtonElement()],
+      ["month-end-month", new FakeInputElement()],
+      ["month-end-process-button", new FakeButtonElement()],
+      ["month-end-process-status", new FakeElement()],
+      ["list-status", new FakeElement()],
+      ["list", new FakeElement()],
+      ["backup-destination-current", new FakeElement()],
+      ["backup-destination-button", new FakeButtonElement()],
+      ["backup-destination-status", new FakeElement()],
+      ["backup-create-button", new FakeButtonElement()],
+      ["backup-create-status", new FakeElement()],
+    ]);
+    const monthInput = elements.get("month-end-month") as FakeInputElement;
+    monthInput.type = "month";
+    const sourceStatus = elements.get("month-end-source-status") as FakeElement;
+    const sourceDetails = elements.get("month-end-source-details") as FakeElement;
+    const sourceRefreshButton = elements.get(
+      "month-end-source-refresh-button",
+    ) as FakeButtonElement;
+    const processButton = elements.get(
+      "month-end-process-button",
+    ) as FakeButtonElement;
+    const processStatus = elements.get("month-end-process-status") as FakeElement;
+    const documentElement = { dataset: {} as Record<string, string> };
+    const fakeDocument = {
+      documentElement,
+      getElementById: (id: string): FakeElement | null =>
+        elements.get(id) ?? null,
+      createElement: (tagName: string): FakeElement => {
+        const element = new FakeElement();
+        element.tagName = tagName;
+        return element;
+      },
+    };
+    const source = {
+      importSequence: 7,
+      importedAt: "2026-09-08T09:00:00.000Z",
+      presentSupporterCount: 3,
+      localSupporterCount: 4,
+      supportingSupporterCount: 2,
+    };
+    const refreshedSource = {
+      ...source,
+      importSequence: 8,
+      importedAt: "2026-09-09T09:00:00.000Z",
+      presentSupporterCount: 5,
+      localSupporterCount: 6,
+      supportingSupporterCount: 4,
+    };
+    const fetchCalls: FetchCall[] = [];
+    const processResolvers: Array<(response: FakeResponse) => void> = [];
+    const confirmMock = vi.fn<(message: string) => boolean>(() => true);
+    const response = (status: number, body: unknown): FakeResponse => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    });
+    const sourceResults: Array<FakeResponse | Error> = [
+      response(200, { source }),
+    ];
+    const fetchMock = vi.fn(
+      (
+        url: string,
+        options: Readonly<Record<string, unknown>> = {},
+      ): Promise<FakeResponse> => {
+        fetchCalls.push({ url, body: options.body, options });
+        if (url === "/api/month-end/source") {
+          const next = sourceResults.shift() ?? response(200, { source });
+          return next instanceof Error ? Promise.reject(next) : Promise.resolve(next);
+        }
+        if (url === "/api/supporters") {
+          return Promise.resolve(response(200, { supporters: [] }));
+        }
+        if (url === "/api/backup-destination") {
+          return Promise.resolve(response(200, { directory: "/synthetic/backup/" }));
+        }
+        if (url === "/api/month-end/process") {
+          return new Promise((resolve) => processResolvers.push(resolve));
+        }
+        return Promise.reject(new Error("unexpected synthetic request"));
+      },
+    );
+
+    runInNewContext(ADMIN_SCRIPT, {
+      Array,
+      Date,
+      document: fakeDocument,
+      Error,
+      fetch: fetchMock,
+      HTMLButtonElement: FakeButtonElement,
+      HTMLInputElement: FakeInputElement,
+      Number,
+      Object,
+      Set,
+      TypeError,
+      URL,
+      window: { confirm: confirmMock },
+    });
+
+    expect(monthInput.value).toBe("");
+    expect(monthInput.disabled).toBe(true);
+    expect(processButton.disabled).toBe(true);
+    expect(sourceStatus.textContent).toBe(
+      "月末処理に使うFANBOX取込状態を読み込んでいます。",
+    );
+    const startupSourceCall = fetchCalls.find(
+      ({ url }) => url === "/api/month-end/source",
+    );
+    expect(startupSourceCall?.options).toEqual({
+      method: "GET",
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(sourceStatus.textContent).toBe("");
+    expect(sourceDetails.children.map((child) => child.textContent)).toEqual([
+      "FANBOX取込日時: 2026-09-08T09:00:00.000Z",
+      "PDF上の支援者数: 3人",
+      "ローカル支援者数: 4人",
+      "支援中の支援者数: 2人",
+    ]);
+    expect(sourceDetails.children.map((child) => child.textContent).join(" ")).not.toContain(
+      "7",
+    );
+    expect(sourceRefreshButton.disabled).toBe(false);
+    expect(processButton.disabled).toBe(true);
+
+    monthInput.value = " 2026-09 ";
+    monthInput.dispatch("input");
+    expect(processButton.disabled).toBe(true);
+    monthInput.value = "2026-09";
+    monthInput.dispatch("input");
+    expect(processButton.disabled).toBe(false);
+
+    confirmMock.mockReturnValueOnce(false);
+    processButton.click();
+    expect(fetchCalls.filter(({ url }) => url === "/api/month-end/process")).toHaveLength(0);
+    expect(confirmMock.mock.calls[0]?.[0]).toContain("2026-09");
+    expect(confirmMock.mock.calls[0]?.[0]).toContain("2026-09-08T09:00:00.000Z");
+    expect(confirmMock.mock.calls[0]?.[0]).toContain("3人");
+    expect(confirmMock.mock.calls[0]?.[0]).toContain("4人");
+    expect(confirmMock.mock.calls[0]?.[0]).toContain("2人");
+    expect(confirmMock.mock.calls[0]?.[0]).not.toContain("7");
+    expect(monthInput.value).toBe("2026-09");
+
+    processButton.click();
+    expect(processResolvers).toHaveLength(1);
+    const processCall = fetchCalls.find(
+      ({ url }) => url === "/api/month-end/process",
+    );
+    expect(processCall?.options).toMatchObject({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    expect(processCall?.body).toBe(
+      JSON.stringify({ monthKey: "2026-09", expectedImportSequence: 7 }),
+    );
+    expect(processButton.disabled).toBe(true);
+    expect(monthInput.disabled).toBe(true);
+    expect(sourceRefreshButton.disabled).toBe(true);
+    processButton.click();
+    sourceRefreshButton.click();
+    expect(processResolvers).toHaveLength(1);
+    processResolvers[0]?.(response(200, { status: "ok" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(monthInput.value).toBe("");
+    expect(processStatus.textContent).toBe("月末処理を完了しました。");
+
+    const submit = async (status: number, body: unknown): Promise<void> => {
+      monthInput.value = "2026-10";
+      monthInput.dispatch("input");
+      processButton.click();
+      const resolver = processResolvers.at(-1);
+      expect(resolver).toBeDefined();
+      resolver?.(response(status, body));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    };
+
+    monthInput.value = "2026-13";
+    monthInput.dispatch("input");
+    processButton.click();
+    expect(processStatus.textContent).toBe("処理対象月を確認してください。");
+    expect(fetchCalls.filter(({ url }) => url === "/api/month-end/process")).toHaveLength(1);
+
+    monthInput.value = "2026-10";
+    monthInput.dispatch("input");
+    sourceResults.push(response(200, { source: refreshedSource }));
+    await submit(409, { error: "month_end_conflict" });
+    expect(monthInput.value).toBe("2026-10");
+    expect(processStatus.textContent).toBe(
+      "状態が変わっています。最新のFANBOX取込状態と支援者一覧を確認し、対象月を確認してから再実行してください。",
+    );
+    expect(sourceDetails.children[0]?.textContent).toBe(
+      "FANBOX取込日時: 2026-09-09T09:00:00.000Z",
+    );
+
+    await submit(409, { error: "backup_destination_required" });
+    expect(monthInput.value).toBe("2026-10");
+    expect(processStatus.textContent).toBe(
+      "バックアップ先を選択してから、月末処理をもう一度実行してください。",
+    );
+    expect(
+      (elements.get("backup-destination-current") as FakeElement).textContent,
+    ).toBe("バックアップ先が未設定です。");
+    expect(
+      fetchCalls.filter(({ url }) => url === "/api/supporters"),
+    ).toHaveLength(3);
+
+    await submit(500, { error: "backup_failed" });
+    expect(monthInput.value).toBe("2026-10");
+    expect(processStatus.textContent).toBe(
+      "処理前バックアップを作成できなかったため、月末処理は実行されていません。バックアップ設定を確認してから再実行してください。",
+    );
+
+    await submit(500, { error: "backup_failed_after_update" });
+    expect(monthInput.value).toBe("");
+    expect(processStatus.textContent).toBe(
+      "月末処理は完了していますが、処理後バックアップを作成できませんでした。同じ月末処理を再実行しないでください。「今すぐバックアップを作成」を実行してください。",
+    );
+
+    monthInput.value = "2026-11";
+    monthInput.dispatch("input");
+    processButton.click();
+    processResolvers.at(-1)?.(response(409, { status: "ok" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(monthInput.value).toBe("2026-11");
+    expect(processStatus.textContent).toBe(
+      "月末処理を実行できませんでした。入力内容と現在の状態を確認して再試行してください。",
+    );
+
+    sourceResults.push(response(500, { error: "private diagnostic" }));
+    sourceRefreshButton.click();
+    expect(sourceRefreshButton.disabled).toBe(true);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sourceStatus.textContent).toBe(
+      "月末処理に使うFANBOX取込状態を読み込めませんでした。",
+    );
+    expect(sourceDetails.children).toHaveLength(0);
+    expect(processButton.disabled).toBe(true);
+
+    sourceResults.push(response(200, { source: null }));
+    sourceRefreshButton.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sourceStatus.textContent).toBe(
+      "月末処理に使えるFANBOX取込状態がありません。FANBOX PDFを支援者状態に反映してください。",
+    );
+    expect(sourceDetails.children).toHaveLength(0);
+    expect(processButton.disabled).toBe(true);
+
+    sourceResults.push(
+      response(200, {
+        source: { ...refreshedSource, unexpected: "synthetic" },
+      }),
+    );
+    sourceRefreshButton.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(sourceStatus.textContent).toBe(
+      "月末処理に使うFANBOX取込状態を読み込めませんでした。",
+    );
+    expect(sourceDetails.children).toHaveLength(0);
   });
 
   it("renders and submits settled lottery results with Japan-time validation", async () => {
@@ -4809,6 +5142,12 @@ describe("admin server configuration", () => {
       ["pdf-inspection-result", new FakeElement()],
       ["list-status", new FakeElement()],
       ["list", new FakeElement()],
+      ["month-end-source-status", new FakeElement()],
+      ["month-end-source-details", new FakeElement()],
+      ["month-end-source-refresh-button", new FakeButtonElement()],
+      ["month-end-month", new FakeInputElement()],
+      ["month-end-process-button", new FakeButtonElement()],
+      ["month-end-process-status", new FakeElement()],
     ]);
     const documentElement = { dataset: {} as Record<string, string> };
     const fakeDocument = {
@@ -4876,6 +5215,13 @@ describe("admin server configuration", () => {
       },
     };
     const fetchCalls: FetchCall[] = [];
+    const monthEndSource = {
+      importSequence: 1,
+      importedAt: "2026-09-08T09:00:00.000Z",
+      presentSupporterCount: 2,
+      localSupporterCount: 2,
+      supportingSupporterCount: 1,
+    };
     const inspectionResolvers: Array<(response: FakeResponse) => void> = [];
     const importResolvers: Array<(response: FakeResponse) => void> = [];
     const migrationResolvers: Array<(response: FakeResponse) => void> = [];
@@ -4893,6 +5239,9 @@ describe("admin server configuration", () => {
         fetchCalls.push({ url, body: options.body, options });
         if (url === "/api/supporters") {
           return Promise.resolve(response(200, { supporters: [] }));
+        }
+        if (url === "/api/month-end/source") {
+          return Promise.resolve(response(200, { source: monthEndSource }));
         }
         if (url === "/api/fanbox-pdf/inspect") {
           return new Promise((resolve) => inspectionResolvers.push(resolve));
@@ -4925,6 +5274,9 @@ describe("admin server configuration", () => {
       },
     });
     await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(
+      fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
+    ).toHaveLength(1);
 
     const fileInput = elements.get("pdf-inspection-file") as FakeInputElement;
     const inspectionButton = elements.get(
@@ -5106,6 +5458,28 @@ describe("admin server configuration", () => {
     expect(migrationButton?.disabled).toBe(true);
     expect(importButton.disabled).toBe(false);
     expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(2);
+    expect(
+      fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
+    ).toHaveLength(2);
+
+    inspectionButton.click();
+    inspectionResolvers[1]?.(response(200, inspectionResponseBody));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const retryRelationship = inspectionResult.children[0];
+    const retryMigrationRow = retryRelationship?.children.at(-1);
+    const retryMigrationLevel = retryMigrationRow?.children[1];
+    const retryMigrationButton = retryMigrationRow?.children[2];
+    if (retryMigrationLevel !== undefined && retryMigrationButton !== undefined) {
+      retryMigrationLevel.value = "5";
+      retryMigrationButton.click();
+    }
+    expect(confirmMock).toHaveBeenCalledTimes(5);
+    migrationResolvers[4]?.(response(200, { status: "ok" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(retryMigrationButton?.disabled).toBe(true);
+    expect(
+      fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
+    ).toHaveLength(3);
 
     fileInput.files = [otherFile];
     fileInput.dispatch("change");
@@ -5119,7 +5493,7 @@ describe("admin server configuration", () => {
     fileInput.files = [previewedFile];
     fileInput.dispatch("change");
     inspectionButton.click();
-    inspectionResolvers[1]?.(response(200, inspectionResponseBody));
+    inspectionResolvers[2]?.(response(200, inspectionResponseBody));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(importButton.disabled).toBe(false);
 
@@ -5188,6 +5562,9 @@ describe("admin server configuration", () => {
     );
     expect(inspectionResult.children.length).toBeGreaterThan(0);
     expect(importButton.disabled).toBe(false);
+    expect(
+      fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
+    ).toHaveLength(3);
 
     importButton.click();
     importResolvers[4]?.(
@@ -5199,10 +5576,13 @@ describe("admin server configuration", () => {
     );
     expect(inspectionResult.children).toHaveLength(0);
     expect(importButton.disabled).toBe(true);
-    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(3);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(4);
+    expect(
+      fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
+    ).toHaveLength(4);
 
     inspectionButton.click();
-    inspectionResolvers[2]?.(response(200, inspectionResponseBody));
+    inspectionResolvers[3]?.(response(200, inspectionResponseBody));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(importButton.disabled).toBe(false);
 
@@ -5220,7 +5600,10 @@ describe("admin server configuration", () => {
     expect(inspectionResult.children).toHaveLength(0);
     expect(importButton.disabled).toBe(true);
     expect(fileInput.files[0]).toBe(previewedFile);
-    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(4);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(5);
+    expect(
+      fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
+    ).toHaveLength(5);
   });
 
   it("opens the original configured path and closes the production store once", async () => {

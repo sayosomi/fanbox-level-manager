@@ -39,6 +39,18 @@ export const ADMIN_PAGE = `<!doctype html>
         <p id="list-status" role="status">支援者一覧を読み込んでいます。</p>
         <ul id="list" aria-live="polite"></ul>
       </section>
+      <section aria-labelledby="month-end-heading">
+        <h2 id="month-end-heading">月末処理</h2>
+        <p id="month-end-source-status" role="status" aria-live="polite"></p>
+        <div id="month-end-source-details" aria-live="polite"></div>
+        <button id="month-end-source-refresh-button" type="button">FANBOX取込状態を再読み込み</button>
+        <p>
+          <label for="month-end-month">処理対象月</label>
+          <input id="month-end-month" type="month">
+        </p>
+        <button id="month-end-process-button" type="button" disabled>月末処理を実行</button>
+        <p id="month-end-process-status" role="status" aria-live="polite"></p>
+      </section>
       <section aria-labelledby="lottery-result-heading">
         <h2 id="lottery-result-heading">抽選結果登録</h2>
         <p>
@@ -375,6 +387,311 @@ function isCanonicalTimestamp(value) {
     return new Date(value).toISOString() === value;
   } catch {
     return false;
+  }
+}
+
+const MONTH_END_SOURCE_KEYS = [
+  "importSequence",
+  "importedAt",
+  "presentSupporterCount",
+  "localSupporterCount",
+  "supportingSupporterCount",
+];
+const monthEndState = {
+  active: false,
+  sourceLoaded: false,
+  source: null,
+  queuedSourceRefresh: false,
+};
+let monthEndUi = null;
+
+function validateMonthEndSourceResponse(value) {
+  if (!isRecord(value) || !hasExactKeys(value, ["source"])) {
+    throw new TypeError("invalid month-end source response");
+  }
+  if (value.source === null) {
+    return null;
+  }
+  if (
+    !isRecord(value.source) ||
+    !hasExactKeys(value.source, MONTH_END_SOURCE_KEYS) ||
+    !Number.isSafeInteger(value.source.importSequence) ||
+    value.source.importSequence <= 0 ||
+    !isCanonicalTimestamp(value.source.importedAt) ||
+    !isNonNegativeInteger(value.source.presentSupporterCount) ||
+    !isNonNegativeInteger(value.source.localSupporterCount) ||
+    !isNonNegativeInteger(value.source.supportingSupporterCount)
+  ) {
+    throw new TypeError("invalid month-end source");
+  }
+
+  return value.source;
+}
+
+function updateMonthEndActionButtons() {
+  if (monthEndUi === null) {
+    return;
+  }
+
+  const validMonth =
+    typeof monthEndUi.monthInput.value === "string" &&
+    MONTH_KEY_PATTERN.test(monthEndUi.monthInput.value);
+  monthEndUi.sourceRefreshButton.disabled = monthEndState.active;
+  monthEndUi.monthInput.disabled = monthEndState.active;
+  monthEndUi.processButton.disabled =
+    monthEndState.active ||
+    !monthEndState.sourceLoaded ||
+    monthEndState.source === null ||
+    !validMonth;
+}
+
+function renderMonthEndSource() {
+  if (monthEndUi === null) {
+    return;
+  }
+
+  monthEndUi.sourceDetails.replaceChildren();
+  if (!monthEndState.sourceLoaded) {
+    return;
+  }
+  if (monthEndState.source === null) {
+    monthEndUi.sourceStatus.textContent =
+      "月末処理に使えるFANBOX取込状態がありません。FANBOX PDFを支援者状態に反映してください。";
+    return;
+  }
+
+  monthEndUi.sourceStatus.textContent = "";
+  const importedAt = document.createElement("p");
+  const presentSupporterCount = document.createElement("p");
+  const localSupporterCount = document.createElement("p");
+  const supportingSupporterCount = document.createElement("p");
+  importedAt.textContent =
+    "FANBOX取込日時: " + monthEndState.source.importedAt;
+  presentSupporterCount.textContent =
+    "PDF上の支援者数: " + monthEndState.source.presentSupporterCount + "人";
+  localSupporterCount.textContent =
+    "ローカル支援者数: " + monthEndState.source.localSupporterCount + "人";
+  supportingSupporterCount.textContent =
+    "支援中の支援者数: " +
+    monthEndState.source.supportingSupporterCount +
+    "人";
+  monthEndUi.sourceDetails.replaceChildren(
+    importedAt,
+    presentSupporterCount,
+    localSupporterCount,
+    supportingSupporterCount,
+  );
+}
+
+async function loadMonthEndSource() {
+  if (monthEndUi === null) {
+    return;
+  }
+
+  monthEndState.sourceLoaded = false;
+  monthEndState.source = null;
+  monthEndUi.sourceStatus.textContent =
+    "月末処理に使うFANBOX取込状態を読み込んでいます。";
+  monthEndUi.sourceDetails.replaceChildren();
+  updateMonthEndActionButtons();
+
+  try {
+    const response = await fetch("/api/month-end/source", {
+      method: "GET",
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    if (response.status !== 200) {
+      throw new Error("month-end source request failed");
+    }
+
+    monthEndState.source = validateMonthEndSourceResponse(
+      await response.json(),
+    );
+    monthEndState.sourceLoaded = true;
+    renderMonthEndSource();
+  } catch {
+    monthEndState.sourceLoaded = false;
+    monthEndState.source = null;
+    monthEndUi.sourceDetails.replaceChildren();
+    monthEndUi.sourceStatus.textContent =
+      "月末処理に使うFANBOX取込状態を読み込めませんでした。";
+  }
+  updateMonthEndActionButtons();
+}
+
+async function refreshMonthEndSource(queueIfActive) {
+  if (monthEndUi === null) {
+    return;
+  }
+  if (monthEndState.active) {
+    if (queueIfActive) {
+      monthEndState.queuedSourceRefresh = true;
+    }
+    return;
+  }
+
+  monthEndState.active = true;
+  updateMonthEndActionButtons();
+  try {
+    await loadMonthEndSource();
+  } finally {
+    const refreshAgain = monthEndState.queuedSourceRefresh;
+    monthEndState.queuedSourceRefresh = false;
+    monthEndState.active = false;
+    updateMonthEndActionButtons();
+    if (refreshAgain) {
+      void refreshMonthEndSource(false);
+    }
+  }
+}
+
+function isExactMonthEndSuccess(value) {
+  return isRecord(value) && hasExactKeys(value, ["status"]) && value.status === "ok";
+}
+
+function isExactMonthEndConflict(value) {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["error"]) &&
+    value.error === "month_end_conflict"
+  );
+}
+
+function isExactMonthEndBackupFailed(value) {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["error"]) &&
+    value.error === "backup_failed"
+  );
+}
+
+async function processMonthEnd(listStatus, supporterList) {
+  if (monthEndUi === null || monthEndState.active) {
+    return;
+  }
+
+  const monthKey = monthEndUi.monthInput.value;
+  if (typeof monthKey !== "string" || !MONTH_KEY_PATTERN.test(monthKey)) {
+    monthEndUi.processStatus.textContent = "処理対象月を確認してください。";
+    updateMonthEndActionButtons();
+    return;
+  }
+
+  const source = monthEndState.source;
+  if (!monthEndState.sourceLoaded || source === null) {
+    updateMonthEndActionButtons();
+    return;
+  }
+
+  if (
+    !window.confirm(
+      "処理対象月 " +
+        monthKey +
+        "、FANBOX取込日時 " +
+        source.importedAt +
+        "、PDF上の支援者数 " +
+        source.presentSupporterCount +
+        "人、ローカル支援者数 " +
+        source.localSupporterCount +
+        "人、支援中の支援者数 " +
+        source.supportingSupporterCount +
+        "人を確認しました。このFANBOX取込状態を使って月末処理を実行します。続行しますか？",
+    )
+  ) {
+    return;
+  }
+
+  monthEndState.active = true;
+  updateMonthEndActionButtons();
+  monthEndUi.processStatus.textContent = "月末処理を実行しています。";
+
+  try {
+    const response = await fetch("/api/month-end/process", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        monthKey,
+        expectedImportSequence: source.importSequence,
+      }),
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    let responseBody;
+    try {
+      responseBody = await response.json();
+    } catch {
+      throw new Error("invalid month-end process response");
+    }
+
+    if (response.status === 200 && isExactMonthEndSuccess(responseBody)) {
+      monthEndUi.monthInput.value = "";
+      if (listStatus !== null && supporterList !== null) {
+        await loadSupporters(listStatus, supporterList);
+      }
+      monthEndUi.processStatus.textContent = "月末処理を完了しました。";
+      return;
+    }
+
+    if (response.status === 409 && isExactMonthEndConflict(responseBody)) {
+      await loadMonthEndSource();
+      if (listStatus !== null && supporterList !== null) {
+        await loadSupporters(listStatus, supporterList);
+      }
+      monthEndUi.processStatus.textContent =
+        "状態が変わっています。最新のFANBOX取込状態と支援者一覧を確認し、対象月を確認してから再実行してください。";
+      return;
+    }
+
+    if (
+      response.status === 409 &&
+      isExactBackupDestinationRequired(responseBody)
+    ) {
+      markBackupDestinationUnavailable();
+      monthEndUi.processStatus.textContent =
+        "バックアップ先を選択してから、月末処理をもう一度実行してください。";
+      return;
+    }
+
+    if (response.status === 500 && isExactMonthEndBackupFailed(responseBody)) {
+      monthEndUi.processStatus.textContent =
+        "処理前バックアップを作成できなかったため、月末処理は実行されていません。バックアップ設定を確認してから再実行してください。";
+      return;
+    }
+
+    if (
+      response.status === 500 &&
+      isExactBackupFailedAfterUpdate(responseBody)
+    ) {
+      monthEndUi.monthInput.value = "";
+      if (listStatus !== null && supporterList !== null) {
+        await loadSupporters(listStatus, supporterList);
+      }
+      monthEndUi.processStatus.textContent =
+        "月末処理は完了していますが、処理後バックアップを作成できませんでした。同じ月末処理を再実行しないでください。「今すぐバックアップを作成」を実行してください。";
+      return;
+    }
+
+    throw new Error("month-end process request failed");
+  } catch {
+    monthEndUi.processStatus.textContent =
+      "月末処理を実行できませんでした。入力内容と現在の状態を確認して再試行してください。";
+  } finally {
+    monthEndState.active = false;
+    updateMonthEndActionButtons();
+    if (monthEndState.queuedSourceRefresh) {
+      const refreshAgain = monthEndState.queuedSourceRefresh;
+      monthEndState.queuedSourceRefresh = false;
+      if (refreshAgain) {
+        void refreshMonthEndSource(false);
+      }
+    }
   }
 }
 
@@ -1301,6 +1618,7 @@ async function migrateExistingSupporter(
       if (listStatus !== null && supporterList !== null) {
         await loadSupporters(listStatus, supporterList);
       }
+      await refreshMonthEndSource(true);
       status.textContent =
         "支援者の登録は完了しましたが、バックアップを作成できませんでした。同じ支援者を再登録しないでください。「今すぐバックアップを作成」を実行してください。";
       return;
@@ -1316,6 +1634,7 @@ async function migrateExistingSupporter(
     if (listStatus !== null && supporterList !== null) {
       await loadSupporters(listStatus, supporterList);
     }
+    await refreshMonthEndSource(true);
   } catch {
     status.textContent = "旧管理レベルで登録できませんでした。";
   } finally {
@@ -1520,6 +1839,7 @@ async function importSelectedPdf(
         if (listStatus !== null && supporterList !== null) {
           await loadSupporters(listStatus, supporterList);
         }
+        await refreshMonthEndSource(true);
         status.textContent =
           "支援者状態は反映済みですが、バックアップを作成できませんでした。同じPDFを再度反映しないでください。「今すぐバックアップを作成」を実行してください。";
         return;
@@ -1545,6 +1865,7 @@ async function importSelectedPdf(
     if (listStatus !== null && supporterList !== null) {
       await loadSupporters(listStatus, supporterList);
     }
+    await refreshMonthEndSource(true);
   } catch {
     status.textContent = "支援者状態を反映できませんでした。";
   } finally {
@@ -1790,6 +2111,14 @@ const backupDestinationStatus = document.getElementById(
 );
 const backupCreateButton = document.getElementById("backup-create-button");
 const backupCreateStatus = document.getElementById("backup-create-status");
+const monthEndSourceStatus = document.getElementById("month-end-source-status");
+const monthEndSourceDetails = document.getElementById("month-end-source-details");
+const monthEndSourceRefreshButton = document.getElementById(
+  "month-end-source-refresh-button",
+);
+const monthEndMonthInput = document.getElementById("month-end-month");
+const monthEndProcessButton = document.getElementById("month-end-process-button");
+const monthEndProcessStatus = document.getElementById("month-end-process-status");
 if (
   backupDestinationCurrent !== null &&
   backupDestinationButton instanceof HTMLButtonElement &&
@@ -1834,6 +2163,44 @@ if (
     void submitLotteryResults(listStatus, supporterList);
   });
   updateLotteryActionButtons();
+}
+if (
+  monthEndSourceStatus !== null &&
+  monthEndSourceDetails !== null &&
+  monthEndSourceRefreshButton instanceof HTMLButtonElement &&
+  monthEndMonthInput instanceof HTMLInputElement &&
+  monthEndProcessButton instanceof HTMLButtonElement &&
+  monthEndProcessStatus !== null
+) {
+  monthEndUi = {
+    sourceStatus: monthEndSourceStatus,
+    sourceDetails: monthEndSourceDetails,
+    sourceRefreshButton: monthEndSourceRefreshButton,
+    monthInput: monthEndMonthInput,
+    processButton: monthEndProcessButton,
+    processStatus: monthEndProcessStatus,
+  };
+  monthEndSourceRefreshButton.addEventListener("click", () => {
+    void refreshMonthEndSource(false);
+  });
+  monthEndMonthInput.addEventListener("input", () => {
+    if (
+      typeof monthEndMonthInput.value !== "string" ||
+      !MONTH_KEY_PATTERN.test(monthEndMonthInput.value)
+    ) {
+      monthEndProcessStatus.textContent = "処理対象月を確認してください。";
+    } else if (
+      monthEndProcessStatus.textContent === "処理対象月を確認してください。"
+    ) {
+      monthEndProcessStatus.textContent = "";
+    }
+    updateMonthEndActionButtons();
+  });
+  monthEndProcessButton.addEventListener("click", () => {
+    void processMonthEnd(listStatus, supporterList);
+  });
+  updateMonthEndActionButtons();
+  void refreshMonthEndSource(false);
 }
 if (
   pdfInspectionFile instanceof HTMLInputElement &&
