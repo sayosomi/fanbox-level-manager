@@ -244,7 +244,21 @@ post-update backup failure.
 The remaining encryption implementation details are deferred to a later
 implementation contract.
 
-Automatic synchronization after FANBOX PDF import remains separate later work.
+Every successful valid FANBOX PDF import requires portal integration to be
+available after PDF inspection and supporter comparison, before backup
+readiness checks or local mutation. After the local import commits, it
+automatically synchronizes exactly the immutable
+`FanboxSupporterImportResult.affectedSupporterIds` returned by the import
+service, in returned order. An import with no affected supporter IDs performs
+no synchronization calls.
+
+When at least one new supporter is created, automatic synchronization starts
+only after the existing required encrypted post-update backup succeeds.
+Imports that only update existing supporters retain the existing no-backup rule
+and synchronize after commit. Synchronization failure after commit does not
+roll back or repeat the import or any completed backup. The manual per-supporter
+`Cloudflareへ同期` action is the explicit recovery path. FANBOX PDF import
+automatic synchronization is no longer deferred.
 Month-end processing automatic synchronization is defined above and is no longer
 deferred.
 

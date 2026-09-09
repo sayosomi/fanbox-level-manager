@@ -739,6 +739,7 @@ async function sendPdfImport(
   importService: FanboxSupporterImportService | undefined,
   backupDestinationService: BackupDestinationService | undefined,
   backupExecutionService: BackupExecutionService | undefined,
+  supporterPortalSyncService: SupporterPortalSyncService | undefined,
 ): Promise<void> {
   if (!hasPdfContentType(request)) {
     request.resume();
@@ -795,6 +796,11 @@ async function sendPdfImport(
     return;
   }
 
+  if (supporterPortalSyncService === undefined) {
+    sendPortalJson(response, 503, PORTAL_NOT_CONFIGURED_BODY);
+    return;
+  }
+
   if (
     preComparison.presentSupporters.some(({ status }) => status === "new") &&
     !ensurePostMutationBackupReady(
@@ -806,23 +812,15 @@ async function sendPdfImport(
     return;
   }
 
+  let result: ReturnType<FanboxSupporterImportService["applyInspection"]>;
   try {
-    const result = importService.applyInspection(inspection);
+    result = importService.applyInspection(inspection);
     if (
       result.comparison.presentSupporters.some(({ status }) => status === "new") &&
       !(await createPostMutationBackup(response, backupExecutionService))
     ) {
       return;
     }
-
-    sendPortalJson(
-      response,
-      200,
-      JSON.stringify({
-        importedAt: result.importRecord.importedAt,
-        presentSupporterCount: result.importRecord.presentSupporterCount,
-      }),
-    );
   } catch (error: unknown) {
     if (
       error instanceof FanboxSupporterImportBlockedError &&
@@ -845,7 +843,31 @@ async function sendPdfImport(
     }
 
     sendPortalJson(response, 500, FANBOX_IMPORT_FAILED_BODY);
+    return;
   }
+
+  let portalSyncFailed = false;
+  for (const supporterId of result.affectedSupporterIds) {
+    try {
+      await supporterPortalSyncService.syncSupporter(supporterId);
+    } catch {
+      portalSyncFailed = true;
+    }
+  }
+
+  if (portalSyncFailed) {
+    sendPortalJson(response, 502, PORTAL_SYNC_FAILED_AFTER_UPDATE_BODY);
+    return;
+  }
+
+  sendPortalJson(
+    response,
+    200,
+    JSON.stringify({
+      importedAt: result.importRecord.importedAt,
+      presentSupporterCount: result.importRecord.presentSupporterCount,
+    }),
+  );
 }
 
 type ExistingSupporterMigrationRequest = Readonly<{
@@ -1560,6 +1582,7 @@ export function createAdminServer(
         fanboxSupporterImportService,
         backupDestinationService,
         backupExecutionService,
+        supporterPortalSyncService,
       );
       return;
     }

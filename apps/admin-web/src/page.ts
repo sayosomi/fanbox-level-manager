@@ -1906,6 +1906,15 @@ async function importSelectedPdf(
       }
       throw new Error("invalid PDF import conflict");
     }
+    if (response.status === 503) {
+      const responseBody = await response.json();
+      if (isExactPortalNotConfigured(responseBody)) {
+        status.textContent =
+          "ポータル連携を設定してから、このPDFをもう一度支援者状態に反映してください。PDFはまだ支援者状態に反映されていません。";
+        return;
+      }
+      throw new Error("invalid PDF import service-unavailable response");
+    }
     if (response.status === 500) {
       const responseBody = await response.json();
       if (isExactBackupFailedAfterUpdate(responseBody)) {
@@ -1923,10 +1932,32 @@ async function importSelectedPdf(
         }
         await refreshMonthEndSource(true);
         status.textContent =
-          "支援者状態は反映済みですが、バックアップを作成できませんでした。同じPDFを再度反映しないでください。「今すぐバックアップを作成」を実行してください。";
+          "支援者状態は反映済みですが、バックアップを作成できませんでした。同じPDFを再度反映しないでください。「今すぐバックアップを作成」を実行してください。Cloudflare自動同期は試行されていません。バックアップ復旧後に対象の支援者で「Cloudflareへ同期」を実行してください。";
         return;
       }
       throw new Error("PDF import request failed");
+    }
+    if (response.status === 502) {
+      const responseBody = await response.json();
+      if (isExactPortalSyncFailedAfterUpdate(responseBody)) {
+        state.previewedFile = null;
+        state.migrationControls = [];
+        result.replaceChildren();
+        updatePdfActionButtons(
+          fileInput,
+          inspectionButton,
+          importButton,
+          state,
+        );
+        if (listStatus !== null && supporterList !== null) {
+          await loadSupporters(listStatus, supporterList);
+        }
+        await refreshMonthEndSource(true);
+        status.textContent =
+          "支援者状態とFANBOX取込はすでに反映されています。同じPDFを再度反映しないでください。対象の支援者は一覧の「Cloudflareへ同期」を実行してください。";
+        return;
+      }
+      throw new Error("invalid PDF import bad-gateway response");
     }
     if (!response.ok) {
       throw new Error("PDF import request failed");

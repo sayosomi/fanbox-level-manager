@@ -846,7 +846,10 @@ describe("manual backup route", () => {
     });
     const apply = vi.fn(() => {
       callOrder.push("apply");
-      return samplePdfImportResult;
+      return {
+        ...samplePdfImportResult,
+        affectedSupporterIds: Object.freeze(["created-supporter-id"]),
+      };
     });
     const getBackupDestinationDirectory = vi.fn(() => {
       callOrder.push("readiness");
@@ -854,6 +857,10 @@ describe("manual backup route", () => {
     });
     const createBackup = vi.fn(async () => {
       callOrder.push("backup");
+    });
+    const sync = createPortalSyncService(async (supporterId) => {
+      callOrder.push(`sync:${supporterId}`);
+      return { verifiedAt: "2026-09-09T09:00:00.000Z" };
     });
     const importServer = createAdminServer(
       undefined,
@@ -870,6 +877,7 @@ describe("manual backup route", () => {
         selectBackupDestinationDirectory: vi.fn(async () => "/synthetic/backup/"),
       },
       createBackupExecutionService(createBackup),
+      sync,
     );
     const importPort = await listenOnEphemeralPort(importServer);
 
@@ -883,11 +891,18 @@ describe("manual backup route", () => {
       );
 
       expect(response.statusCode).toBe(200);
-      expect(callOrder).toEqual(["inspect", "compare", "apply", "backup"]);
+      expect(callOrder).toEqual([
+        "inspect",
+        "compare",
+        "apply",
+        "backup",
+        "sync:created-supporter-id",
+      ]);
       expect(compare).toHaveBeenCalledTimes(1);
       expect(apply).toHaveBeenCalledTimes(1);
       expect(getBackupDestinationDirectory).not.toHaveBeenCalled();
       expect(createBackup).toHaveBeenCalledTimes(1);
+      expect(sync.syncSupporter).toHaveBeenCalledTimes(1);
     } finally {
       await closeServer(importServer);
     }
@@ -958,6 +973,7 @@ describe("manual backup route", () => {
       undefined,
       createBackupDestinationService(null),
       createBackupExecutionService(createBackup),
+      createPortalSyncService(),
     );
     const importPort = await listenOnEphemeralPort(importServer);
 
@@ -979,7 +995,225 @@ describe("manual backup route", () => {
     }
   });
 
-  it("does not back up a returning-only import", async () => {
+  it.each([
+    ["new-supporter", comparisonResult],
+    ["no-op", samplePdfComparison],
+  ] as const)(
+    "requires portal configuration after comparison and before %s mutation work",
+    async (_caseName, preComparison) => {
+      const callOrder: string[] = [];
+      const inspect = vi.fn(async () => {
+        callOrder.push("inspect");
+        return samplePdfInspection;
+      });
+      const compare = vi.fn(() => {
+        callOrder.push("compare");
+        return preComparison;
+      });
+      const apply = vi.fn(() => {
+        callOrder.push("apply");
+        return samplePdfImportResult;
+      });
+      const getBackupDestinationDirectory = vi.fn(() => {
+        callOrder.push("readiness");
+        return "/synthetic/backup/";
+      });
+      const createBackup = vi.fn(async () => {
+        callOrder.push("backup");
+      });
+      const importServer = createAdminServer(
+        undefined,
+        undefined,
+        undefined,
+        createPdfInspectionService(inspect),
+        createPdfComparisonService(compare),
+        createPdfImportService(apply),
+        undefined,
+        undefined,
+        undefined,
+        {
+          getBackupDestinationDirectory,
+          selectBackupDestinationDirectory: vi.fn(async () => "/synthetic/backup/"),
+        },
+        createBackupExecutionService(createBackup),
+      );
+      const importPort = await listenOnEphemeralPort(importServer);
+
+      try {
+        const response = await requestOnPort(
+          importPort,
+          "POST",
+          "/api/fanbox-pdf/import",
+          new Uint8Array([37, 80, 68, 70]),
+          { "Content-Type": "application/pdf" },
+        );
+
+        expect(response.statusCode).toBe(503);
+        expect(response.body).toBe('{"error":"portal_not_configured"}');
+        expect(callOrder).toEqual(["inspect", "compare"]);
+        expect(getBackupDestinationDirectory).not.toHaveBeenCalled();
+        expect(createBackup).not.toHaveBeenCalled();
+        expect(apply).not.toHaveBeenCalled();
+      } finally {
+        await closeServer(importServer);
+      }
+    },
+  );
+
+  it("synchronizes only returned affected IDs in order without a backup for existing-supporter updates", async () => {
+    const affectedSupporterIds = Object.freeze([
+      "affected-first",
+      "affected-middle",
+      "affected-last",
+    ]);
+    const callOrder: string[] = [];
+    const inspect = vi.fn(async () => {
+      callOrder.push("inspect");
+      return samplePdfInspection;
+    });
+    const compare = vi.fn(() => {
+      callOrder.push("compare");
+      return samplePdfComparison;
+    });
+    const apply = vi.fn(() => {
+      callOrder.push("apply");
+      return {
+        comparison: samplePdfComparison,
+        importRecord: samplePdfImportResult.importRecord,
+        affectedSupporterIds,
+      };
+    });
+    const getBackupDestinationDirectory = vi.fn(() => "/synthetic/backup/");
+    const createBackup = vi.fn(async () => {});
+    const sync = createPortalSyncService(async (supporterId) => {
+      callOrder.push(`sync:${supporterId}`);
+      return { verifiedAt: "2026-09-09T09:00:00.000Z" };
+    });
+    const importServer = createAdminServer(
+      undefined,
+      undefined,
+      undefined,
+      createPdfInspectionService(inspect),
+      createPdfComparisonService(compare),
+      createPdfImportService(apply),
+      undefined,
+      undefined,
+      undefined,
+      { getBackupDestinationDirectory, selectBackupDestinationDirectory: vi.fn(async () => null) },
+      createBackupExecutionService(createBackup),
+      sync,
+    );
+    const importPort = await listenOnEphemeralPort(importServer);
+
+    try {
+      const response = await requestOnPort(
+        importPort,
+        "POST",
+        "/api/fanbox-pdf/import",
+        new Uint8Array([37, 80, 68, 70]),
+        { "Content-Type": "application/pdf" },
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toBe(
+        JSON.stringify({
+          importedAt: samplePdfImportResult.importRecord.importedAt,
+          presentSupporterCount:
+            samplePdfImportResult.importRecord.presentSupporterCount,
+        }),
+      );
+      expect(callOrder).toEqual([
+        "inspect",
+        "compare",
+        "apply",
+        "sync:affected-first",
+        "sync:affected-middle",
+        "sync:affected-last",
+      ]);
+      expect(getBackupDestinationDirectory).not.toHaveBeenCalled();
+      expect(createBackup).not.toHaveBeenCalled();
+      expect(sync.syncSupporter).toHaveBeenCalledTimes(3);
+      expect(sync.syncSupporter).not.toHaveBeenCalledWith("internal-supporter-id");
+    } finally {
+      await closeServer(importServer);
+    }
+  });
+
+  it.each([0, 1])(
+    "continues all automatic sync attempts when the affected ID at index %s fails",
+    async (failureIndex) => {
+      const affectedSupporterIds = [
+        "affected-first",
+        "affected-middle",
+        "affected-last",
+      ] as const;
+      const sync = createPortalSyncService(async (supporterId) => {
+        if (supporterId === affectedSupporterIds[failureIndex]) {
+          throw new Error(
+            `remote portal failure for ${supporterId}; token=secret-token; path=/private/admin.sqlite`,
+          );
+        }
+        return { verifiedAt: "2026-09-09T09:00:00.000Z" };
+      });
+      const apply = vi.fn(() => ({
+        comparison: samplePdfComparison,
+        importRecord: samplePdfImportResult.importRecord,
+        affectedSupporterIds,
+      }));
+      const importServer = createAdminServer(
+        undefined,
+        undefined,
+        undefined,
+        createPdfInspectionService(async () => samplePdfInspection),
+        createPdfComparisonService(() => samplePdfComparison),
+        createPdfImportService(apply),
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        sync,
+      );
+      const importPort = await listenOnEphemeralPort(importServer);
+
+      try {
+        const response = await requestOnPort(
+          importPort,
+          "POST",
+          "/api/fanbox-pdf/import",
+          new Uint8Array([37, 80, 68, 70]),
+          { "Content-Type": "application/pdf" },
+        );
+
+        expect(response.statusCode).toBe(502);
+        expect(response.body).toBe(
+          '{"error":"portal_sync_failed_after_update"}',
+        );
+        expect(apply).toHaveBeenCalledTimes(1);
+        expect(sync.syncSupporter).toHaveBeenCalledTimes(3);
+        expect(sync.syncSupporter).toHaveBeenNthCalledWith(1, "affected-first");
+        expect(sync.syncSupporter).toHaveBeenNthCalledWith(2, "affected-middle");
+        expect(sync.syncSupporter).toHaveBeenNthCalledWith(3, "affected-last");
+        for (const privateValue of [
+          "affected-first",
+          "affected-middle",
+          "affected-last",
+          "relationship_123",
+          "synthetic candidate",
+          "remote portal failure",
+          "secret-token",
+          "/private/admin.sqlite",
+          "diagnostics",
+        ]) {
+          expect(response.body).not.toContain(privateValue);
+        }
+      } finally {
+        await closeServer(importServer);
+      }
+    },
+  );
+
+  it("does not back up a returning-only import and syncs only its affected ID", async () => {
     const returningOnlyComparison: FanboxPdfSupporterComparison = {
       presentSupporters: [
         {
@@ -995,10 +1229,11 @@ describe("manual backup route", () => {
     const apply = vi.fn(() => ({
       comparison: returningOnlyComparison,
       importRecord: samplePdfImportResult.importRecord,
-      affectedSupporterIds: Object.freeze([]),
+      affectedSupporterIds: Object.freeze(["affected-returning-id"]),
     }));
     const getBackupDestinationDirectory = vi.fn(() => "/synthetic/backup/");
     const createBackup = vi.fn(async () => {});
+    const sync = createPortalSyncService();
     const importServer = createAdminServer(
       undefined,
       undefined,
@@ -1011,6 +1246,7 @@ describe("manual backup route", () => {
       undefined,
       { getBackupDestinationDirectory, selectBackupDestinationDirectory: vi.fn(async () => null) },
       createBackupExecutionService(createBackup),
+      sync,
     );
     const importPort = await listenOnEphemeralPort(importServer);
 
@@ -1026,6 +1262,8 @@ describe("manual backup route", () => {
       expect(response.statusCode).toBe(200);
       expect(getBackupDestinationDirectory).not.toHaveBeenCalled();
       expect(createBackup).not.toHaveBeenCalled();
+      expect(sync.syncSupporter).toHaveBeenCalledTimes(1);
+      expect(sync.syncSupporter).toHaveBeenCalledWith("affected-returning-id");
     } finally {
       await closeServer(importServer);
     }
@@ -1049,8 +1287,12 @@ describe("manual backup route", () => {
     const apply = vi.fn(() => ({
       comparison: multipleNewComparison,
       importRecord: samplePdfImportResult.importRecord,
-      affectedSupporterIds: Object.freeze([]),
+      affectedSupporterIds: Object.freeze([
+        "created-new-one",
+        "created-new-two",
+      ]),
     }));
+    const sync = createPortalSyncService();
     const importServer = createAdminServer(
       undefined,
       undefined,
@@ -1063,6 +1305,7 @@ describe("manual backup route", () => {
       undefined,
       createBackupDestinationService(),
       createBackupExecutionService(createBackup),
+      sync,
     );
     const importPort = await listenOnEphemeralPort(importServer);
 
@@ -1077,6 +1320,9 @@ describe("manual backup route", () => {
 
       expect(response.statusCode).toBe(200);
       expect(createBackup).toHaveBeenCalledTimes(1);
+      expect(sync.syncSupporter).toHaveBeenCalledTimes(2);
+      expect(sync.syncSupporter).toHaveBeenNthCalledWith(1, "created-new-one");
+      expect(sync.syncSupporter).toHaveBeenNthCalledWith(2, "created-new-two");
     } finally {
       await closeServer(importServer);
     }
@@ -1084,7 +1330,11 @@ describe("manual backup route", () => {
     const failingBackup = vi.fn(async () => {
       throw new Error("private post-backup diagnostics");
     });
-    const failingApply = vi.fn(() => samplePdfImportResult);
+    const failingApply = vi.fn(() => ({
+      ...samplePdfImportResult,
+      affectedSupporterIds: Object.freeze(["created-but-not-synced"]),
+    }));
+    const failingSync = createPortalSyncService();
     const failingServer = createAdminServer(
       undefined,
       undefined,
@@ -1097,6 +1347,7 @@ describe("manual backup route", () => {
       undefined,
       createBackupDestinationService(),
       createBackupExecutionService(failingBackup),
+      failingSync,
     );
     const failingPort = await listenOnEphemeralPort(failingServer);
 
@@ -1113,6 +1364,7 @@ describe("manual backup route", () => {
       expect(response.body).toBe('{"error":"backup_failed_after_update"}');
       expect(failingApply).toHaveBeenCalledTimes(1);
       expect(failingBackup).toHaveBeenCalledTimes(1);
+      expect(failingSync.syncSupporter).not.toHaveBeenCalled();
     } finally {
       await closeServer(failingServer);
     }
@@ -3622,6 +3874,7 @@ describe("PDF import route", () => {
       undefined,
       undefined,
       createBackupExecutionService(),
+      createPortalSyncService(),
     );
     const importPort = await listenOnEphemeralPort(importServer);
     const body = Buffer.alloc(25 * 1024 * 1024 + 1, 1);
@@ -3709,8 +3962,12 @@ describe("PDF import route", () => {
     });
     const apply = vi.fn((inspection: FanboxPdfInspection) => {
       expect(inspection).toBe(samplePdfInspection);
-      return samplePdfImportResult;
+      return {
+        ...samplePdfImportResult,
+        comparison: samplePdfComparison,
+      };
     });
+    const sync = createPortalSyncService();
     const importServer = createAdminServer(
       sampleSupporterListService,
       undefined,
@@ -3723,6 +3980,7 @@ describe("PDF import route", () => {
       undefined,
       undefined,
       createBackupExecutionService(),
+      sync,
     );
     const importPort = await listenOnEphemeralPort(importServer);
 
@@ -3740,6 +3998,7 @@ describe("PDF import route", () => {
       expect([...received[0] ?? []]).toEqual([...pdfBytes]);
       expect(apply).toHaveBeenCalledTimes(1);
       expect(apply).toHaveBeenCalledWith(samplePdfInspection);
+      expect(sync.syncSupporter).not.toHaveBeenCalled();
       expect(response.statusCode).toBe(200);
       expect(response.body).toBe(
         JSON.stringify({
@@ -3773,6 +4032,7 @@ describe("PDF import route", () => {
     const apply = vi.fn(() => {
       throw new FanboxSupporterImportBlockedError(reason);
     });
+    const sync = createPortalSyncService();
     const importServer = createAdminServer(
       sampleSupporterListService,
       undefined,
@@ -3780,6 +4040,12 @@ describe("PDF import route", () => {
       createPdfInspectionService(inspect),
       createPdfComparisonService(() => samplePdfComparison),
       createPdfImportService(apply),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      sync,
     );
     const importPort = await listenOnEphemeralPort(importServer);
 
@@ -3799,6 +4065,7 @@ describe("PDF import route", () => {
       expect(response.body).not.toContain(sensitiveMessage);
       expect(response.body).not.toContain("internal-supporter-id");
       expect(response.body).not.toContain("relationship_123");
+      expect(sync.syncSupporter).not.toHaveBeenCalled();
       expectCommonSecurityHeaders(response.headers);
     } finally {
       await closeServer(importServer);
@@ -3813,6 +4080,7 @@ describe("PDF import route", () => {
     const apply = vi.fn(() => {
       throw error;
     });
+    const sync = createPortalSyncService();
     const importServer = createAdminServer(
       sampleSupporterListService,
       undefined,
@@ -3820,6 +4088,12 @@ describe("PDF import route", () => {
       createPdfInspectionService(inspect),
       createPdfComparisonService(() => samplePdfComparison),
       createPdfImportService(apply),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      sync,
     );
     const importPort = await listenOnEphemeralPort(importServer);
 
@@ -3836,6 +4110,7 @@ describe("PDF import route", () => {
       expect(response.body).toBe('{"error":"fanbox_import_failed"}');
       expect(response.body).not.toContain("private import storage");
       expect(response.body).not.toContain("source diagnostics");
+      expect(sync.syncSupporter).not.toHaveBeenCalled();
       expectCommonSecurityHeaders(response.headers);
     } finally {
       await closeServer(importServer);
@@ -6662,7 +6937,7 @@ describe("admin server configuration", () => {
     );
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(inspectionStatus.textContent).toBe(
-      "支援者状態は反映済みですが、バックアップを作成できませんでした。同じPDFを再度反映しないでください。「今すぐバックアップを作成」を実行してください。",
+      "支援者状態は反映済みですが、バックアップを作成できませんでした。同じPDFを再度反映しないでください。「今すぐバックアップを作成」を実行してください。Cloudflare自動同期は試行されていません。バックアップ復旧後に対象の支援者で「Cloudflareへ同期」を実行してください。",
     );
     expect(inspectionResult.children).toHaveLength(0);
     expect(importButton.disabled).toBe(true);
@@ -6694,6 +6969,96 @@ describe("admin server configuration", () => {
     expect(
       fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
     ).toHaveLength(6);
+
+    fileInput.files = [previewedFile];
+    fileInput.dispatch("change");
+    inspectionButton.click();
+    inspectionResolvers[5]?.(response(200, inspectionResponseBody));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(importButton.disabled).toBe(false);
+    expect(inspectionResult.children.length).toBeGreaterThan(0);
+    const supportersBeforePortalRecovery = fetchCalls.filter(
+      ({ url }) => url === "/api/supporters",
+    ).length;
+    const monthEndSourceBeforePortalRecovery = fetchCalls.filter(
+      ({ url }) => url === "/api/month-end/source",
+    ).length;
+
+    importButton.click();
+    importResolvers[6]?.(response(503, { error: "portal_not_configured" }));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(inspectionStatus.textContent).toBe(
+      "ポータル連携を設定してから、このPDFをもう一度支援者状態に反映してください。PDFはまだ支援者状態に反映されていません。",
+    );
+    expect(fileInput.files[0]).toBe(previewedFile);
+    expect(inspectionResult.children.length).toBeGreaterThan(0);
+    expect(importButton.disabled).toBe(false);
+    expect(
+      fetchCalls.filter(({ url }) => url === "/api/supporters"),
+    ).toHaveLength(supportersBeforePortalRecovery);
+    expect(
+      fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
+    ).toHaveLength(monthEndSourceBeforePortalRecovery);
+
+    importButton.click();
+    importResolvers[7]?.(
+      response(503, { error: "portal_not_configured", extra: "invalid" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(inspectionStatus.textContent).toBe(
+      "支援者状態を反映できませんでした。",
+    );
+    expect(inspectionResult.children.length).toBeGreaterThan(0);
+    expect(importButton.disabled).toBe(false);
+
+    importButton.click();
+    importResolvers[8]?.(
+      response(502, {
+        error: "portal_sync_failed_after_update",
+        extra: "invalid",
+      }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(inspectionStatus.textContent).toBe(
+      "支援者状態を反映できませんでした。",
+    );
+    expect(inspectionResult.children.length).toBeGreaterThan(0);
+    expect(importButton.disabled).toBe(false);
+
+    importButton.click();
+    importResolvers[9]?.(
+      response(500, { error: "portal_sync_failed_after_update" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(inspectionStatus.textContent).toBe(
+      "支援者状態を反映できませんでした。",
+    );
+    expect(inspectionResult.children.length).toBeGreaterThan(0);
+    expect(importButton.disabled).toBe(false);
+
+    importButton.click();
+    importResolvers[10]?.(
+      response(502, { error: "portal_sync_failed_after_update" }),
+    );
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(inspectionStatus.textContent).toBe(
+      "支援者状態とFANBOX取込はすでに反映されています。同じPDFを再度反映しないでください。対象の支援者は一覧の「Cloudflareへ同期」を実行してください。",
+    );
+    expect(inspectionStatus.textContent).not.toContain(
+      "バックアップは作成済みです",
+    );
+    expect(inspectionResult.children).toHaveLength(0);
+    expect(importButton.disabled).toBe(true);
+    expect(fileInput.files[0]).toBe(previewedFile);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(
+      supportersBeforePortalRecovery + 1,
+    );
+    expect(
+      fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
+    ).toHaveLength(monthEndSourceBeforePortalRecovery + 1);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-sync")).toHaveLength(
+      0,
+    );
   });
 
   it("opens the original configured path and closes the production store once", async () => {
