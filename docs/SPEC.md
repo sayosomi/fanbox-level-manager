@@ -195,6 +195,15 @@ update is committed, the local mutation and completed backup are not rolled
 back or repeated. The manual per-supporter `Cloudflareへ同期` action is the
 explicit recovery path.
 
+After the required encrypted post-processing backup succeeds, successful
+month-end processing automatically synchronizes exactly the supporters returned
+by the month-end processing result to Cloudflare, in returned order. Known
+missing portal configuration blocks month-end processing before the required
+pre-processing backup and mutation start. If automatic synchronization fails
+after the month-end update is committed, the local mutation and both completed
+backups are not rolled back or repeated. The manual per-supporter
+`Cloudflareへ同期` action is the explicit recovery path.
+
 The human-selected backup destination is persisted in the local Mac SQLite
 admin state so it survives localhost admin restarts. Browser storage and
 directory handles are not the source of truth for this setting.
@@ -235,8 +244,9 @@ post-update backup failure.
 The remaining encryption implementation details are deferred to a later
 implementation contract.
 
-Automatic synchronization after FANBOX PDF import and month-end processing
-remains separate later work unless settled by a later implementation contract.
+Automatic synchronization after FANBOX PDF import remains separate later work.
+Month-end processing automatic synchronization is defined above and is no longer
+deferred.
 
 ## Deferred implementation choices and non-goals
 

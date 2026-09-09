@@ -639,6 +639,12 @@ async function processMonthEnd(listStatus, supporterList) {
       return;
     }
 
+    if (response.status === 503 && isExactPortalNotConfigured(responseBody)) {
+      monthEndUi.processStatus.textContent =
+        "ポータル連携を設定してから、月末処理をもう一度実行してください。月末処理はまだ実行されていません。";
+      return;
+    }
+
     if (response.status === 409 && isExactMonthEndConflict(responseBody)) {
       await loadMonthEndSource();
       if (listStatus !== null && supporterList !== null) {
@@ -674,7 +680,20 @@ async function processMonthEnd(listStatus, supporterList) {
         await loadSupporters(listStatus, supporterList);
       }
       monthEndUi.processStatus.textContent =
-        "月末処理は完了していますが、処理後バックアップを作成できませんでした。同じ月末処理を再実行しないでください。「今すぐバックアップを作成」を実行してください。";
+        "月末処理は完了していますが、処理後バックアップを作成できませんでした。同じ月末処理を再実行しないでください。「今すぐバックアップを作成」を実行してください。Cloudflare自動同期は試行されていません。バックアップ復旧後に対象の支援者で「Cloudflareへ同期」を実行してください。";
+      return;
+    }
+
+    if (
+      response.status === 502 &&
+      isExactPortalSyncFailedAfterUpdate(responseBody)
+    ) {
+      monthEndUi.monthInput.value = "";
+      if (listStatus !== null && supporterList !== null) {
+        await loadSupporters(listStatus, supporterList);
+      }
+      monthEndUi.processStatus.textContent =
+        "月末処理はすでに完了しています。同じ月末処理を再実行しないでください。暗号化された処理前・処理後バックアップは作成済みです。対象の支援者は一覧の「Cloudflareへ同期」を実行してください。";
       return;
     }
 
