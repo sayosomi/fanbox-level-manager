@@ -13,6 +13,14 @@ export const ADMIN_PAGE = `<!doctype html>
     <main>
       <h1>FANBOX抽選レベル管理</h1>
       <p id="status" role="status">ローカル管理アプリケーションは起動しています。</p>
+      <section aria-labelledby="backup-destination-heading">
+        <h2 id="backup-destination-heading">バックアップ設定</h2>
+        <p id="backup-destination-current" role="status" aria-live="polite">
+          バックアップ先を読み込んでいます。
+        </p>
+        <button id="backup-destination-button" type="button">バックアップ先フォルダを選択</button>
+        <p id="backup-destination-status" role="status" aria-live="polite"></p>
+      </section>
       <section aria-labelledby="pdf-inspection-heading">
         <h2 id="pdf-inspection-heading">FANBOX PDF確認</h2>
         <p>
@@ -86,6 +94,156 @@ const PDF_IMPORT_BLOCKED_MESSAGES = {
   new_display_name_unavailable:
     "新規支援者の表示名を確認できないため、反映できません。",
 };
+const BACKUP_DESTINATION_KEYS = ["directory"];
+
+function isValidBackupDestinationDirectory(value) {
+  return (
+    typeof value === "string" &&
+    value.trim().length > 0 &&
+    value.startsWith("/") &&
+    !value.includes("\\u0000")
+  );
+}
+
+function validateBackupDestinationGetResponse(value) {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, BACKUP_DESTINATION_KEYS) ||
+    !(value.directory === null ||
+      isValidBackupDestinationDirectory(value.directory))
+  ) {
+    throw new TypeError("invalid backup destination response");
+  }
+
+  return value.directory;
+}
+
+function validateBackupDestinationSelectResponse(value) {
+  if (!isRecord(value)) {
+    throw new TypeError("invalid backup destination selection response");
+  }
+  if (
+    hasExactKeys(value, ["status"]) &&
+    value.status === "cancelled"
+  ) {
+    return { status: "cancelled" };
+  }
+  if (
+    hasExactKeys(value, ["status", "directory"]) &&
+    value.status === "selected" &&
+    isValidBackupDestinationDirectory(value.directory)
+  ) {
+    return { status: "selected", directory: value.directory };
+  }
+
+  throw new TypeError("invalid backup destination selection response");
+}
+
+const backupDestinationState = {
+  active: false,
+  loaded: false,
+  directory: null,
+};
+let backupDestinationUi = null;
+
+function renderBackupDestinationDirectory() {
+  if (backupDestinationUi === null) {
+    return;
+  }
+
+  if (!backupDestinationState.loaded) {
+    backupDestinationUi.current.textContent = "バックアップ先を確認できません。";
+    return;
+  }
+  backupDestinationUi.current.textContent =
+    backupDestinationState.directory === null
+      ? "バックアップ先が未設定です。"
+      : "バックアップ先: " + backupDestinationState.directory;
+}
+
+function updateBackupDestinationButton() {
+  if (backupDestinationUi !== null) {
+    backupDestinationUi.button.disabled = backupDestinationState.active;
+  }
+}
+
+async function loadBackupDestination() {
+  if (backupDestinationUi === null) {
+    return;
+  }
+
+  try {
+    const response = await fetch("/api/backup-destination", {
+      method: "GET",
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    if (response.status !== 200) {
+      throw new Error("backup destination request failed");
+    }
+
+    backupDestinationState.directory = validateBackupDestinationGetResponse(
+      await response.json(),
+    );
+    backupDestinationState.loaded = true;
+    renderBackupDestinationDirectory();
+  } catch {
+    backupDestinationState.loaded = false;
+    renderBackupDestinationDirectory();
+    backupDestinationUi.status.textContent =
+      "バックアップ先を読み込めませんでした。";
+  }
+}
+
+async function selectBackupDestination() {
+  if (backupDestinationUi === null || backupDestinationState.active) {
+    return;
+  }
+
+  backupDestinationState.active = true;
+  updateBackupDestinationButton();
+  backupDestinationUi.status.textContent =
+    "バックアップ先フォルダを選択しています。";
+
+  try {
+    const response = await fetch("/api/backup-destination/select", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({}),
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    if (response.status !== 200) {
+      throw new Error("backup destination selection request failed");
+    }
+
+    const result = validateBackupDestinationSelectResponse(
+      await response.json(),
+    );
+    if (result.status === "cancelled") {
+      backupDestinationUi.status.textContent =
+        "バックアップ先フォルダの選択をキャンセルしました。";
+      return;
+    }
+
+    backupDestinationState.directory = result.directory;
+    backupDestinationState.loaded = true;
+    renderBackupDestinationDirectory();
+    backupDestinationUi.status.textContent = "バックアップ先を変更しました。";
+  } catch {
+    backupDestinationUi.status.textContent =
+      "バックアップ先を変更できませんでした。";
+  } finally {
+    backupDestinationState.active = false;
+    updateBackupDestinationButton();
+  }
+}
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1472,6 +1630,31 @@ const lotteryParticipantList = document.getElementById(
   "lottery-participant-list",
 );
 const lotteryResultButton = document.getElementById("lottery-result-button");
+const backupDestinationCurrent = document.getElementById(
+  "backup-destination-current",
+);
+const backupDestinationButton = document.getElementById(
+  "backup-destination-button",
+);
+const backupDestinationStatus = document.getElementById(
+  "backup-destination-status",
+);
+if (
+  backupDestinationCurrent !== null &&
+  backupDestinationButton instanceof HTMLButtonElement &&
+  backupDestinationStatus !== null
+) {
+  backupDestinationUi = {
+    current: backupDestinationCurrent,
+    button: backupDestinationButton,
+    status: backupDestinationStatus,
+  };
+  backupDestinationButton.addEventListener("click", () => {
+    void selectBackupDestination();
+  });
+  updateBackupDestinationButton();
+  void loadBackupDestination();
+}
 if (
   lotteryOccurredAtInput !== null &&
   lotteryResultStatus !== null &&

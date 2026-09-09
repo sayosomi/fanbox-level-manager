@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 
 const CANONICAL_MONTH_CHECK = `
   length(%COLUMN%) = 7
@@ -105,6 +105,16 @@ CREATE TABLE fanbox_supporter_imports (
 ) STRICT;
 `;
 
+const VERSION_FIVE_SCHEMA = `
+CREATE TABLE backup_settings (
+  singleton_id INTEGER PRIMARY KEY NOT NULL CHECK (singleton_id = 1),
+  destination_directory TEXT NOT NULL CHECK (
+    length(trim(destination_directory)) > 0
+    AND substr(destination_directory, 1, 1) = '/'
+  )
+) STRICT;
+`;
+
 type SqliteDatabase = Database.Database;
 
 export function configureDatabase(
@@ -159,6 +169,15 @@ export function applyVersionFourMigration(database: SqliteDatabase): void {
   const migrate = database.transaction((): void => {
     database.exec(VERSION_FOUR_SCHEMA);
     database.pragma("user_version = 4");
+  });
+
+  migrate();
+}
+
+export function applyVersionFiveMigration(database: SqliteDatabase): void {
+  const migrate = database.transaction((): void => {
+    database.exec(VERSION_FIVE_SCHEMA);
+    database.pragma("user_version = 5");
   });
 
   migrate();

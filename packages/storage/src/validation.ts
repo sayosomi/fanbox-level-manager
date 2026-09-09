@@ -1,3 +1,4 @@
+import { isAbsolute } from "node:path";
 import type {
   ApplyFanboxSupporterImportInput,
   CreateMigratedSupporterInput,
@@ -32,6 +33,19 @@ export function assertNonBlankString(
 ): asserts value is string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new TypeError(`${fieldName} must be a non-empty string`);
+  }
+}
+
+export function assertValidBackupDestinationDirectory(
+  value: unknown,
+): asserts value is string {
+  if (
+    typeof value !== "string" ||
+    value.trim().length === 0 ||
+    !isAbsolute(value) ||
+    value.includes("\u0000")
+  ) {
+    throw new TypeError("backup destination directory must be an absolute path");
   }
 }
 

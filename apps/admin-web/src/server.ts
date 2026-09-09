@@ -43,6 +43,10 @@ import {
   type LocalStore,
 } from "@sayosomi/storage";
 import {
+  createBackupDestinationService,
+  type BackupDestinationService,
+} from "./backup-destination.js";
+import {
   ADMIN_CONTENT_SECURITY_POLICY,
   ADMIN_PAGE,
   ADMIN_SCRIPT,
@@ -87,6 +91,8 @@ const MONTH_END_SOURCE_PATH = "/api/month-end/source";
 const MONTH_END_PROCESS_PATH = "/api/month-end/process";
 const PDF_INSPECTION_PATH = "/api/fanbox-pdf/inspect";
 const PDF_IMPORT_PATH = "/api/fanbox-pdf/import";
+const BACKUP_DESTINATION_PATH = "/api/backup-destination";
+const BACKUP_DESTINATION_SELECT_PATH = "/api/backup-destination/select";
 const MAX_PDF_BODY_BYTES = 25 * 1024 * 1024;
 const INCOMPLETE_PORTAL_CONFIGURATION_ERROR =
   "incomplete portal configuration";
@@ -153,6 +159,18 @@ const PDF_COMPARISON_UNAVAILABLE_BODY = JSON.stringify({
 const PDF_COMPARISON_FAILED_BODY = JSON.stringify({
   error: "pdf_comparison_failed",
 });
+const BACKUP_DESTINATION_UNAVAILABLE_BODY = JSON.stringify({
+  error: "backup_destination_unavailable",
+});
+const BACKUP_DESTINATION_FAILED_BODY = JSON.stringify({
+  error: "backup_destination_failed",
+});
+const BACKUP_DESTINATION_SELECTION_FAILED_BODY = JSON.stringify({
+  error: "backup_destination_selection_failed",
+});
+const BACKUP_DESTINATION_CANCELLED_BODY = JSON.stringify({
+  status: "cancelled",
+});
 const FANBOX_IMPORT_BLOCKED_REASONS: ReadonlySet<string> = new Set([
   "empty_relationships",
   "duplicate_relationship_id",
@@ -176,6 +194,7 @@ export type ProductionAdminServerDependencies = Readonly<{
     typeof createExistingSupporterMigrationService;
   createLotteryLevelService?: typeof createLotteryLevelService;
   createMonthEndProcessingService?: typeof createMonthEndProcessingService;
+  createBackupDestinationService?: typeof createBackupDestinationService;
 }>;
 
 export function parseAdminPort(value: string | undefined): number {
@@ -284,6 +303,32 @@ function hasPdfContentType(request: IncomingMessage): boolean {
 
   const mediaType = contentType.split(";", 1)[0]?.trim().toLowerCase();
   return mediaType === "application/pdf";
+}
+
+function hasJsonContentType(request: IncomingMessage): boolean {
+  const contentType = request.headers["content-type"];
+  if (typeof contentType !== "string") {
+    return false;
+  }
+
+  const mediaType = contentType.split(";", 1)[0]?.trim().toLowerCase();
+  return mediaType === "application/json";
+}
+
+function isEmptyJsonObject(body: string): boolean {
+  let value: unknown;
+  try {
+    value = JSON.parse(body);
+  } catch {
+    return false;
+  }
+
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 0
+  );
 }
 
 function readPdfRequestBody(request: IncomingMessage): Promise<Uint8Array> {
@@ -1011,6 +1056,68 @@ function sendSupporterList(
   }
 }
 
+function sendBackupDestination(
+  response: ServerResponse,
+  backupDestinationService: BackupDestinationService | undefined,
+): void {
+  if (backupDestinationService === undefined) {
+    sendPortalJson(response, 500, BACKUP_DESTINATION_UNAVAILABLE_BODY);
+    return;
+  }
+
+  try {
+    const directory = backupDestinationService.getBackupDestinationDirectory();
+    sendPortalJson(response, 200, JSON.stringify({ directory }));
+  } catch {
+    sendPortalJson(response, 500, BACKUP_DESTINATION_FAILED_BODY);
+  }
+}
+
+async function sendBackupDestinationSelection(
+  request: IncomingMessage,
+  response: ServerResponse,
+  backupDestinationService: BackupDestinationService | undefined,
+): Promise<void> {
+  if (!hasJsonContentType(request)) {
+    sendPortalJson(response, 415, PDF_UNSUPPORTED_MEDIA_TYPE_BODY);
+    return;
+  }
+
+  let body: string;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  if (!isEmptyJsonObject(body)) {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  if (backupDestinationService === undefined) {
+    sendPortalJson(response, 500, BACKUP_DESTINATION_UNAVAILABLE_BODY);
+    return;
+  }
+
+  try {
+    const directory =
+      await backupDestinationService.selectBackupDestinationDirectory();
+    if (directory === null) {
+      sendPortalJson(response, 200, BACKUP_DESTINATION_CANCELLED_BODY);
+      return;
+    }
+
+    sendPortalJson(response, 200, JSON.stringify({
+      status: "selected",
+      directory,
+    }));
+  } catch {
+    sendPortalJson(response, 500, BACKUP_DESTINATION_SELECTION_FAILED_BODY);
+  }
+}
+
 export function createAdminServer(
   supporterListService?: SupporterListService,
   supporterPortalLinkService?: SupporterPortalLinkService,
@@ -1021,6 +1128,7 @@ export function createAdminServer(
   existingSupporterMigrationService?: ExistingSupporterMigrationService,
   lotteryLevelService?: LotteryLevelService,
   monthEndProcessingService?: MonthEndProcessingService,
+  backupDestinationService?: BackupDestinationService,
 ): Server {
   return createServer((request, response) => {
     const requestPath = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -1037,6 +1145,8 @@ export function createAdminServer(
       requestPath === MONTH_END_PROCESS_PATH ||
       requestPath === PDF_INSPECTION_PATH ||
       requestPath === PDF_IMPORT_PATH ||
+      requestPath === BACKUP_DESTINATION_PATH ||
+      requestPath === BACKUP_DESTINATION_SELECT_PATH ||
       requestPath === "/api/supporters/migrate-existing";
 
     if (!knownRoute) {
@@ -1128,6 +1238,20 @@ export function createAdminServer(
       return;
     }
 
+    if (requestPath === BACKUP_DESTINATION_SELECT_PATH) {
+      if (request.method !== "POST") {
+        sendPortalMethodNotAllowed(response);
+        return;
+      }
+
+      void sendBackupDestinationSelection(
+        request,
+        response,
+        backupDestinationService,
+      );
+      return;
+    }
+
     if (request.method !== "GET") {
       sendMethodNotAllowed(response);
       return;
@@ -1163,6 +1287,9 @@ export function createAdminServer(
       case "/api/supporters":
         sendSupporterList(response, supporterListService);
         return;
+      case BACKUP_DESTINATION_PATH:
+        sendBackupDestination(response, backupDestinationService);
+        return;
       case MONTH_END_SOURCE_PATH:
         sendMonthEndSource(response, monthEndProcessingService);
         return;
@@ -1181,6 +1308,7 @@ export function startAdminServer(
   existingSupporterMigrationService?: ExistingSupporterMigrationService,
   lotteryLevelService?: LotteryLevelService,
   monthEndProcessingService?: MonthEndProcessingService,
+  backupDestinationService?: BackupDestinationService,
 ): Server {
   validateListenPort(port);
   const server = createAdminServer(
@@ -1193,6 +1321,7 @@ export function startAdminServer(
     existingSupporterMigrationService,
     lotteryLevelService,
     monthEndProcessingService,
+    backupDestinationService,
   );
   server.listen(port, ADMIN_HOST);
   return server;
@@ -1277,6 +1406,10 @@ export function startProductionAdminServer(
       dependencies.createExistingSupporterMigrationService ??
       createExistingSupporterMigrationService;
     const existingSupporterMigrationService = createMigrationService(store);
+    const createBackupService =
+      dependencies.createBackupDestinationService ??
+      createBackupDestinationService;
+    const backupDestinationService = createBackupService(store);
     let supporterPortalLinkService: SupporterPortalLinkService | undefined;
     if (portalConfiguration !== null) {
       const createPortalLinkService =
@@ -1302,6 +1435,7 @@ export function startProductionAdminServer(
       existingSupporterMigrationService,
       lotteryLevelService,
       monthEndProcessingService,
+      backupDestinationService,
     );
     server.once("close", closeStore);
 

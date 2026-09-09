@@ -174,6 +174,10 @@ The live SQLite database remains local on the Mac and stays outside any
 synchronized backup folder. Encrypted backup artifacts are written to a backup
 directory selected by the human.
 
+The human-selected backup destination is persisted in the local Mac SQLite
+admin state so it survives localhost admin restarts. Browser storage and
+directory handles are not the source of truth for this setting.
+
 Choosing a directory inside iCloud Drive works through ordinary filesystem
 access and requires no dedicated iCloud integration. Only encrypted backup
 artifacts may be written into the selected directory, never the live database or
