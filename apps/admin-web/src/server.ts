@@ -1224,6 +1224,7 @@ async function sendMonthEndProcess(
   response: ServerResponse,
   monthEndProcessingService: MonthEndProcessingService | undefined,
   backupExecutionService: BackupExecutionService | undefined,
+  supporterPortalSyncService: SupporterPortalSyncService | undefined,
 ): Promise<void> {
   let body: string;
   try {
@@ -1244,12 +1245,18 @@ async function sendMonthEndProcess(
     return;
   }
 
+  if (supporterPortalSyncService === undefined) {
+    sendPortalJson(response, 503, PORTAL_NOT_CONFIGURED_BODY);
+    return;
+  }
+
   if (!(await createMonthEndPreProcessingBackup(response, backupExecutionService))) {
     return;
   }
 
+  let result: ReturnType<MonthEndProcessingService["processMonthEnd"]>;
   try {
-    monthEndProcessingService.processMonthEnd(
+    result = monthEndProcessingService.processMonthEnd(
       input.monthKey,
       input.expectedImportSequence,
     );
@@ -1269,6 +1276,20 @@ async function sendMonthEndProcess(
   }
 
   if (!(await createPostMutationBackup(response, backupExecutionService))) {
+    return;
+  }
+
+  let portalSyncFailed = false;
+  for (const supporter of result.supporters) {
+    try {
+      await supporterPortalSyncService.syncSupporter(supporter.supporterId);
+    } catch {
+      portalSyncFailed = true;
+    }
+  }
+
+  if (portalSyncFailed) {
+    sendPortalJson(response, 502, PORTAL_SYNC_FAILED_AFTER_UPDATE_BODY);
     return;
   }
 
@@ -1505,6 +1526,7 @@ export function createAdminServer(
         response,
         monthEndProcessingService,
         backupExecutionService,
+        supporterPortalSyncService,
       );
       return;
     }

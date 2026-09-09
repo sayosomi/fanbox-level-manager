@@ -443,6 +443,8 @@ function createPortalSyncService(
 function createMonthEndAdminServer(
   monthEndProcessingService?: MonthEndProcessingService,
   backupExecutionService?: BackupExecutionService,
+  supporterPortalSyncService: SupporterPortalSyncService | null =
+    createPortalSyncService(),
 ): Server {
   return createAdminServer(
     undefined,
@@ -456,6 +458,7 @@ function createMonthEndAdminServer(
     monthEndProcessingService,
     undefined,
     backupExecutionService,
+    supporterPortalSyncService ?? undefined,
   );
 }
 
@@ -2661,8 +2664,11 @@ describe("month-end routes", () => {
       source: sourceProjection,
       supporters: [],
     }));
+    const syncService = createPortalSyncService();
     const monthEndServer = createMonthEndAdminServer(
       createTestMonthEndService(undefined, processMonthEnd),
+      undefined,
+      syncService,
     );
     const monthEndPort = await listenOnEphemeralPort(monthEndServer);
     const invalidBodies = [
@@ -2709,6 +2715,7 @@ describe("month-end routes", () => {
         expect(response.body).toBe('{"error":"invalid_request"}');
       }
       expect(processMonthEnd).not.toHaveBeenCalled();
+      expect(syncService.syncSupporter).not.toHaveBeenCalled();
     } finally {
       await closeServer(monthEndServer);
     }
@@ -2723,6 +2730,36 @@ describe("month-end routes", () => {
 
     expect(response.statusCode).toBe(500);
     expect(response.body).toBe('{"error":"month_end_unavailable"}');
+  });
+
+  it("blocks before either required backup, mutation, or sync when portal sync is unavailable", async () => {
+    const processMonthEnd = vi.fn(() => ({
+      source: sourceProjection,
+      supporters: [],
+    }));
+    const createBackup = vi.fn(async () => {});
+    const monthEndServer = createMonthEndAdminServer(
+      createTestMonthEndService(undefined, processMonthEnd),
+      createBackupExecutionService(createBackup),
+      null,
+    );
+    const monthEndPort = await listenOnEphemeralPort(monthEndServer);
+
+    try {
+      const response = await requestOnPort(
+        monthEndPort,
+        "POST",
+        "/api/month-end/process",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(503);
+      expect(response.body).toBe('{"error":"portal_not_configured"}');
+      expect(createBackup).not.toHaveBeenCalled();
+      expect(processMonthEnd).not.toHaveBeenCalled();
+    } finally {
+      await closeServer(monthEndServer);
+    }
   });
 
   it.each(["GET", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"])(
@@ -2766,11 +2803,13 @@ describe("month-end routes", () => {
     ];
 
     for (const error of errors) {
+      const syncService = createPortalSyncService();
       const monthEndServer = createMonthEndAdminServer(
         createTestMonthEndService(undefined, () => {
           throw error;
         }),
         createBackupExecutionService(),
+        syncService,
       );
       const monthEndPort = await listenOnEphemeralPort(monthEndServer);
 
@@ -2806,6 +2845,7 @@ describe("month-end routes", () => {
         ]) {
           expect(response.body).not.toContain(value);
         }
+        expect(syncService.syncSupporter).not.toHaveBeenCalled();
       } finally {
         await closeServer(monthEndServer);
       }
@@ -2840,9 +2880,11 @@ describe("month-end routes", () => {
         source: sourceProjection,
         supporters: [],
       }));
+      const syncService = createPortalSyncService();
       const monthEndServer = createMonthEndAdminServer(
         createTestMonthEndService(undefined, processMonthEnd),
         testCase.execution,
+        syncService,
       );
       const monthEndPort = await listenOnEphemeralPort(monthEndServer);
 
@@ -2857,6 +2899,7 @@ describe("month-end routes", () => {
         expect(response.statusCode).toBe(testCase.statusCode);
         expect(response.body).toBe(testCase.body);
         expect(processMonthEnd).not.toHaveBeenCalled();
+        expect(syncService.syncSupporter).not.toHaveBeenCalled();
       } finally {
         await closeServer(monthEndServer);
       }
@@ -2896,14 +2939,186 @@ describe("month-end routes", () => {
     }
   });
 
+  it("syncs exactly the returned supporters after both backups in returned order", async () => {
+    const callOrder: string[] = [];
+    const returnedSupporters = [
+      {
+        supporterId: "returned-supporter-1",
+        supportingAtMonthEnd: true,
+        state: {
+          supporterId: "returned-supporter-1",
+          monthKey: "2026-09",
+          level: 1,
+          supporting: true,
+          updatedAt: "synthetic-updated-at-1",
+        },
+      },
+      {
+        supporterId: "returned-supporter-2",
+        supportingAtMonthEnd: false,
+        state: {
+          supporterId: "returned-supporter-2",
+          monthKey: "2026-09",
+          level: 2,
+          supporting: false,
+          updatedAt: "synthetic-updated-at-2",
+        },
+      },
+    ];
+    const processMonthEnd = vi.fn(() => {
+      callOrder.push("mutation");
+      return { source: sourceProjection, supporters: returnedSupporters } as never;
+    });
+    let backupCount = 0;
+    const createBackup = vi.fn(async () => {
+      backupCount += 1;
+      callOrder.push(backupCount === 1 ? "pre-backup" : "post-backup");
+    });
+    const syncService = createPortalSyncService(async (supporterId) => {
+      callOrder.push(`sync:${supporterId}`);
+      return { verifiedAt: "2026-09-09T09:00:00.000Z" };
+    });
+    const monthEndServer = createMonthEndAdminServer(
+      createTestMonthEndService(undefined, processMonthEnd),
+      createBackupExecutionService(createBackup),
+      syncService,
+    );
+    const monthEndPort = await listenOnEphemeralPort(monthEndServer);
+
+    try {
+      const response = await requestOnPort(
+        monthEndPort,
+        "POST",
+        "/api/month-end/process",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toBe('{"status":"ok"}');
+      expect(callOrder).toEqual([
+        "pre-backup",
+        "mutation",
+        "post-backup",
+        "sync:returned-supporter-1",
+        "sync:returned-supporter-2",
+      ]);
+      expect(createBackup).toHaveBeenCalledTimes(2);
+      expect(processMonthEnd).toHaveBeenCalledTimes(1);
+      expect(syncService.syncSupporter).toHaveBeenCalledTimes(2);
+      expect(syncService.syncSupporter).toHaveBeenNthCalledWith(
+        1,
+        "returned-supporter-1",
+      );
+      expect(syncService.syncSupporter).toHaveBeenNthCalledWith(
+        2,
+        "returned-supporter-2",
+      );
+      expect(syncService.syncSupporter).not.toHaveBeenCalledWith(
+        "not-returned-supporter",
+      );
+    } finally {
+      await closeServer(monthEndServer);
+    }
+  });
+
+  it("attempts every returned supporter once after a sync failure and reports a committed failure", async () => {
+    const callOrder: string[] = [];
+    const processMonthEnd = vi.fn(() => {
+      callOrder.push("mutation");
+      return {
+        source: sourceProjection,
+        supporters: [
+          {
+            supporterId: "returned-supporter-1",
+            supportingAtMonthEnd: true,
+            state: {} as never,
+          },
+          {
+            supporterId: "returned-supporter-2",
+            supportingAtMonthEnd: true,
+            state: {} as never,
+          },
+          {
+            supporterId: "returned-supporter-3",
+            supportingAtMonthEnd: true,
+            state: {} as never,
+          },
+        ],
+      } as never;
+    });
+    let backupCount = 0;
+    const createBackup = vi.fn(async () => {
+      backupCount += 1;
+      callOrder.push(backupCount === 1 ? "pre-backup" : "post-backup");
+    });
+    const syncService = createPortalSyncService(async (supporterId) => {
+      callOrder.push(`sync:${supporterId}`);
+      if (supporterId === "returned-supporter-2") {
+        throw new Error("remote detail for returned-supporter-2");
+      }
+      return { verifiedAt: "2026-09-09T09:00:00.000Z" };
+    });
+    const monthEndServer = createMonthEndAdminServer(
+      createTestMonthEndService(undefined, processMonthEnd),
+      createBackupExecutionService(createBackup),
+      syncService,
+    );
+    const monthEndPort = await listenOnEphemeralPort(monthEndServer);
+
+    try {
+      const response = await requestOnPort(
+        monthEndPort,
+        "POST",
+        "/api/month-end/process",
+        validBody,
+      );
+
+      expect(response.statusCode).toBe(502);
+      expect(response.body).toBe(
+        '{"error":"portal_sync_failed_after_update"}',
+      );
+      expect(callOrder).toEqual([
+        "pre-backup",
+        "mutation",
+        "post-backup",
+        "sync:returned-supporter-1",
+        "sync:returned-supporter-2",
+        "sync:returned-supporter-3",
+      ]);
+      expect(createBackup).toHaveBeenCalledTimes(2);
+      expect(processMonthEnd).toHaveBeenCalledTimes(1);
+      expect(syncService.syncSupporter).toHaveBeenCalledTimes(3);
+      for (const value of [
+        "returned-supporter-1",
+        "returned-supporter-2",
+        "returned-supporter-3",
+        "remote detail",
+        "synthetic-relationship-id",
+        "synthetic display name",
+        "synthetic-updated-at",
+        "private.sqlite",
+        "token",
+        "hash",
+        "configuration",
+        "diagnostics",
+      ]) {
+        expect(response.body).not.toContain(value);
+      }
+    } finally {
+      await closeServer(monthEndServer);
+    }
+  });
+
   it("does not create a post-backup after a month-end conflict", async () => {
     const processMonthEnd = vi.fn(() => {
       throw new MonthEndSourceConflictError();
     });
     const createBackup = vi.fn(async () => {});
+    const syncService = createPortalSyncService();
     const monthEndServer = createMonthEndAdminServer(
       createTestMonthEndService(undefined, processMonthEnd),
       createBackupExecutionService(createBackup),
+      syncService,
     );
     const monthEndPort = await listenOnEphemeralPort(monthEndServer);
 
@@ -2918,6 +3133,7 @@ describe("month-end routes", () => {
       expect(response.statusCode).toBe(409);
       expect(response.body).toBe('{"error":"month_end_conflict"}');
       expect(createBackup).toHaveBeenCalledTimes(1);
+      expect(syncService.syncSupporter).not.toHaveBeenCalled();
     } finally {
       await closeServer(monthEndServer);
     }
@@ -2935,9 +3151,11 @@ describe("month-end routes", () => {
         throw new Error("private post-backup diagnostics");
       }
     });
+    const syncService = createPortalSyncService();
     const monthEndServer = createMonthEndAdminServer(
       createTestMonthEndService(undefined, processMonthEnd),
       createBackupExecutionService(createBackup),
+      syncService,
     );
     const monthEndPort = await listenOnEphemeralPort(monthEndServer);
 
@@ -2953,6 +3171,7 @@ describe("month-end routes", () => {
       expect(response.body).toBe('{"error":"backup_failed_after_update"}');
       expect(processMonthEnd).toHaveBeenCalledTimes(1);
       expect(createBackup).toHaveBeenCalledTimes(2);
+      expect(syncService.syncSupporter).not.toHaveBeenCalled();
     } finally {
       await closeServer(monthEndServer);
     }
@@ -4277,8 +4496,8 @@ describe("admin server configuration", () => {
       expect(sourceResponse.body).toBe(
         JSON.stringify({ source: monthEndSource }),
       );
-      expect(processResponse.statusCode).toBe(200);
-      expect(processResponse.body).toBe('{"status":"ok"}');
+      expect(processResponse.statusCode).toBe(503);
+      expect(processResponse.body).toBe('{"error":"portal_not_configured"}');
       expect(createListService).toHaveBeenCalledTimes(1);
       expect(createDeliveryService).toHaveBeenCalledTimes(1);
       expect(createInspectionService).toHaveBeenCalledTimes(1);
@@ -4292,10 +4511,9 @@ describe("admin server configuration", () => {
       expect(createBackupExecutionServiceFactory).toHaveBeenCalledWith(store);
       expect(backupResponse.statusCode).toBe(200);
       expect(backupResponse.body).toBe('{"status":"ok"}');
-      expect(backupExecutionService.createBackup).toHaveBeenCalledTimes(3);
+      expect(backupExecutionService.createBackup).toHaveBeenCalledTimes(1);
       expect(getMonthEndSource).toHaveBeenCalledTimes(1);
-      expect(processMonthEnd).toHaveBeenCalledTimes(1);
-      expect(processMonthEnd).toHaveBeenCalledWith("2026-09", 7);
+      expect(processMonthEnd).not.toHaveBeenCalled();
     } finally {
       if (productionServer !== undefined && productionServer.listening) {
         await closeServer(productionServer);
@@ -5225,6 +5443,15 @@ describe("admin server configuration", () => {
     expect(monthInput.value).toBe("");
     expect(processStatus.textContent).toBe("月末処理を完了しました。");
 
+    const sourceDetailsBeforePortalConfigurationFailure = sourceDetails.children.map(
+      (child) => child.textContent,
+    );
+    const sourceReloadsBeforePortalConfigurationFailure = fetchCalls.filter(
+      ({ url }) => url === "/api/month-end/source",
+    ).length;
+    const supporterReloadsBeforePortalConfigurationFailure = fetchCalls.filter(
+      ({ url }) => url === "/api/supporters",
+    ).length;
     const submit = async (status: number, body: unknown): Promise<void> => {
       monthInput.value = "2026-10";
       monthInput.dispatch("input");
@@ -5235,11 +5462,38 @@ describe("admin server configuration", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
     };
 
+    await submit(503, { error: "portal_not_configured" });
+    expect(monthInput.value).toBe("2026-10");
+    expect(processStatus.textContent).toBe(
+      "ポータル連携を設定してから、月末処理をもう一度実行してください。月末処理はまだ実行されていません。",
+    );
+    expect(sourceDetails.children.map((child) => child.textContent)).toEqual(
+      sourceDetailsBeforePortalConfigurationFailure,
+    );
+    expect(
+      fetchCalls.filter(({ url }) => url === "/api/month-end/source"),
+    ).toHaveLength(sourceReloadsBeforePortalConfigurationFailure);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(
+      supporterReloadsBeforePortalConfigurationFailure,
+    );
+
+    await submit(503, {
+      error: "portal_not_configured",
+      privateDiagnostic: "synthetic-secret",
+    });
+    expect(processStatus.textContent).toBe(
+      "月末処理を実行できませんでした。入力内容と現在の状態を確認して再試行してください。",
+    );
+    await submit(503, { error: "wrong_error" });
+    expect(processStatus.textContent).toBe(
+      "月末処理を実行できませんでした。入力内容と現在の状態を確認して再試行してください。",
+    );
+
     monthInput.value = "2026-13";
     monthInput.dispatch("input");
     processButton.click();
     expect(processStatus.textContent).toBe("処理対象月を確認してください。");
-    expect(fetchCalls.filter(({ url }) => url === "/api/month-end/process")).toHaveLength(1);
+    expect(fetchCalls.filter(({ url }) => url === "/api/month-end/process")).toHaveLength(4);
 
     monthInput.value = "2026-10";
     monthInput.dispatch("input");
@@ -5271,10 +5525,34 @@ describe("admin server configuration", () => {
       "処理前バックアップを作成できなかったため、月末処理は実行されていません。バックアップ設定を確認してから再実行してください。",
     );
 
+    await submit(502, { error: "portal_sync_failed_after_update" });
+    expect(monthInput.value).toBe("");
+    expect(processStatus.textContent).toBe(
+      "月末処理はすでに完了しています。同じ月末処理を再実行しないでください。暗号化された処理前・処理後バックアップは作成済みです。対象の支援者は一覧の「Cloudflareへ同期」を実行してください。",
+    );
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(
+      4,
+    );
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-sync")).toHaveLength(
+      0,
+    );
+
+    await submit(502, {
+      error: "portal_sync_failed_after_update",
+      privateDiagnostic: "synthetic-secret",
+    });
+    expect(processStatus.textContent).toBe(
+      "月末処理を実行できませんでした。入力内容と現在の状態を確認して再試行してください。",
+    );
+    await submit(500, { error: "portal_sync_failed_after_update" });
+    expect(processStatus.textContent).toBe(
+      "月末処理を実行できませんでした。入力内容と現在の状態を確認して再試行してください。",
+    );
+
     await submit(500, { error: "backup_failed_after_update" });
     expect(monthInput.value).toBe("");
     expect(processStatus.textContent).toBe(
-      "月末処理は完了していますが、処理後バックアップを作成できませんでした。同じ月末処理を再実行しないでください。「今すぐバックアップを作成」を実行してください。",
+      "月末処理は完了していますが、処理後バックアップを作成できませんでした。同じ月末処理を再実行しないでください。「今すぐバックアップを作成」を実行してください。Cloudflare自動同期は試行されていません。バックアップ復旧後に対象の支援者で「Cloudflareへ同期」を実行してください。",
     );
 
     monthInput.value = "2026-11";
