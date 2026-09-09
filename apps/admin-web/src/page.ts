@@ -175,6 +175,13 @@ function updateBackupDestinationButton() {
   }
 }
 
+function markBackupDestinationUnavailable() {
+  backupDestinationState.loaded = true;
+  backupDestinationState.directory = null;
+  renderBackupDestinationDirectory();
+  updateBackupDestinationButton();
+}
+
 async function loadBackupDestination() {
   if (backupDestinationUi === null) {
     return;
@@ -267,6 +274,14 @@ function isExactBackupDestinationRequired(value) {
   );
 }
 
+function isExactBackupFailedAfterUpdate(value) {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["error"]) &&
+    value.error === "backup_failed_after_update"
+  );
+}
+
 async function createBackup() {
   if (
     backupDestinationUi === null ||
@@ -303,9 +318,7 @@ async function createBackup() {
     }
 
     if (response.status === 409 && isExactBackupDestinationRequired(result)) {
-      backupDestinationState.loaded = true;
-      backupDestinationState.directory = null;
-      renderBackupDestinationDirectory();
+      markBackupDestinationUnavailable();
       backupDestinationUi.createStatus.textContent =
         "バックアップ先を選択してから、もう一度お試しください。";
       return;
@@ -673,6 +686,12 @@ async function submitLotteryResults(listStatus, supporterList) {
     }
 
     if (response.status === 409) {
+      if (isExactBackupDestinationRequired(responseBody)) {
+        markBackupDestinationUnavailable();
+        lotteryUi.resultStatus.textContent =
+          "バックアップ先を選択してから、抽選結果をもう一度反映してください。";
+        return;
+      }
       if (!isExactLotteryConflict(responseBody)) {
         throw new Error("invalid lottery result conflict");
       }
@@ -680,6 +699,14 @@ async function submitLotteryResults(listStatus, supporterList) {
       await loadSupporters(listStatus, supporterList);
       lotteryUi.resultStatus.textContent =
         "支援者状態または処理月が変わっています。参加者と時刻を確認してから再試行してください。";
+      return;
+    }
+
+    if (response.status === 500 && isExactBackupFailedAfterUpdate(responseBody)) {
+      lotteryUi.occurredAtInput.value = "";
+      await loadSupporters(listStatus, supporterList);
+      lotteryUi.resultStatus.textContent =
+        "抽選結果は反映済みですが、バックアップを作成できませんでした。抽選結果を再登録しないでください。「今すぐバックアップを作成」を実行してください。";
       return;
     }
 
@@ -1256,12 +1283,27 @@ async function migrateExistingSupporter(
     }
 
     if (response.status === 409) {
+      if (isExactBackupDestinationRequired(responseBody)) {
+        markBackupDestinationUnavailable();
+        status.textContent =
+          "バックアップ先を選択してから、旧管理レベルでの登録をもう一度実行してください。";
+        return;
+      }
       if (isExistingSupporterMigrationConflictResponse(responseBody)) {
         status.textContent =
           "すでに登録済みの可能性があります。一覧を確認してから再試行してください。";
         return;
       }
       throw new Error("invalid existing supporter migration conflict");
+    }
+    if (response.status === 500 && isExactBackupFailedAfterUpdate(responseBody)) {
+      control.succeeded = true;
+      if (listStatus !== null && supporterList !== null) {
+        await loadSupporters(listStatus, supporterList);
+      }
+      status.textContent =
+        "支援者の登録は完了しましたが、バックアップを作成できませんでした。同じ支援者を再登録しないでください。「今すぐバックアップを作成」を実行してください。";
+      return;
     }
     if (!response.ok) {
       throw new Error("existing supporter migration request failed");
@@ -1452,6 +1494,37 @@ async function importSelectedPdf(
       const reason = validatePdfImportBlockedResponse(await response.json());
       status.textContent = PDF_IMPORT_BLOCKED_MESSAGES[reason];
       return;
+    }
+    if (response.status === 409) {
+      const responseBody = await response.json();
+      if (isExactBackupDestinationRequired(responseBody)) {
+        markBackupDestinationUnavailable();
+        status.textContent =
+          "バックアップ先を選択してから、このPDFをもう一度支援者状態に反映してください。";
+        return;
+      }
+      throw new Error("invalid PDF import conflict");
+    }
+    if (response.status === 500) {
+      const responseBody = await response.json();
+      if (isExactBackupFailedAfterUpdate(responseBody)) {
+        state.previewedFile = null;
+        state.migrationControls = [];
+        result.replaceChildren();
+        updatePdfActionButtons(
+          fileInput,
+          inspectionButton,
+          importButton,
+          state,
+        );
+        if (listStatus !== null && supporterList !== null) {
+          await loadSupporters(listStatus, supporterList);
+        }
+        status.textContent =
+          "支援者状態は反映済みですが、バックアップを作成できませんでした。同じPDFを再度反映しないでください。「今すぐバックアップを作成」を実行してください。";
+        return;
+      }
+      throw new Error("PDF import request failed");
     }
     if (!response.ok) {
       throw new Error("PDF import request failed");

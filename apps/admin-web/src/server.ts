@@ -189,6 +189,9 @@ const BACKUP_DESTINATION_REQUIRED_BODY = JSON.stringify({
 const BACKUP_FAILED_BODY = JSON.stringify({
   error: "backup_failed",
 });
+const BACKUP_FAILED_AFTER_UPDATE_BODY = JSON.stringify({
+  error: "backup_failed_after_update",
+});
 const BACKUP_SUCCESS_BODY = JSON.stringify({ status: "ok" });
 const FANBOX_IMPORT_BLOCKED_REASONS: ReadonlySet<string> = new Set([
   "empty_relationships",
@@ -300,6 +303,78 @@ function sendPortalJson(
     ...SUCCESS_HEADERS,
     "Content-Type": "application/json; charset=UTF-8",
   });
+}
+
+function ensurePostMutationBackupReady(
+  response: ServerResponse,
+  backupDestinationService: BackupDestinationService | undefined,
+  backupExecutionService: BackupExecutionService | undefined,
+): boolean {
+  if (
+    backupDestinationService === undefined ||
+    backupExecutionService === undefined
+  ) {
+    sendPortalJson(response, 500, BACKUP_UNAVAILABLE_BODY);
+    return false;
+  }
+
+  let directory: string | null;
+  try {
+    directory = backupDestinationService.getBackupDestinationDirectory();
+  } catch {
+    sendPortalJson(response, 500, BACKUP_FAILED_BODY);
+    return false;
+  }
+
+  if (directory === null) {
+    sendPortalJson(response, 409, BACKUP_DESTINATION_REQUIRED_BODY);
+    return false;
+  }
+
+  return true;
+}
+
+async function createPostMutationBackup(
+  response: ServerResponse,
+  backupExecutionService: BackupExecutionService | undefined,
+): Promise<boolean> {
+  if (backupExecutionService === undefined) {
+    sendPortalJson(response, 500, BACKUP_FAILED_AFTER_UPDATE_BODY);
+    return false;
+  }
+
+  try {
+    await backupExecutionService.createBackup();
+  } catch {
+    sendPortalJson(response, 500, BACKUP_FAILED_AFTER_UPDATE_BODY);
+    return false;
+  }
+
+  return true;
+}
+
+async function createMonthEndPreProcessingBackup(
+  response: ServerResponse,
+  backupExecutionService: BackupExecutionService | undefined,
+): Promise<boolean> {
+  if (backupExecutionService === undefined) {
+    sendPortalJson(response, 500, BACKUP_UNAVAILABLE_BODY);
+    return false;
+  }
+
+  try {
+    await backupExecutionService.createBackup();
+  } catch (error: unknown) {
+    if (error instanceof BackupDestinationNotConfiguredError) {
+      sendPortalJson(response, 409, BACKUP_DESTINATION_REQUIRED_BODY);
+      return false;
+    }
+
+    sendPortalJson(response, 500, BACKUP_FAILED_BODY);
+    return false;
+  }
+
+  return true;
 }
 
 function readRequestBody(request: IncomingMessage): Promise<string> {
@@ -621,7 +696,10 @@ async function sendPdfImport(
   request: IncomingMessage,
   response: ServerResponse,
   inspectionService: FanboxPdfInspectionService | undefined,
+  comparisonService: FanboxSupporterComparisonService | undefined,
   importService: FanboxSupporterImportService | undefined,
+  backupDestinationService: BackupDestinationService | undefined,
+  backupExecutionService: BackupExecutionService | undefined,
 ): Promise<void> {
   if (!hasPdfContentType(request)) {
     request.resume();
@@ -665,8 +743,39 @@ async function sendPdfImport(
     return;
   }
 
+  if (comparisonService === undefined) {
+    sendPortalJson(response, 500, PDF_COMPARISON_UNAVAILABLE_BODY);
+    return;
+  }
+
+  let preComparison: FanboxPdfSupporterComparison;
+  try {
+    preComparison = comparisonService.compareInspection(inspection);
+  } catch {
+    sendPortalJson(response, 500, PDF_COMPARISON_FAILED_BODY);
+    return;
+  }
+
+  if (
+    preComparison.presentSupporters.some(({ status }) => status === "new") &&
+    !ensurePostMutationBackupReady(
+      response,
+      backupDestinationService,
+      backupExecutionService,
+    )
+  ) {
+    return;
+  }
+
   try {
     const result = importService.applyInspection(inspection);
+    if (
+      result.comparison.presentSupporters.some(({ status }) => status === "new") &&
+      !(await createPostMutationBackup(response, backupExecutionService))
+    ) {
+      return;
+    }
+
     sendPortalJson(
       response,
       200,
@@ -753,6 +862,8 @@ async function sendExistingSupporterMigration(
   request: IncomingMessage,
   response: ServerResponse,
   migrationService: ExistingSupporterMigrationService | undefined,
+  backupDestinationService: BackupDestinationService | undefined,
+  backupExecutionService: BackupExecutionService | undefined,
 ): Promise<void> {
   let body: string;
   try {
@@ -773,6 +884,16 @@ async function sendExistingSupporterMigration(
     return;
   }
 
+  if (
+    !ensurePostMutationBackupReady(
+      response,
+      backupDestinationService,
+      backupExecutionService,
+    )
+  ) {
+    return;
+  }
+
   try {
     migrationService.registerExistingSupporter({
       fanboxRelationshipId: input.fanboxRelationshipId,
@@ -788,6 +909,10 @@ async function sendExistingSupporterMigration(
     }
 
     sendPortalJson(response, 500, EXISTING_SUPPORTER_MIGRATION_FAILED_BODY);
+    return;
+  }
+
+  if (!(await createPostMutationBackup(response, backupExecutionService))) {
     return;
   }
 
@@ -889,6 +1014,8 @@ async function sendLotteryResults(
   request: IncomingMessage,
   response: ServerResponse,
   lotteryLevelService: LotteryLevelService | undefined,
+  backupDestinationService: BackupDestinationService | undefined,
+  backupExecutionService: BackupExecutionService | undefined,
 ): Promise<void> {
   let body: string;
   try {
@@ -909,6 +1036,16 @@ async function sendLotteryResults(
     return;
   }
 
+  if (
+    !ensurePostMutationBackupReady(
+      response,
+      backupDestinationService,
+      backupExecutionService,
+    )
+  ) {
+    return;
+  }
+
   try {
     lotteryLevelService.recordLotteryResults(input.participants, input.occurredAt);
   } catch (error: unknown) {
@@ -921,6 +1058,10 @@ async function sendLotteryResults(
     }
 
     sendPortalJson(response, 500, LOTTERY_RESULT_FAILED_BODY);
+    return;
+  }
+
+  if (!(await createPostMutationBackup(response, backupExecutionService))) {
     return;
   }
 
@@ -1007,6 +1148,7 @@ async function sendMonthEndProcess(
   request: IncomingMessage,
   response: ServerResponse,
   monthEndProcessingService: MonthEndProcessingService | undefined,
+  backupExecutionService: BackupExecutionService | undefined,
 ): Promise<void> {
   let body: string;
   try {
@@ -1027,6 +1169,10 @@ async function sendMonthEndProcess(
     return;
   }
 
+  if (!(await createMonthEndPreProcessingBackup(response, backupExecutionService))) {
+    return;
+  }
+
   try {
     monthEndProcessingService.processMonthEnd(
       input.monthKey,
@@ -1044,6 +1190,10 @@ async function sendMonthEndProcess(
     }
 
     sendPortalJson(response, 500, MONTH_END_FAILED_BODY);
+    return;
+  }
+
+  if (!(await createPostMutationBackup(response, backupExecutionService))) {
     return;
   }
 
@@ -1246,7 +1396,13 @@ export function createAdminServer(
         return;
       }
 
-      void sendLotteryResults(request, response, lotteryLevelService);
+      void sendLotteryResults(
+        request,
+        response,
+        lotteryLevelService,
+        backupDestinationService,
+        backupExecutionService,
+      );
       return;
     }
 
@@ -1256,7 +1412,12 @@ export function createAdminServer(
         return;
       }
 
-      void sendMonthEndProcess(request, response, monthEndProcessingService);
+      void sendMonthEndProcess(
+        request,
+        response,
+        monthEndProcessingService,
+        backupExecutionService,
+      );
       return;
     }
 
@@ -1285,7 +1446,10 @@ export function createAdminServer(
         request,
         response,
         fanboxPdfInspectionService,
+        fanboxSupporterComparisonService,
         fanboxSupporterImportService,
+        backupDestinationService,
+        backupExecutionService,
       );
       return;
     }
@@ -1300,6 +1464,8 @@ export function createAdminServer(
         request,
         response,
         existingSupporterMigrationService,
+        backupDestinationService,
+        backupExecutionService,
       );
       return;
     }
