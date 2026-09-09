@@ -237,6 +237,7 @@ function ephemeralPort(): Promise<number> {
 const sampleSupporters: readonly SupporterListItem[] = Object.freeze([
   Object.freeze({
     id: "internal-supporter-id",
+    confirmationId: "3630-5118-9AE4-0646",
     displayName: "支援者A",
     currentLevel: 2,
     nextLotteryEntryCount: 3,
@@ -247,6 +248,7 @@ const sampleSupporters: readonly SupporterListItem[] = Object.freeze([
   }),
   Object.freeze({
     id: "internal-supporter-id-2",
+    confirmationId: "9375-B3F5-FC05-7CB9",
     displayName: "支援者B",
     currentLevel: 0,
     nextLotteryEntryCount: 1,
@@ -5814,6 +5816,7 @@ describe("admin server configuration", () => {
               supporters: [
                 {
                   id: "internal-supporter-id",
+                  confirmationId: "3630-5118-9AE4-0646",
                   displayName: "支援者A",
                   currentLevel: 2,
                   nextLotteryEntryCount: 3,
@@ -5853,13 +5856,14 @@ describe("admin server configuration", () => {
 
     const row = elements.get("list")?.children[0];
     expect(row).toBeDefined();
-    const syncButton = row?.children[8];
-    const syncStatus = row?.children[9];
-    const portalButton = row?.children[6];
-    const sentButton = row?.children[10];
+    const syncButton = row?.children[9];
+    const syncStatus = row?.children[10];
+    const portalButton = row?.children[7];
+    const sentButton = row?.children[11];
     expect(syncButton?.textContent).toBe("Cloudflareへ同期");
     expect(syncButton?.disabled).toBe(false);
     expect(sentButton?.disabled).toBe(true);
+    expect(row?.children[1]?.textContent).toBe("確認ID: 3630-5118-9AE4-0646");
 
     syncButton?.click();
     syncButton?.click();
@@ -5956,6 +5960,7 @@ describe("admin server configuration", () => {
         supporters: [
           {
             id: "opaque-supporter-id",
+            confirmationId: "598E-043E-C2AC-06BE",
             displayName: "対象支援者",
             currentLevel: 0,
             nextLotteryEntryCount: 1,
@@ -5970,6 +5975,7 @@ describe("admin server configuration", () => {
         supporters: [
           {
             id: "opaque-supporter-id",
+            confirmationId: "598E-043E-C2AC-06BE",
             displayName: "対象支援者",
             currentLevel: 0,
             nextLotteryEntryCount: 1,
@@ -6546,6 +6552,7 @@ describe("admin server configuration", () => {
     const refreshedSupporters: readonly SupporterListItem[] = [
       Object.freeze({
         id: "internal-supporter-id",
+        confirmationId: "3630-5118-9AE4-0646",
         displayName: "支援者A・更新後",
         currentLevel: 4,
         nextLotteryEntryCount: 5,
@@ -6556,6 +6563,7 @@ describe("admin server configuration", () => {
       }),
       Object.freeze({
         id: "internal-supporter-id-2",
+        confirmationId: "9375-B3F5-FC05-7CB9",
         displayName: "支援者B・更新後",
         currentLevel: 1,
         nextLotteryEntryCount: 2,

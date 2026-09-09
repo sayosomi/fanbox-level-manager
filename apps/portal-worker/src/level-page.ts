@@ -26,6 +26,10 @@ const LEVEL_PAGE_HTML = `<!doctype html>
         <h2 id="summary-heading">現在の情報</h2>
         <dl class="summary-list">
           <div class="summary-item">
+            <dt>確認ID</dt>
+            <dd id="confirmation-id">—</dd>
+          </div>
+          <div class="summary-item">
             <dt>現在のレベル</dt>
             <dd id="current-level">—</dd>
           </div>
@@ -52,7 +56,9 @@ const LEVEL_PAGE_SCRIPT = String.raw`(() => {
   "use strict";
 
   const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+  const CONFIRMATION_ID_PATTERN = /^[0-9A-F]{4}(?:-[0-9A-F]{4}){3}$/;
   const SNAPSHOT_KEYS = [
+    "confirmationId",
     "currentLevel",
     "nextLotteryEntryCount",
     "verifiedAt",
@@ -74,6 +80,7 @@ const LEVEL_PAGE_SCRIPT = String.raw`(() => {
   ]);
 
   const status = document.getElementById("status");
+  const confirmationId = document.getElementById("confirmation-id");
   const currentLevel = document.getElementById("current-level");
   const nextLotteryEntryCount = document.getElementById(
     "next-lottery-entry-count",
@@ -161,6 +168,8 @@ const LEVEL_PAGE_SCRIPT = String.raw`(() => {
     if (
       !isRecord(value) ||
       !hasExactKeys(value, SNAPSHOT_KEYS) ||
+      typeof value.confirmationId !== "string" ||
+      !CONFIRMATION_ID_PATTERN.test(value.confirmationId) ||
       !isValidLevel(value.currentLevel) ||
       !isValidLevel(value.nextLotteryEntryCount) ||
       value.nextLotteryEntryCount !== value.currentLevel + 1 ||
@@ -180,6 +189,7 @@ const LEVEL_PAGE_SCRIPT = String.raw`(() => {
     }
 
     return {
+      confirmationId: value.confirmationId,
       currentLevel: value.currentLevel,
       nextLotteryEntryCount: value.nextLotteryEntryCount,
       verifiedAt: value.verifiedAt,
@@ -254,11 +264,13 @@ const LEVEL_PAGE_SCRIPT = String.raw`(() => {
     if (
       !(currentLevel instanceof HTMLElement) ||
       !(nextLotteryEntryCount instanceof HTMLElement) ||
-      !(verifiedAt instanceof HTMLElement)
+      !(verifiedAt instanceof HTMLElement) ||
+      !(confirmationId instanceof HTMLElement)
     ) {
       throw new Error("missing summary element");
     }
 
+    confirmationId.textContent = snapshot.confirmationId;
     currentLevel.textContent = "Lv." + snapshot.currentLevel;
     nextLotteryEntryCount.textContent = snapshot.nextLotteryEntryCount + "口";
     verifiedAt.textContent = finalUpdate;

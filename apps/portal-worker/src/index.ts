@@ -50,6 +50,7 @@ type SetSupporterTokenRequest = Readonly<{
 }>;
 
 type SupporterReadRow = Readonly<{
+  supporter_id: string;
   current_level: number;
   verified_at: string;
 }>;
@@ -292,6 +293,22 @@ async function hashToken(value: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (byte) =>
     byte.toString(16).padStart(2, "0"),
   ).join("");
+}
+
+async function deriveSupporterConfirmationId(
+  supporterId: string,
+): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(supporterId),
+  );
+  const hex = Array.from(new Uint8Array(digest).slice(0, 8), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  )
+    .join("")
+    .toUpperCase();
+
+  return `${hex.slice(0, 4)}-${hex.slice(4, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}`;
 }
 
 async function authenticateAdminRequest(
@@ -561,6 +578,7 @@ async function handleMyLevelRequest(
       env.DB
         .prepare(
           `SELECT
+             s.supporter_id,
              s.current_level,
              s.verified_at
            FROM portal_supporters AS s
@@ -600,6 +618,7 @@ async function handleMyLevelRequest(
     const history = historyResult.results as HistoryReadRow[];
     return jsonResponse(
       {
+        confirmationId: await deriveSupporterConfirmationId(supporter.supporter_id),
         currentLevel: supporter.current_level,
         nextLotteryEntryCount: supporter.current_level + 1,
         verifiedAt: supporter.verified_at,

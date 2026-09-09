@@ -113,10 +113,19 @@ The personal URL:
 - should be reissued when lost instead of requiring long-term raw-token
   recovery.
 
+The supporter page also includes a stable random-looking confirmation ID for
+Human/supporter cross-checking. It is derived from the local opaque random
+supporter ID, not from FANBOX or pixiv identity, and is non-secret. The Human
+may include it with the personal URL in the individual message. Authentication
+continues to rely only on the long random personal URL token. Cloudflare need
+not persist the confirmation ID separately because it can derive it from the
+opaque supporter ID already stored for the portal.
+
 ## Supporter page
 
 The supporter page shows at least:
 
+- stable random-looking confirmation ID;
 - current lottery level;
 - the next-lottery entry count, derived as `level + 1`;
 - final update time; and

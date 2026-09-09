@@ -14,6 +14,7 @@ const FIRST_TIMESTAMP = "2026-09-05T00:00:00.000Z";
 const SECOND_TIMESTAMP = "2026-09-06T00:00:00.000Z";
 const RAW_TOKEN_A = "A".repeat(43);
 const RAW_TOKEN_B = "B".repeat(43);
+const FIXTURE_SUPPORTER_ID = "00000000-0000-4000-8000-000000000000";
 const HASH_A =
   "0f007385b6f9d4b7eeb2748605afe1a984a0a3bfa3f014d09e2a784ce9e5cd1a";
 const HASH_B =
@@ -472,6 +473,7 @@ describe("supporter read endpoint", () => {
     expect(response.status).toBe(200);
     const body = await jsonBody(response);
     expect(body).toEqual({
+      confirmationId: "0FE5-2E2A-DA00-4C13",
       currentLevel: 7,
       nextLotteryEntryCount: 8,
       verifiedAt: FIRST_TIMESTAMP,
@@ -493,6 +495,38 @@ describe("supporter read endpoint", () => {
           recordedAt: "2020-01-01T00:00:00.000Z",
         },
       ],
+    });
+  });
+
+  it("derives the exact cross-boundary confirmation fixture from stored supporter ID", async () => {
+    await synchronize(
+      validSyncPayload({ supporterId: FIXTURE_SUPPORTER_ID }),
+    );
+    await setSupporterToken({
+      supporterId: FIXTURE_SUPPORTER_ID,
+      tokenHash: HASH_A,
+    });
+
+    const response = await readMyLevel({ token: RAW_TOKEN_A });
+    expect(response.status).toBe(200);
+    expect(await jsonBody(response)).toMatchObject({
+      confirmationId: "DB80-55E0-E030-7D5A",
+    });
+
+    await synchronize(
+      validSyncPayload({
+        supporterId: FIXTURE_SUPPORTER_ID,
+        currentLevel: 4,
+      }),
+      SECOND_TIMESTAMP,
+    );
+    await setSupporterToken({
+      supporterId: FIXTURE_SUPPORTER_ID,
+      tokenHash: HASH_B,
+    });
+    const repeatedResponse = await readMyLevel({ token: RAW_TOKEN_B });
+    expect(await jsonBody(repeatedResponse)).toMatchObject({
+      confirmationId: "DB80-55E0-E030-7D5A",
     });
   });
 
@@ -539,6 +573,7 @@ describe("supporter read endpoint", () => {
     const history = body.history as Array<Record<string, unknown>>;
 
     expect(Object.keys(body).sort()).toEqual([
+      "confirmationId",
       "currentLevel",
       "history",
       "nextLotteryEntryCount",
@@ -658,6 +693,7 @@ describe("supporter read endpoint", () => {
 
     const response = await readMyLevel({ token: RAW_TOKEN_A });
     expect(await jsonBody(response)).toEqual({
+      confirmationId: "0FE5-2E2A-DA00-4C13",
       currentLevel: 9,
       nextLotteryEntryCount: 10,
       verifiedAt: SECOND_TIMESTAMP,

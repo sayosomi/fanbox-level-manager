@@ -73,6 +73,7 @@ export const ADMIN_PAGE = `<!doctype html>
 export const ADMIN_SCRIPT = `
 const SUPPORTER_KEYS = [
   "id",
+  "confirmationId",
   "displayName",
   "currentLevel",
   "nextLotteryEntryCount",
@@ -95,6 +96,7 @@ const PORTAL_DELIVERY_LABELS = {
 };
 const MONTH_KEY_PATTERN = /^\\d{4}-(0[1-9]|1[0-2])$/;
 const PORTAL_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const CONFIRMATION_ID_PATTERN = /^[0-9A-F]{4}(?:-[0-9A-F]{4}){3}$/;
 const CANONICAL_TIMESTAMP_PATTERN =
   /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/;
 const PDF_IMPORT_BLOCKED_REASONS = new Set([
@@ -761,6 +763,8 @@ function validateSupporterResponse(value) {
 
     if (
       !isNonBlankString(supporter.id) ||
+      typeof supporter.confirmationId !== "string" ||
+      !CONFIRMATION_ID_PATTERN.test(supporter.confirmationId) ||
       !isNonBlankString(supporter.displayName) ||
       !isNonNegativeInteger(supporter.currentLevel) ||
       !isNonNegativeInteger(supporter.nextLotteryEntryCount) ||
@@ -2429,6 +2433,7 @@ function renderLegacyBaselineControl(supporter, listStatus, supporterList) {
 function renderSupporter(supporter, listStatus, supporterList) {
   const item = document.createElement("li");
   const name = document.createElement("h3");
+  const confirmationId = document.createElement("p");
   const level = document.createElement("p");
   const entries = document.createElement("p");
   const supportStatus = document.createElement("p");
@@ -2604,6 +2609,7 @@ function renderSupporter(supporter, listStatus, supporterList) {
   }
 
   name.textContent = supporter.displayName;
+  confirmationId.textContent = "確認ID: " + supporter.confirmationId;
   level.textContent = \`Lv.\${supporter.currentLevel}\`;
   entries.textContent = \`\${supporter.nextLotteryEntryCount}口\`;
   supportStatus.textContent = supporter.supporting ? "支援中" : "支援停止";
@@ -2630,6 +2636,7 @@ function renderSupporter(supporter, listStatus, supporterList) {
   updatePortalDeliveryState();
   item.replaceChildren(
     name,
+    confirmationId,
     level,
     entries,
     supportStatus,

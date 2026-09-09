@@ -52,6 +52,7 @@ describe("supporter list application service", () => {
 
     expect(item).toEqual({
       id: "supporter-1",
+      confirmationId: "E418-717D-4B70-46FA",
       displayName: "A supporter",
       currentLevel: 2,
       nextLotteryEntryCount: 3,
@@ -61,6 +62,7 @@ describe("supporter list application service", () => {
       portalDeliveryState: "not_issued",
     });
     expect(item && Object.keys(item).sort()).toEqual([
+      "confirmationId",
       "currentLevel",
       "displayName",
       "id",
@@ -129,7 +131,7 @@ describe("supporter list application service", () => {
       "sent",
     ]);
     for (const item of service.listSupporters()) {
-      expect(Object.keys(item)).toHaveLength(8);
+      expect(Object.keys(item)).toHaveLength(9);
       expect(item).not.toHaveProperty("tokenHash");
       expect(item).not.toHaveProperty("issuedAt");
       expect(item).not.toHaveProperty("provisionedAt");
