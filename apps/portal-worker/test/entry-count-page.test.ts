@@ -48,9 +48,11 @@ class FakeHTMLElement {
 }
 
 function createFakeDocument() {
+  const status = new FakeHTMLElement("p");
+  status.hidden = true;
   const elements = new Map<string, FakeHTMLElement>(
     [
-      ["status", new FakeHTMLElement("p")],
+      ["status", status],
       ["confirmation-id", new FakeHTMLElement("dd")],
       ["entry-count", new FakeHTMLElement("p")],
       ["verified-at", new FakeHTMLElement("dd")],
@@ -98,8 +100,9 @@ describe("supporter entry-count page", () => {
     );
     expect(html).not.toContain('class="page-intro"');
     expect(html).toContain(
-      '<p id="status" class="status" role="status" aria-live="polite">読み込み中です。</p>',
+      '<p id="status" class="status" role="status" aria-live="polite" hidden></p>',
     );
+    expect(html).not.toContain("読み込み中です。");
     expect((html.match(/id="entry-count"/g) ?? []).length).toBe(1);
     expect(html).toContain(
       '<section class="current-count-hero" aria-labelledby="current-count-label">',
@@ -289,6 +292,7 @@ describe("supporter entry-count page", () => {
           json: () => Promise.resolve(snapshot),
         }),
     );
+    expect(elements.get("status")?.hidden).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -313,7 +317,7 @@ describe("supporter entry-count page", () => {
     expect(elements.get("status")?.hidden).toBe(true);
   });
 
-  it("keeps the loading status visible for invalid links and temporary failures", async () => {
+  it("reveals status only for invalid links and temporary failures", async () => {
     const script = await assetAt("/level/app.js");
 
     const executeScript = new Function(
@@ -330,7 +334,7 @@ describe("supporter entry-count page", () => {
     ) => void;
 
     const invalid = createFakeDocument();
-    invalid.elements.get("status")!.hidden = true;
+    expect(invalid.elements.get("status")?.hidden).toBe(true);
     executeScript(
       invalid.document,
       FakeHTMLElement,
@@ -345,7 +349,7 @@ describe("supporter entry-count page", () => {
     );
 
     const failure = createFakeDocument();
-    failure.elements.get("status")!.hidden = true;
+    expect(failure.elements.get("status")?.hidden).toBe(true);
     executeScript(
       failure.document,
       FakeHTMLElement,
@@ -384,6 +388,18 @@ describe("supporter entry-count page", () => {
     for (const [name, value] of Object.entries(palette)) {
       expect(style).toContain(`--${name}: ${value};`);
     }
+    const normalStatusRule = style.indexOf(".status {");
+    const hiddenStatusRule = style.indexOf(".status[hidden] {");
+    expect(normalStatusRule).toBeGreaterThanOrEqual(0);
+    expect(hiddenStatusRule).toBeGreaterThan(normalStatusRule);
+    expect(style.slice(normalStatusRule, hiddenStatusRule)).toContain(
+      "display: inline-block;",
+    );
+    const hiddenStatusRuleEnd = style.indexOf("}", hiddenStatusRule);
+    expect(hiddenStatusRuleEnd).toBeGreaterThan(hiddenStatusRule);
+    expect(style.slice(hiddenStatusRule, hiddenStatusRuleEnd)).toContain(
+      "display: none;",
+    );
     expect(style).toMatch(/body \{[\s\S]*background-color: var\(--base\);/);
     expect(style).toContain("background-color: var(--surface);");
     expect(style).toContain(".current-count-hero {");
