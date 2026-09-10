@@ -138,7 +138,9 @@ export function createSupporterPortalLinkService(
     },
 
     prepareSupporterPortalLink(supporterId) {
-      return issue(supporterId, false);
+      const hasExistingAccess =
+        accessService.getSupporterPortalAccess(supporterId) !== null;
+      return issue(supporterId, hasExistingAccess);
     },
   };
 }
