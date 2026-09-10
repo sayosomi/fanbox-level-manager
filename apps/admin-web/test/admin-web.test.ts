@@ -590,7 +590,6 @@ describe("admin web server", () => {
       expect(response.body).not.toContain(hook);
     }
     for (const privateDataTerm of [
-      "supporter",
       "relationship",
       "token",
       "cloudflare",
@@ -6048,24 +6047,40 @@ describe("admin server configuration", () => {
     expect(ADMIN_SCRIPT).toContain("支援者はいません。");
     expect(ADMIN_SCRIPT).toContain("支援者一覧を読み込めませんでした。");
     expect(ADMIN_SCRIPT).toContain('createElement("button")');
-    expect(ADMIN_SCRIPT).toContain("ポータルURLを発行・再発行");
-    expect(ADMIN_SCRIPT).toContain("ポータル: 未発行");
-    expect(ADMIN_SCRIPT).toContain("ポータル: 発行済み・未連携");
-    expect(ADMIN_SCRIPT).toContain("ポータル: 発行済み・未送信");
-    expect(ADMIN_SCRIPT).toContain("ポータル: 送信済み");
+    expect(ADMIN_PAGE).toContain('<table id="list">');
+    expect(ADMIN_PAGE).toContain('<tbody id="list-body"');
+    for (const column of ["支援者", "口数", "支援状態", "確認ID", "ポータル", "操作"]) {
+      expect(ADMIN_PAGE).toContain("<th scope=\"col\">" + column + "</th>");
+    }
+    expect(ADMIN_PAGE).toContain('id="supporter-search"');
+    expect(ADMIN_PAGE).toContain('id="supporter-filter"');
+    expect(ADMIN_SCRIPT).toContain("URLを発行");
+    expect(ADMIN_SCRIPT).toContain("未発行");
+    expect(ADMIN_SCRIPT).toContain("未連携");
+    expect(ADMIN_SCRIPT).toContain("未送信");
+    expect(ADMIN_SCRIPT).toContain("送信済み");
     expect(ADMIN_SCRIPT).toContain("送信済みとして記録");
     expect(ADMIN_SCRIPT).toContain("window.confirm");
     expect(ADMIN_SCRIPT).toContain(
-      "新しいポータルURLを発行します。以前のURLがある場合、以前のURLは現在のURLではなくなります。続行しますか？",
+      "以前の個人用ポータルURLは無効になります。新しいURLを再発行します。続行しますか？",
     );
-    expect(ADMIN_SCRIPT).toContain('fetch("/api/portal-link", {');
-    expect(ADMIN_SCRIPT).toContain('body: JSON.stringify({ supporterId })');
+    expect(ADMIN_SCRIPT).toContain('fetch("/api/portal-link/issue", {');
+    expect(ADMIN_SCRIPT).toContain('fetch("/api/portal-link/reissue", {');
+    expect(ADMIN_SCRIPT).toContain('fetch("/api/portal-link/provision", {');
+    expect(ADMIN_SCRIPT).toContain('fetch("/api/portal-link/current", {');
+    expect(ADMIN_SCRIPT).not.toContain('fetch("/api/portal-link", {');
     expect(ADMIN_SCRIPT).toContain('hasExactKeys(value, ["portalUrl", "verifiedAt"])');
+    expect(ADMIN_SCRIPT).toContain('hasExactKeys(value, ["portalUrl"])');
+    expect(ADMIN_SCRIPT).toContain("validateCurrentPortalLinkResponse");
     expect(ADMIN_SCRIPT).toContain("CANONICAL_TIMESTAMP_PATTERN");
     expect(ADMIN_SCRIPT).toContain('portalUrl.pathname !== "/level"');
     expect(ADMIN_SCRIPT).toContain("PORTAL_TOKEN_PATTERN");
     expect(ADMIN_SCRIPT).toContain("ポータル連携が設定されていません。");
-    expect(ADMIN_SCRIPT).toContain("ポータルURLを準備できませんでした。");
+    expect(ADMIN_SCRIPT).toContain("URLを発行できませんでした。");
+    expect(ADMIN_SCRIPT).toContain("URL保存なし");
+    expect(ADMIN_SCRIPT).toContain("navigator.clipboard.writeText");
+    expect(ADMIN_SCRIPT).toContain("確認ID: ");
+    expect(ADMIN_SCRIPT).toContain("\\n");
     expect(ADMIN_SCRIPT).toContain('fetch("/api/portal-link/sent", {');
     expect(ADMIN_SCRIPT).toContain(
       "この操作はメッセージを送信しません。ポータルURLをすでに本人へ送信済みの場合のみ記録します。続行しますか？",
@@ -6075,28 +6090,23 @@ describe("admin server configuration", () => {
     );
     expect(ADMIN_SCRIPT).toContain('value.portalDeliveryState !== "sent"');
     expect(ADMIN_SCRIPT).toContain(
-      "ポータル状態が更新されています。一覧を再読み込みしてください。",
+      "ポータル状態が変わっています。最新の状態を確認してください。",
     );
     expect(ADMIN_SCRIPT).toContain("ポータル送信状態を記録できませんでした。");
-    expect(ADMIN_SCRIPT).toContain('portalDeliveryState = "provisioned"');
-    expect(ADMIN_SCRIPT).toContain('portalDeliveryState = "sent"');
     expect(ADMIN_SCRIPT).toContain("portalOperationActive");
-    expect(ADMIN_SCRIPT).toContain("portalLinkStatus");
+    expect(ADMIN_SCRIPT).toContain("portalStatus");
     expect(ADMIN_SCRIPT).toContain("sentStatus");
-    expect(ADMIN_SCRIPT).toContain("秘密のURLは保存されません");
-    expect(ADMIN_SCRIPT).toContain("secretUrl.textContent = portalUrl");
-    expect(ADMIN_SCRIPT).not.toContain('createElement("a")');
+    expect(ADMIN_SCRIPT).toContain('createElement("a")');
+    expect(ADMIN_SCRIPT).toContain('target = "_blank"');
+    expect(ADMIN_SCRIPT).toContain('rel = "noopener noreferrer"');
+    expect(ADMIN_SCRIPT).toContain('referrerPolicy = "no-referrer"');
     expect(ADMIN_SCRIPT).not.toContain("dataset.supporterId");
     expect(ADMIN_SCRIPT).not.toContain("localStorage");
     expect(ADMIN_SCRIPT).not.toContain("sessionStorage");
     expect(ADMIN_SCRIPT).not.toContain("history.");
     expect(ADMIN_SCRIPT).not.toContain("console.");
-    expect(ADMIN_SCRIPT.indexOf('window.confirm')).toBeLessThan(
-      ADMIN_SCRIPT.indexOf('fetch("/api/portal-link", {'),
-    );
-    expect(ADMIN_SCRIPT.indexOf('window.confirm')).toBeLessThan(
-      ADMIN_SCRIPT.indexOf('fetch("/api/portal-link/sent", {'),
-    );
+    expect(ADMIN_SCRIPT).not.toContain("secretUrl.textContent");
+    expect(ADMIN_SCRIPT).not.toContain("textContent = portalUrl");
     expect(ADMIN_SCRIPT).toContain("createElement");
     expect(ADMIN_SCRIPT).toContain("textContent");
     expect(ADMIN_SCRIPT).toContain("replaceChildren");
@@ -6300,14 +6310,18 @@ describe("admin server configuration", () => {
 
     const row = elements.get("list")?.children[0];
     expect(row).toBeDefined();
-    const syncButton = row?.children[8];
-    const syncStatus = row?.children[9];
-    const portalButton = row?.children[6];
-    const sentButton = row?.children[10];
+    const operationCell = row?.children[5];
+    const secondaryActions = operationCell?.children[2]?.children[1];
+    const syncButton = secondaryActions?.children[1];
+    const syncStatus = secondaryActions?.children[2];
+    const portalButton = operationCell?.children[0]?.children[0];
+    const sentButton = secondaryActions?.children[3];
     expect(syncButton?.textContent).toBe("Cloudflareへ同期");
     expect(syncButton?.disabled).toBe(false);
     expect(sentButton?.disabled).toBe(true);
-    expect(row?.children[1]?.textContent).toBe("確認ID: 3630-5118-9AE4-0646");
+    expect(row?.children[3]?.children[0]?.textContent).toContain(
+      "3630-5118-9AE4-0646",
+    );
 
     syncButton?.click();
     syncButton?.click();
@@ -6490,7 +6504,7 @@ describe("admin server configuration", () => {
 
     const list = elements.get("list");
     const row = list?.children[0];
-    const control = row?.children[row.children.length - 1];
+    const control = row?.children[5]?.children[2]?.children[1]?.children.at(-1);
     const levelInput = control?.children[1];
     const baselineButton = control?.children[2];
     expect(levelInput?.value).toBe("");
@@ -6531,6 +6545,384 @@ describe("admin server configuration", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(visibleText(list as FakeElement)).not.toContain("旧管理口数を設定");
+  });
+
+  it("renders a local table and drives the explicit portal state machine", async () => {
+    type FakeListener = () => void;
+    type FakeResponse = Readonly<{
+      ok: boolean;
+      status: number;
+      json: () => Promise<unknown>;
+    }>;
+
+    class FakeElement {
+      readonly children: FakeElement[] = [];
+      readonly listeners = new Map<string, FakeListener>();
+      readonly attributes = new Map<string, string>();
+      readonly dataset: Record<string, string> = {};
+      disabled = false;
+      tagName = "";
+      textContent = "";
+      type = "";
+      value = "";
+      href = "";
+      target = "";
+      rel = "";
+      referrerPolicy = "";
+
+      addEventListener(type: string, listener: FakeListener): void {
+        this.listeners.set(type, listener);
+      }
+
+      click(): void {
+        if (!this.disabled) {
+          this.listeners.get("click")?.();
+        }
+      }
+
+      dispatch(type: string): void {
+        this.listeners.get(type)?.();
+      }
+
+      replaceChildren(...children: FakeElement[]): void {
+        this.children.splice(0, this.children.length, ...children);
+      }
+
+      setAttribute(name: string, value: string): void {
+        this.attributes.set(name, value);
+      }
+    }
+
+    class FakeButtonElement extends FakeElement {}
+    class FakeInputElement extends FakeElement {}
+    const elements = new Map<string, FakeElement>([
+      ["list-status", new FakeElement()],
+      ["supporter-search", new FakeInputElement()],
+      ["supporter-filter", new FakeElement()],
+      ["list", new FakeElement()],
+      ["list-body", new FakeElement()],
+    ]);
+    const portalUrl =
+      "https://portal.example/level#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const initialSupporters: SupporterListItem[] = [
+      {
+        id: "opaque-alpha",
+        confirmationId: "AAAA-BBBB-CCCC-DDDD",
+        displayName: "Alpha",
+        entryCount: 2,
+        supporting: true,
+        latestMonthKey: "2026-09",
+        legacyBaselineEligible: false,
+        portalDeliveryState: "provisioned",
+        fanboxManagementUrl:
+          "https://www.fanbox.cc/manage/relationships/alpha",
+        portalLinkState: "available",
+      },
+      {
+        id: "opaque-beta",
+        confirmationId: "1111-2222-3333-4444",
+        displayName: "Beta",
+        entryCount: 1,
+        supporting: false,
+        latestMonthKey: null,
+        legacyBaselineEligible: false,
+        portalDeliveryState: "not_issued",
+        fanboxManagementUrl: null,
+        portalLinkState: "not_issued",
+      },
+      {
+        id: "opaque-charlie",
+        confirmationId: "5555-6666-7777-8888",
+        displayName: "Charlie",
+        entryCount: 3,
+        supporting: true,
+        latestMonthKey: "2026-08",
+        legacyBaselineEligible: false,
+        portalDeliveryState: "issued",
+        fanboxManagementUrl:
+          "https://www.fanbox.cc/manage/relationships/charlie",
+        portalLinkState: "unrecoverable",
+      },
+      {
+        id: "opaque-delta",
+        confirmationId: "9999-AAAA-BBBB-CCCC",
+        displayName: "Delta",
+        entryCount: 4,
+        supporting: false,
+        latestMonthKey: "2026-09",
+        legacyBaselineEligible: false,
+        portalDeliveryState: "issued",
+        fanboxManagementUrl: null,
+        portalLinkState: "needs_provisioning",
+      },
+      {
+        id: "opaque-echo",
+        confirmationId: "DDDD-EEEE-FFFF-0000",
+        displayName: "Echo",
+        entryCount: 5,
+        supporting: true,
+        latestMonthKey: "2026-09",
+        legacyBaselineEligible: false,
+        portalDeliveryState: "sent",
+        fanboxManagementUrl: null,
+        portalLinkState: "available",
+      },
+    ];
+    let currentSupporters = initialSupporters;
+    const fetchCalls: Array<{
+      url: string;
+      options: Readonly<Record<string, unknown>>;
+    }> = [];
+    const confirmMock = vi.fn<(message: string) => boolean>(() => true);
+    const clipboardWrites: string[] = [];
+    const clipboardWriteText = vi.fn(async (text: string) => {
+      clipboardWrites.push(text);
+    });
+    const response = (status: number, body: unknown): FakeResponse => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    });
+    const updateSupporter = (
+      id: string,
+      update: Partial<SupporterListItem>,
+    ): void => {
+      currentSupporters = currentSupporters.map((supporter) =>
+        supporter.id === id ? { ...supporter, ...update } : supporter,
+      );
+    };
+    const fetchMock = vi.fn(
+      (
+        url: string,
+        options: Readonly<Record<string, unknown>> = {},
+      ): Promise<FakeResponse> => {
+        fetchCalls.push({ url, options });
+        if (url === "/api/supporters") {
+          return Promise.resolve(response(200, { supporters: currentSupporters }));
+        }
+        if (url === "/api/portal-link/issue") {
+          updateSupporter("opaque-beta", {
+            portalDeliveryState: "provisioned",
+            portalLinkState: "available",
+          });
+          return Promise.resolve(response(200, {
+            portalUrl,
+            verifiedAt: "2026-09-10T06:00:00.000Z",
+          }));
+        }
+        if (url === "/api/portal-link/reissue") {
+          updateSupporter("opaque-charlie", {
+            portalDeliveryState: "provisioned",
+            portalLinkState: "available",
+          });
+          return Promise.resolve(response(200, {
+            portalUrl,
+            verifiedAt: "2026-09-10T06:01:00.000Z",
+          }));
+        }
+        if (url === "/api/portal-link/provision") {
+          updateSupporter("opaque-delta", {
+            portalDeliveryState: "provisioned",
+            portalLinkState: "available",
+          });
+          return Promise.resolve(response(200, {
+            portalUrl,
+            verifiedAt: "2026-09-10T06:02:00.000Z",
+          }));
+        }
+        if (url === "/api/portal-link/current") {
+          return Promise.resolve(response(200, { portalUrl }));
+        }
+        return Promise.reject(new Error("unexpected synthetic request"));
+      },
+    );
+    const fakeDocument = {
+      documentElement: { dataset: {} as Record<string, string> },
+      getElementById: (id: string): FakeElement | null =>
+        elements.get(id) ?? null,
+      createElement: (tagName: string): FakeElement => {
+        const element = new FakeElement();
+        element.tagName = tagName;
+        return element;
+      },
+    };
+    const treeText = (element: FakeElement): string =>
+      element.textContent + element.children.map(treeText).join("");
+    const find = (
+      element: FakeElement,
+      predicate: (candidate: FakeElement) => boolean,
+    ): FakeElement | undefined => {
+      if (predicate(element)) {
+        return element;
+      }
+      for (const child of element.children) {
+        const match = find(child, predicate);
+        if (match !== undefined) {
+          return match;
+        }
+      }
+      return undefined;
+    };
+    const rowFor = (name: string): FakeElement => {
+      const row = elements
+        .get("list-body")
+        ?.children.find((candidate) => treeText(candidate).includes(name));
+      if (row === undefined) {
+        throw new Error("expected supporter row");
+      }
+      return row;
+    };
+    const search = elements.get("supporter-search") as FakeInputElement;
+    const filter = elements.get("supporter-filter") as FakeElement;
+    filter.value = "all";
+
+    runInNewContext(ADMIN_SCRIPT, {
+      Array,
+      Date,
+      document: fakeDocument,
+      Error,
+      fetch: fetchMock,
+      HTMLButtonElement: FakeButtonElement,
+      HTMLInputElement: FakeInputElement,
+      Map,
+      navigator: { clipboard: { writeText: clipboardWriteText } },
+      Number,
+      Object,
+      Set,
+      TypeError,
+      URL,
+      window: { confirm: confirmMock },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const listBody = elements.get("list-body") as FakeElement;
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(1);
+    expect(listBody.children).toHaveLength(5);
+    expect(listBody.children.every((row) => row.tagName === "tr")).toBe(true);
+    expect(listBody.children[0]?.children).toHaveLength(6);
+    expect(treeText(listBody.children[0]!)).toContain("2口");
+    expect((treeText(listBody.children[0]!).match(/2口/g) ?? [])).toHaveLength(1);
+
+    const linkedName = rowFor("Alpha").children[0]?.children[0];
+    expect(linkedName?.tagName).toBe("a");
+    expect(linkedName?.href).toBe(
+      "https://www.fanbox.cc/manage/relationships/alpha",
+    );
+    expect(linkedName?.attributes.get("href")).toBe(
+      "https://www.fanbox.cc/manage/relationships/alpha",
+    );
+    expect(linkedName?.target).toBe("_blank");
+    expect(linkedName?.rel).toBe("noopener noreferrer");
+    expect(linkedName?.referrerPolicy).toBe("no-referrer");
+    expect(rowFor("Beta").children[0]?.children).toHaveLength(0);
+    expect(treeText(rowFor("Alpha"))).not.toContain("FANBOXを開く");
+    expect(treeText(rowFor("Charlie"))).toContain("URL保存なし");
+    expect(treeText(rowFor("Charlie"))).not.toContain(portalUrl);
+
+    search.value = "aLpHa";
+    search.dispatch("input");
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(1);
+    expect(listBody.children).toHaveLength(1);
+    expect(treeText(listBody.children[0]!)).toContain("Alpha");
+
+    search.value = "";
+    search.dispatch("input");
+    filter.value = "supporting";
+    filter.dispatch("change");
+    expect(listBody.children).toHaveLength(3);
+    filter.value = "stopped";
+    filter.dispatch("change");
+    expect(listBody.children).toHaveLength(2);
+    filter.value = "not-sent";
+    filter.dispatch("change");
+    expect(listBody.children).toHaveLength(4);
+    search.value = "alpha";
+    search.dispatch("input");
+    filter.value = "stopped";
+    filter.dispatch("change");
+    expect(listBody.children).toHaveLength(0);
+    expect(elements.get("list-status")?.textContent).toBe(
+      "条件に一致する支援者はいません。",
+    );
+    search.value = "";
+    search.dispatch("input");
+    filter.value = "all";
+    filter.dispatch("change");
+
+    const issueButton = find(rowFor("Beta"), (candidate) =>
+      candidate.textContent === "URLを発行",
+    );
+    issueButton?.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/issue")).toHaveLength(1);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/reissue")).toHaveLength(0);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/provision")).toHaveLength(0);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(2);
+    expect(elements.get("list-status")?.textContent).toContain("URLを発行しました。");
+
+    confirmMock.mockReturnValueOnce(false);
+    const unrecoverableReissue = find(rowFor("Charlie"), (candidate) =>
+      candidate.textContent === "URLを再発行…",
+    );
+    unrecoverableReissue?.click();
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/reissue")).toHaveLength(0);
+    expect(confirmMock.mock.calls.at(-1)?.[0]).toContain("無効になります");
+    confirmMock.mockReturnValueOnce(true);
+    unrecoverableReissue?.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/reissue")).toHaveLength(1);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/issue")).toHaveLength(1);
+
+    const provisionButton = find(rowFor("Delta"), (candidate) =>
+      candidate.textContent === "連携を再試行",
+    );
+    provisionButton?.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/provision")).toHaveLength(1);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/reissue")).toHaveLength(1);
+
+    const alphaRow = rowFor("Alpha");
+    const messageCopyButton = find(alphaRow, (candidate) =>
+      candidate.textContent === "送信用情報をコピー",
+    );
+    const urlCopyButton = find(alphaRow, (candidate) =>
+      candidate.textContent === "URLをコピー",
+    );
+    const confirmationCopyButton = find(alphaRow, (candidate) =>
+      candidate.textContent === "確認IDをコピー",
+    );
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/current")).toHaveLength(0);
+    messageCopyButton?.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(clipboardWrites.at(-1)).toBe("確認ID: AAAA-BBBB-CCCC-DDDD\n" + portalUrl);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/current")).toHaveLength(1);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/issue")).toHaveLength(1);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/reissue")).toHaveLength(1);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/provision")).toHaveLength(1);
+    urlCopyButton?.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(clipboardWrites.at(-1)).toBe(portalUrl);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/current")).toHaveLength(2);
+    confirmationCopyButton?.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(clipboardWrites.at(-1)).toBe("AAAA-BBBB-CCCC-DDDD");
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/current")).toHaveLength(2);
+    expect(treeText(alphaRow)).not.toContain(portalUrl);
+    for (const candidate of [alphaRow, linkedName!]) {
+      for (const attribute of candidate.attributes.values()) {
+        expect(attribute).not.toContain(portalUrl);
+      }
+    }
+    expect(fetchCalls.some(({ url }) => url === "/api/portal-link")).toBe(false);
+
+    clipboardWriteText.mockRejectedValueOnce(new Error("clipboard unavailable"));
+    urlCopyButton?.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(treeText(alphaRow)).toContain("コピーできませんでした。");
+    expect(treeText(alphaRow)).not.toContain(portalUrl);
   });
 
   it("implements the settled month-end browser contract", async () => {
