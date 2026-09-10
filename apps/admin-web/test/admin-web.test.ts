@@ -59,7 +59,7 @@ import {
   parseAdminPort,
   startProductionAdminServer,
 } from "../src/server.js";
-import { ADMIN_PAGE, ADMIN_SCRIPT } from "../src/page.js";
+import { ADMIN_PAGE, ADMIN_SCRIPT, ADMIN_STYLES } from "../src/page.js";
 
 type HttpResponse = Readonly<{
   statusCode: number;
@@ -6122,6 +6122,175 @@ describe("admin server configuration", () => {
     }
     expect(ADMIN_SCRIPT).not.toContain("textContent = supporter.id");
     expect(ADMIN_PAGE).not.toContain("/tmp/fanbox-level-manager-admin.sqlite");
+  });
+
+  it("defines the five-view navigation and canonical admin theme", () => {
+    const navigationStart = ADMIN_PAGE.indexOf('<nav id="admin-navigation"');
+    const navigationEnd = ADMIN_PAGE.indexOf("</nav>", navigationStart);
+    expect(navigationStart).toBeGreaterThanOrEqual(0);
+    expect(navigationEnd).toBeGreaterThan(navigationStart);
+    const navigation = ADMIN_PAGE.slice(navigationStart, navigationEnd);
+    expect(navigation.match(/<button\b/g)).toHaveLength(5);
+
+    let previousIndex = -1;
+    for (const label of ["支援者", "FANBOX取込", "抽選", "月末処理", "設定"]) {
+      const currentIndex = navigation.indexOf(">" + label + "</button>");
+      expect(currentIndex).toBeGreaterThan(previousIndex);
+      previousIndex = currentIndex;
+    }
+    expect(navigation).toContain('aria-label="管理メニュー"');
+    expect(navigation).toContain('aria-current="page"');
+    for (const viewId of [
+      "supporter-view",
+      "fanbox-import-view",
+      "lottery-view",
+      "month-end-view",
+      "settings-view",
+    ]) {
+      expect(navigation).toContain('aria-controls="' + viewId + '"');
+      expect(ADMIN_PAGE).toContain('id="' + viewId + '"');
+    }
+    expect(ADMIN_PAGE).toContain(
+      '<section id="fanbox-import-view" class="admin-view" aria-labelledby="pdf-inspection-heading" hidden>',
+    );
+    for (const color of [
+      "#faf4ed",
+      "#fffaf3",
+      "#f2e9e1",
+      "#575279",
+      "#9893a5",
+      "#dfdad9",
+      "#286983",
+      "#56949f",
+      "#907aa9",
+      "#d7827e",
+      "#ea9d34",
+      "#b4637a",
+    ]) {
+      expect(ADMIN_STYLES).toContain(color);
+    }
+    expect(ADMIN_STYLES).toContain("background-color: var(--base)");
+    expect(ADMIN_STYLES).toContain("background-color: var(--surface)");
+    expect(ADMIN_STYLES).toContain("background-color: var(--pine)");
+    expect(ADMIN_STYLES).toContain("var(--love)");
+    expect(ADMIN_STYLES).toContain("var(--gold)");
+    expect(ADMIN_STYLES).toContain(":focus-visible");
+    expect(ADMIN_STYLES).toContain("flex-wrap: wrap");
+    expect(ADMIN_STYLES).toContain("overflow-x: auto");
+  });
+
+  it("switches views without fetching or reconstructing workflow sections", () => {
+    type FakeListener = () => void;
+
+    class FakeElement {
+      readonly listeners = new Map<string, FakeListener>();
+      readonly attributes = new Map<string, string>();
+      hidden = false;
+      value = "";
+
+      addEventListener(type: string, listener: FakeListener): void {
+        this.listeners.set(type, listener);
+      }
+
+      click(): void {
+        this.listeners.get("click")?.();
+      }
+
+      getAttribute(name: string): string | null {
+        return this.attributes.get(name) ?? null;
+      }
+
+      removeAttribute(name: string): void {
+        this.attributes.delete(name);
+      }
+
+      setAttribute(name: string, value: string): void {
+        this.attributes.set(name, value);
+      }
+    }
+
+    const viewIds = [
+      "supporter-view",
+      "fanbox-import-view",
+      "lottery-view",
+      "month-end-view",
+      "settings-view",
+    ];
+    const buttonIds = [
+      "supporter-view-button",
+      "fanbox-import-view-button",
+      "lottery-view-button",
+      "month-end-view-button",
+      "settings-view-button",
+    ];
+    const elements = new Map<string, FakeElement>();
+    const navigation = new FakeElement();
+    elements.set("admin-navigation", navigation);
+    const views = viewIds.map((id) => {
+      const view = new FakeElement();
+      elements.set(id, view);
+      return view;
+    });
+    const buttons = buttonIds.map((id) => {
+      const button = new FakeElement();
+      elements.set(id, button);
+      return button;
+    });
+    const fakeDocument = {
+      documentElement: { dataset: {} as Record<string, string> },
+      getElementById: (id: string): FakeElement | null =>
+        elements.get(id) ?? null,
+    };
+    const fetchMock = vi.fn();
+
+    runInNewContext(ADMIN_SCRIPT, {
+      Array,
+      Date,
+      document: fakeDocument,
+      Error,
+      fetch: fetchMock,
+      HTMLButtonElement: FakeElement,
+      HTMLInputElement: FakeElement,
+      Map,
+      Number,
+      Object,
+      Set,
+      TypeError,
+      URL,
+      window: { confirm: vi.fn(() => true) },
+    });
+
+    expect(buttons).toHaveLength(5);
+    expect(views.filter((view) => !view.hidden)).toEqual([views[0]]);
+    expect(buttons[0]?.getAttribute("aria-current")).toBe("page");
+    expect(
+      buttons
+        .slice(1)
+        .every((button) => button.getAttribute("aria-current") === null),
+    ).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const supporterView = views[0];
+    if (supporterView === undefined) {
+      throw new Error("supporter view was not created");
+    }
+    supporterView.value = "existing search state";
+    for (let index = 1; index < buttons.length; index += 1) {
+      buttons[index]?.click();
+      expect(views.filter((view) => !view.hidden)).toEqual([views[index]]);
+      expect(buttons[index]?.getAttribute("aria-current")).toBe("page");
+      expect(
+        buttons
+          .filter((_, buttonIndex) => buttonIndex !== index)
+          .every((button) => button.getAttribute("aria-current") === null),
+      ).toBe(true);
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+
+    buttons[0]?.click();
+    expect(views[0]).toBe(supporterView);
+    expect(supporterView.value).toBe("existing search state");
+    expect(views.filter((view) => !view.hidden)).toEqual([supporterView]);
   });
 
   it.each([

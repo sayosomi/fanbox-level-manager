@@ -11,30 +11,18 @@ export const ADMIN_PAGE = `<!doctype html>
   </head>
   <body>
     <main>
-      <h1>FANBOX抽選口数管理</h1>
-      <p id="status" role="status">ローカル管理アプリケーションは起動しています。</p>
-      <section aria-labelledby="backup-destination-heading">
-        <h2 id="backup-destination-heading">バックアップ設定</h2>
-        <p id="backup-destination-current" role="status" aria-live="polite">
-          バックアップ先を読み込んでいます。
-        </p>
-        <button id="backup-destination-button" type="button">バックアップ先フォルダを選択</button>
-        <p id="backup-destination-status" role="status" aria-live="polite"></p>
-        <button id="backup-create-button" type="button" disabled>今すぐバックアップを作成</button>
-        <p id="backup-create-status" role="status" aria-live="polite"></p>
-      </section>
-      <section aria-labelledby="pdf-inspection-heading">
-        <h2 id="pdf-inspection-heading">FANBOX PDF確認</h2>
-        <p>
-          <label for="pdf-inspection-file">PDFファイル</label>
-          <input id="pdf-inspection-file" type="file" accept="application/pdf">
-        </p>
-        <button id="pdf-inspection-button" type="button">PDFを確認</button>
-        <button id="pdf-import-button" type="button" disabled>このPDFを支援者状態に反映</button>
-        <p id="pdf-inspection-status" role="status" aria-live="polite"></p>
-        <div id="pdf-inspection-result" aria-live="polite"></div>
-      </section>
-      <section aria-labelledby="heading">
+      <header class="admin-header">
+        <h1>FANBOX抽選口数管理</h1>
+        <p id="status" role="status">ローカル管理アプリケーションは起動しています。</p>
+      </header>
+      <nav id="admin-navigation" class="admin-navigation" aria-label="管理メニュー">
+        <button id="supporter-view-button" type="button" aria-controls="supporter-view" aria-current="page">支援者</button>
+        <button id="fanbox-import-view-button" type="button" aria-controls="fanbox-import-view">FANBOX取込</button>
+        <button id="lottery-view-button" type="button" aria-controls="lottery-view">抽選</button>
+        <button id="month-end-view-button" type="button" aria-controls="month-end-view">月末処理</button>
+        <button id="settings-view-button" type="button" aria-controls="settings-view">設定</button>
+      </nav>
+      <section id="supporter-view" class="admin-view" aria-labelledby="heading">
         <h2 id="heading">支援者一覧</h2>
         <div class="supporter-list-toolbar">
           <label for="supporter-search">表示名で検索</label>
@@ -65,19 +53,18 @@ export const ADMIN_PAGE = `<!doctype html>
           </table>
         </div>
       </section>
-      <section aria-labelledby="month-end-heading">
-        <h2 id="month-end-heading">月末処理</h2>
-        <p id="month-end-source-status" role="status" aria-live="polite"></p>
-        <div id="month-end-source-details" aria-live="polite"></div>
-        <button id="month-end-source-refresh-button" type="button">FANBOX取込状態を再読み込み</button>
+      <section id="fanbox-import-view" class="admin-view" aria-labelledby="pdf-inspection-heading" hidden>
+        <h2 id="pdf-inspection-heading">FANBOX PDF確認</h2>
         <p>
-          <label for="month-end-month">処理対象月</label>
-          <input id="month-end-month" type="month">
+          <label for="pdf-inspection-file">PDFファイル</label>
+          <input id="pdf-inspection-file" type="file" accept="application/pdf">
         </p>
-        <button id="month-end-process-button" type="button" disabled>月末処理を実行</button>
-        <p id="month-end-process-status" role="status" aria-live="polite"></p>
+        <button id="pdf-inspection-button" type="button">PDFを確認</button>
+        <button id="pdf-import-button" type="button" disabled>このPDFを支援者状態に反映</button>
+        <p id="pdf-inspection-status" role="status" aria-live="polite"></p>
+        <div id="pdf-inspection-result" aria-live="polite"></div>
       </section>
-      <section aria-labelledby="lottery-result-heading">
+      <section id="lottery-view" class="admin-view" aria-labelledby="lottery-result-heading" hidden>
         <h2 id="lottery-result-heading">抽選結果登録</h2>
         <p>
           <label for="lottery-occurred-at">抽選実施日時（日本時間）</label>
@@ -89,6 +76,28 @@ export const ADMIN_PAGE = `<!doctype html>
         </p>
         <ul id="lottery-participant-list" aria-live="polite"></ul>
         <button id="lottery-result-button" type="button" disabled>抽選結果を反映</button>
+      </section>
+      <section id="month-end-view" class="admin-view" aria-labelledby="month-end-heading" hidden>
+        <h2 id="month-end-heading">月末処理</h2>
+        <p id="month-end-source-status" role="status" aria-live="polite"></p>
+        <div id="month-end-source-details" aria-live="polite"></div>
+        <button id="month-end-source-refresh-button" type="button">FANBOX取込状態を再読み込み</button>
+        <p>
+          <label for="month-end-month">処理対象月</label>
+          <input id="month-end-month" type="month">
+        </p>
+        <button id="month-end-process-button" type="button" disabled>月末処理を実行</button>
+        <p id="month-end-process-status" role="status" aria-live="polite"></p>
+      </section>
+      <section id="settings-view" class="admin-view" aria-labelledby="backup-destination-heading" hidden>
+        <h2 id="backup-destination-heading">バックアップ設定</h2>
+        <p id="backup-destination-current" role="status" aria-live="polite">
+          バックアップ先を読み込んでいます。
+        </p>
+        <button id="backup-destination-button" type="button">バックアップ先フォルダを選択</button>
+        <p id="backup-destination-status" role="status" aria-live="polite"></p>
+        <button id="backup-create-button" type="button" disabled>今すぐバックアップを作成</button>
+        <p id="backup-create-status" role="status" aria-live="polite"></p>
       </section>
     </main>
     <script src="/app.js" defer></script>
@@ -3169,6 +3178,58 @@ async function loadSupporters(status, list, notice = null) {
   }
 }
 
+function initializeAdminNavigation() {
+  const navigationViews = [
+    {
+      button: document.getElementById("supporter-view-button"),
+      view: document.getElementById("supporter-view"),
+    },
+    {
+      button: document.getElementById("fanbox-import-view-button"),
+      view: document.getElementById("fanbox-import-view"),
+    },
+    {
+      button: document.getElementById("lottery-view-button"),
+      view: document.getElementById("lottery-view"),
+    },
+    {
+      button: document.getElementById("month-end-view-button"),
+      view: document.getElementById("month-end-view"),
+    },
+    {
+      button: document.getElementById("settings-view-button"),
+      view: document.getElementById("settings-view"),
+    },
+  ];
+
+  if (
+    navigationViews.some(({ button, view }) => button === null || view === null)
+  ) {
+    return;
+  }
+
+  function activateAdminView(activeView) {
+    for (const { button, view } of navigationViews) {
+      const isActive = view === activeView;
+      view.hidden = !isActive;
+      if (isActive) {
+        button.setAttribute("aria-current", "page");
+      } else {
+        button.removeAttribute("aria-current");
+      }
+    }
+  }
+
+  for (const { button, view } of navigationViews) {
+    button.addEventListener("click", () => {
+      activateAdminView(view);
+    });
+  }
+
+  activateAdminView(navigationViews[0].view);
+}
+
+initializeAdminNavigation();
 document.documentElement.dataset.adminReady = "true";
 const pdfInspectionFile = document.getElementById("pdf-inspection-file");
 const pdfInspectionButton = document.getElementById("pdf-inspection-button");
@@ -3380,10 +3441,22 @@ if (listStatus !== null && supporterList !== null) {
 `;
 
 export const ADMIN_STYLES = `:root {
+  --base: #faf4ed;
+  --surface: #fffaf3;
+  --overlay: #f2e9e1;
+  --text: #575279;
+  --muted: #9893a5;
+  --border: #dfdad9;
+  --pine: #286983;
+  --foam: #56949f;
+  --iris: #907aa9;
+  --rose: #d7827e;
+  --gold: #ea9d34;
+  --love: #b4637a;
   color-scheme: light;
   font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
-  color: #252525;
-  background: #f4f5f7;
+  color: var(--text);
+  background-color: var(--base);
 }
 
 * {
@@ -3391,41 +3464,205 @@ export const ADMIN_STYLES = `:root {
 }
 
 body {
-  margin: 0;
   min-width: 320px;
+  margin: 0;
+  color: var(--text);
+  background-color: var(--base);
 }
 
 main {
-  width: min(100% - 2rem, 56rem);
+  width: min(100% - 2rem, 78rem);
+  min-width: 0;
   margin: 0 auto;
-  padding: clamp(2rem, 8vw, 6rem) 0;
+  padding: clamp(1.5rem, 4vw, 3.5rem) 0;
 }
 
-h1 {
+.admin-header h1 {
   margin: 0;
   font-size: clamp(1.6rem, 3vw, 2.4rem);
   line-height: 1.3;
 }
 
 #status {
-  margin: 1.5rem 0 0;
-  padding: 1rem 1.25rem;
-  border: 1px solid #cfd4dc;
-  border-radius: 0.5rem;
-  background: #ffffff;
-}
-
-section {
-  margin-top: 2rem;
-}
-
-h2 {
-  margin: 0;
-  font-size: 1.35rem;
-}
-
-#list-status {
   margin: 0.75rem 0 0;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  color: var(--muted);
+  background-color: var(--surface);
+}
+
+.admin-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  align-items: stretch;
+  margin-top: 1.25rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  background-color: var(--overlay);
+}
+
+.admin-navigation button {
+  flex: 1 1 8rem;
+  min-height: 2.4rem;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid transparent;
+  border-radius: 0.45rem;
+  color: var(--muted);
+  background-color: transparent;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.admin-navigation button:hover {
+  color: var(--text);
+  background-color: var(--surface);
+}
+
+.admin-navigation button[aria-current="page"] {
+  border-color: var(--pine);
+  color: var(--base);
+  background-color: var(--pine);
+}
+
+.admin-view[hidden] {
+  display: none;
+}
+
+.admin-view {
+  min-width: 0;
+  margin-top: 1rem;
+  padding: clamp(1rem, 2vw, 1.5rem);
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  background-color: var(--surface);
+}
+
+.admin-view h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.25rem;
+}
+
+.admin-view [role="status"] {
+  color: var(--muted);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  min-height: 2.25rem;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  color: var(--text);
+  background-color: var(--surface);
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--foam);
+  background-color: var(--overlay);
+}
+
+button:disabled {
+  border-color: var(--border);
+  color: var(--muted);
+  background-color: var(--overlay);
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.primary-button,
+#pdf-inspection-button,
+#pdf-import-button,
+#backup-create-button,
+#month-end-process-button,
+#lottery-result-button {
+  border-color: var(--pine);
+  color: var(--base);
+  background-color: var(--pine);
+}
+
+.primary-button:hover,
+#pdf-inspection-button:hover,
+#pdf-import-button:hover,
+#backup-create-button:hover,
+#month-end-process-button:hover,
+#lottery-result-button:hover {
+  border-color: var(--foam);
+  background-color: var(--foam);
+}
+
+.primary-button:disabled,
+#pdf-inspection-button:disabled,
+#pdf-import-button:disabled,
+#backup-create-button:disabled,
+#month-end-process-button:disabled,
+#lottery-result-button:disabled,
+#list button:disabled {
+  border-color: var(--border);
+  color: var(--muted);
+  background-color: var(--overlay);
+}
+
+.secondary-button {
+  border-color: var(--foam);
+  color: var(--pine);
+  background-color: var(--surface);
+}
+
+.danger-button {
+  border-color: var(--love);
+  color: var(--love);
+  background-color: var(--surface);
+}
+
+.danger-button:hover {
+  color: var(--base);
+  background-color: var(--love);
+}
+
+input,
+select {
+  min-height: 2.25rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  color: var(--text);
+  background-color: var(--surface);
+}
+
+input[type="file"] {
+  max-width: 100%;
+  padding: 0.25rem;
+}
+
+input[type="file"]::file-selector-button {
+  margin-right: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  color: var(--text);
+  background-color: var(--overlay);
+  font: inherit;
+  cursor: pointer;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 3px solid var(--iris);
+  outline-offset: 2px;
 }
 
 .supporter-list-toolbar {
@@ -3436,46 +3673,46 @@ h2 {
   margin-top: 1rem;
 }
 
-.supporter-list-toolbar input,
-.supporter-list-toolbar select {
-  min-height: 2rem;
-  padding: 0.35rem 0.5rem;
-  border: 1px solid #cfd4dc;
-  border-radius: 0.35rem;
-  background: #ffffff;
-  color: inherit;
-}
-
 .supporter-list-toolbar input {
   min-width: 14rem;
 }
 
 .supporter-table-wrapper {
+  max-width: 100%;
   margin-top: 1rem;
   overflow-x: auto;
-  border: 1px solid #cfd4dc;
+  border: 1px solid var(--border);
   border-radius: 0.5rem;
-  background: #ffffff;
+  background-color: var(--surface);
 }
 
 #list {
   width: 100%;
-  min-width: 58rem;
+  min-width: 60rem;
   border-collapse: collapse;
+}
+
+#list tbody {
+  background-color: var(--surface);
 }
 
 #list th,
 #list td {
-  padding: 0.6rem 0.75rem;
-  border-bottom: 1px solid #e1e4e8;
+  padding: 0.5rem 0.65rem;
+  border-bottom: 1px solid var(--border);
   text-align: left;
   vertical-align: middle;
 }
 
 #list thead th {
-  background: #f4f5f7;
-  font-size: 0.85rem;
+  color: var(--text);
+  background-color: var(--overlay);
+  font-size: 0.82rem;
   white-space: nowrap;
+}
+
+#list tbody tr:hover {
+  background-color: var(--overlay);
 }
 
 #list tbody tr:last-child th,
@@ -3483,27 +3720,41 @@ h2 {
   border-bottom: 0;
 }
 
+#list a {
+  color: var(--pine);
+  font-weight: 600;
+}
+
 .status-badge {
   display: inline-block;
-  padding: 0.2rem 0.45rem;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--border);
   border-radius: 999px;
-  background: #eef1f5;
-  font-size: 0.85rem;
+  color: var(--text);
+  background-color: var(--overlay);
+  font-size: 0.8rem;
   white-space: nowrap;
 }
 
 .status-badge.supporting {
-  background: #e5f2eb;
+  border-color: var(--foam);
+  color: var(--pine);
 }
 
 .status-badge.stopped {
-  background: #f1f1f3;
+  color: var(--muted);
+}
+
+.status-badge.portal-delivery-status {
+  border-color: var(--rose);
 }
 
 .portal-recovery-state {
   display: block;
   margin-top: 0.25rem;
-  color: #8a4b5d;
+  padding-left: 0.4rem;
+  border-left: 3px solid var(--gold);
+  color: var(--gold);
   font-size: 0.8rem;
 }
 
@@ -3515,7 +3766,6 @@ h2 {
   align-items: center;
 }
 
-.supporter-actions p,
 #list td p {
   margin: 0.25rem 0 0;
   font-size: 0.8rem;
@@ -3526,30 +3776,14 @@ h2 {
 }
 
 #list summary {
-  cursor: pointer;
-  color: #286983;
+  color: var(--pine);
   font-size: 0.85rem;
+  cursor: pointer;
 }
 
 #list button {
   min-height: 1.9rem;
   padding: 0.3rem 0.55rem;
-  border: 1px solid #b8c2cc;
-  border-radius: 0.35rem;
-  background: #ffffff;
-  color: inherit;
-  cursor: pointer;
-}
-
-#list .primary-button {
-  border-color: #286983;
-  background: #286983;
-  color: #ffffff;
-}
-
-#list .danger-button {
-  border-color: #b4637a;
-  color: #8a3f56;
 }
 
 #list .compact-copy-button {
@@ -3557,20 +3791,6 @@ h2 {
   min-height: 1.6rem;
   padding: 0.15rem 0.4rem;
   font-size: 0.75rem;
-}
-
-#list button:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-button:focus-visible,
-a:focus-visible,
-input:focus-visible,
-select:focus-visible,
-summary:focus-visible {
-  outline: 3px solid #907aa9;
-  outline-offset: 2px;
 }
 
 .visually-hidden {
@@ -3586,23 +3806,24 @@ summary:focus-visible {
 }
 
 #lottery-participant-status,
-#lottery-result-status {
+#lottery-result-status,
+#pdf-inspection-status {
   min-height: 1.5rem;
 }
 
 #lottery-participant-list {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.5rem;
   margin: 1rem 0 0;
   padding: 0;
   list-style: none;
 }
 
 #lottery-participant-list li {
-  padding: 1rem 1.25rem;
-  border: 1px solid #cfd4dc;
-  border-radius: 0.5rem;
-  background: #ffffff;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  background-color: var(--overlay);
 }
 
 #lottery-participant-list h3,
@@ -3618,37 +3839,31 @@ summary:focus-visible {
   display: flex;
   gap: 0.5rem;
   align-items: center;
-  margin-top: 0.75rem;
+  margin-top: 0.65rem;
 }
 
-#lottery-result-button {
-  margin-top: 1rem;
-}
-
-#pdf-inspection-button {
-  margin-top: 0.25rem;
-}
-
-#pdf-import-button {
-  margin-top: 0.25rem;
-}
-
-#pdf-inspection-status {
-  min-height: 1.5rem;
+#lottery-result-button,
+#pdf-inspection-button,
+#pdf-import-button,
+#backup-destination-button,
+#backup-create-button,
+#month-end-source-refresh-button,
+#month-end-process-button {
+  margin-top: 0.5rem;
 }
 
 #pdf-inspection-result {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.5rem;
   margin-top: 1rem;
 }
 
 #pdf-inspection-result section {
   margin-top: 0;
-  padding: 1rem 1.25rem;
-  border: 1px solid #cfd4dc;
-  border-radius: 0.5rem;
-  background: #ffffff;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  background-color: var(--overlay);
 }
 
 #pdf-inspection-result h3,
@@ -3663,5 +3878,20 @@ summary:focus-visible {
 
 .pdf-inspection-text {
   white-space: pre-wrap;
+}
+
+@media (max-width: 48rem) {
+  main {
+    width: min(100% - 1rem, 78rem);
+    padding-top: 1rem;
+  }
+
+  .admin-navigation button {
+    flex-basis: 7rem;
+  }
+
+  .supporter-list-toolbar input {
+    min-width: min(14rem, 100%);
+  }
 }
 `;
