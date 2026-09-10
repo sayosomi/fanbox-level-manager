@@ -6080,7 +6080,7 @@ describe("admin server configuration", () => {
     expect(ADMIN_SCRIPT).toContain("URL保存なし");
     expect(ADMIN_SCRIPT).toContain("navigator.clipboard.writeText");
     expect(ADMIN_SCRIPT).toContain("確認ID: ");
-    expect(ADMIN_SCRIPT).toContain("\\n");
+    expect(ADMIN_SCRIPT).toContain("MESSAGE_INFO_LINE_BREAK");
     expect(ADMIN_SCRIPT).toContain('fetch("/api/portal-link/sent", {');
     expect(ADMIN_SCRIPT).toContain(
       "この操作はメッセージを送信しません。ポータルURLをすでに本人へ送信済みの場合のみ記録します。続行しますか？",
@@ -6897,7 +6897,14 @@ describe("admin server configuration", () => {
     expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/current")).toHaveLength(0);
     messageCopyButton?.click();
     await new Promise<void>((resolve) => setImmediate(resolve));
-    expect(clipboardWrites.at(-1)).toBe("確認ID: AAAA-BBBB-CCCC-DDDD\n" + portalUrl);
+    const messageInfo = clipboardWrites.at(-1);
+    expect(messageInfo).toBe("確認ID: AAAA-BBBB-CCCC-DDDD\n" + portalUrl);
+    expect(messageInfo?.split("\n")).toEqual([
+      "確認ID: AAAA-BBBB-CCCC-DDDD",
+      portalUrl,
+    ]);
+    expect(messageInfo?.match(/\n/g)).toEqual(["\n"]);
+    expect(messageInfo?.includes("\r")).toBe(false);
     expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/current")).toHaveLength(1);
     expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/issue")).toHaveLength(1);
     expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/reissue")).toHaveLength(1);

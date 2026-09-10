@@ -134,6 +134,7 @@ const PORTAL_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const CONFIRMATION_ID_PATTERN = /^[0-9A-F]{4}(?:-[0-9A-F]{4}){3}$/;
 const CANONICAL_TIMESTAMP_PATTERN =
   /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/;
+const MESSAGE_INFO_LINE_BREAK = String.fromCharCode(10);
 const PDF_IMPORT_BLOCKED_REASONS = new Set([
   "empty_relationships",
   "duplicate_relationship_id",
@@ -2858,7 +2859,10 @@ function renderSupporter(supporter, listStatus, supporterList) {
         return;
       }
       const clipboardText = messageMode
-        ? "確認ID: " + supporter.confirmationId + "\\n" + portalUrl
+        ? "確認ID: " +
+          supporter.confirmationId +
+          MESSAGE_INFO_LINE_BREAK +
+          portalUrl
         : portalUrl;
       await writeClipboardText(
         clipboardText,
