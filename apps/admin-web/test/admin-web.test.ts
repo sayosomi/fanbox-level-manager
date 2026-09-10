@@ -236,12 +236,7 @@ function ephemeralPort(): Promise<number> {
   });
 }
 
-type LegacySupporterListItem = Omit<
-  SupporterListItem,
-  "fanboxManagementUrl" | "portalLinkState"
->;
-
-const sampleSupporters: readonly LegacySupporterListItem[] = Object.freeze([
+const sampleSupporters: readonly SupporterListItem[] = Object.freeze([
   Object.freeze({
     id: "internal-supporter-id",
     confirmationId: "3630-5118-9AE4-0646",
@@ -251,6 +246,9 @@ const sampleSupporters: readonly LegacySupporterListItem[] = Object.freeze([
     latestMonthKey: "2026-09",
     legacyBaselineEligible: false,
     portalDeliveryState: "provisioned",
+    fanboxManagementUrl:
+      "https://www.fanbox.cc/manage/relationships/relationship-1",
+    portalLinkState: "available",
   }),
   Object.freeze({
     id: "internal-supporter-id-2",
@@ -261,11 +259,13 @@ const sampleSupporters: readonly LegacySupporterListItem[] = Object.freeze([
     latestMonthKey: null,
     legacyBaselineEligible: true,
     portalDeliveryState: "not_issued",
+    fanboxManagementUrl: null,
+    portalLinkState: "not_issued",
   }),
 ]);
 
 const sampleSupporterListService: SupporterListService = {
-  listSupporters: () => sampleSupporters as readonly SupporterListItem[],
+  listSupporters: () => sampleSupporters,
 };
 
 const samplePdfInspection: FanboxPdfInspection = Object.freeze({
@@ -6010,6 +6010,11 @@ describe("admin server configuration", () => {
     expect(ADMIN_SCRIPT).not.toContain("fileInput.value = \"\"");
     expect(ADMIN_SCRIPT).toContain('"portalDeliveryState"');
     expect(ADMIN_SCRIPT).toContain("PORTAL_DELIVERY_STATES");
+    expect(ADMIN_SCRIPT).toContain('"fanboxManagementUrl"');
+    expect(ADMIN_SCRIPT).toContain('"portalLinkState"');
+    expect(ADMIN_SCRIPT).toContain("PORTAL_LINK_STATES");
+    expect(ADMIN_SCRIPT).toContain("FANBOX_MANAGEMENT_URL_PATTERN");
+    expect(ADMIN_SCRIPT).toContain("isFanboxManagementUrl");
     for (const deliveryState of [
       "not_issued",
       "issued",
@@ -6017,6 +6022,14 @@ describe("admin server configuration", () => {
       "sent",
     ]) {
       expect(ADMIN_SCRIPT).toContain(deliveryState);
+    }
+    for (const linkState of [
+      "not_issued",
+      "unrecoverable",
+      "needs_provisioning",
+      "available",
+    ]) {
+      expect(ADMIN_SCRIPT).toContain(linkState);
     }
     expect(ADMIN_SCRIPT).not.toContain("nextLotteryEntryCount");
     expect(ADMIN_SCRIPT).not.toContain("currentLevel");
@@ -6099,6 +6112,72 @@ describe("admin server configuration", () => {
     }
     expect(ADMIN_SCRIPT).not.toContain("textContent = supporter.id");
     expect(ADMIN_PAGE).not.toContain("/tmp/fanbox-level-manager-admin.sqlite");
+  });
+
+  it.each([
+    [
+      "portalLinkState",
+      {
+        ...sampleSupporters[0],
+        portalLinkState: "invalid-state",
+      },
+    ],
+    [
+      "fanboxManagementUrl",
+      {
+        ...sampleSupporters[0],
+        fanboxManagementUrl: "https://evil.example/relationships/synthetic",
+      },
+    ],
+  ] as const)("rejects a supporter with an invalid %s", async (_field, supporter) => {
+    class FakeElement {
+      readonly children: FakeElement[] = [];
+      textContent = "";
+
+      replaceChildren(...children: FakeElement[]): void {
+        this.children.splice(0, this.children.length, ...children);
+      }
+    }
+
+    const listStatus = new FakeElement();
+    const supporterList = new FakeElement();
+    const fakeDocument = {
+      documentElement: { dataset: {} as Record<string, string> },
+      getElementById: (id: string): FakeElement | null =>
+        id === "list-status"
+          ? listStatus
+          : id === "list"
+            ? supporterList
+            : null,
+      createElement: (): FakeElement => new FakeElement(),
+    };
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ supporters: [supporter] }),
+    }));
+
+    runInNewContext(ADMIN_SCRIPT, {
+      Array,
+      Date,
+      document: fakeDocument,
+      Error,
+      fetch: fetchMock,
+      HTMLButtonElement: class {},
+      HTMLInputElement: class {},
+      Map,
+      Number,
+      Object,
+      Set,
+      TypeError,
+      URL,
+      window: { confirm: vi.fn(() => true) },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(listStatus.textContent).toBe("支援者一覧を読み込めませんでした。");
+    expect(supporterList.children).toHaveLength(0);
   });
 
   it("renders and executes the per-supporter Cloudflare sync action", async () => {
@@ -6187,6 +6266,8 @@ describe("admin server configuration", () => {
                   latestMonthKey: null,
                   legacyBaselineEligible: false,
                   portalDeliveryState: "not_issued",
+                  fanboxManagementUrl: null,
+                  portalLinkState: "not_issued",
                 },
               ],
             }),
@@ -6330,6 +6411,8 @@ describe("admin server configuration", () => {
             latestMonthKey: null,
             legacyBaselineEligible: true,
             portalDeliveryState: "not_issued",
+            fanboxManagementUrl: null,
+            portalLinkState: "not_issued",
           },
         ],
       },
@@ -6344,6 +6427,8 @@ describe("admin server configuration", () => {
             latestMonthKey: null,
             legacyBaselineEligible: false,
             portalDeliveryState: "not_issued",
+            fanboxManagementUrl: null,
+            portalLinkState: "not_issued",
           },
         ],
       },
@@ -6915,7 +7000,7 @@ describe("admin server configuration", () => {
         return element;
       },
     };
-    const refreshedSupporters: readonly LegacySupporterListItem[] = [
+    const refreshedSupporters: readonly SupporterListItem[] = [
       Object.freeze({
         id: "internal-supporter-id",
         confirmationId: "3630-5118-9AE4-0646",
@@ -6925,6 +7010,9 @@ describe("admin server configuration", () => {
         latestMonthKey: "2026-09",
         legacyBaselineEligible: false,
         portalDeliveryState: "provisioned",
+        fanboxManagementUrl:
+          "https://www.fanbox.cc/manage/relationships/relationship-1",
+        portalLinkState: "available",
       }),
       Object.freeze({
         id: "internal-supporter-id-2",
@@ -6935,9 +7023,11 @@ describe("admin server configuration", () => {
         latestMonthKey: "2026-09",
         legacyBaselineEligible: false,
         portalDeliveryState: "not_issued",
+        fanboxManagementUrl: null,
+        portalLinkState: "not_issued",
       }),
     ];
-    const supporterBodies: (readonly LegacySupporterListItem[])[] = [
+    const supporterBodies: (readonly SupporterListItem[])[] = [
       sampleSupporters,
       refreshedSupporters,
       refreshedSupporters,

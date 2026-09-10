@@ -80,6 +80,8 @@ const SUPPORTER_KEYS = [
   "latestMonthKey",
   "legacyBaselineEligible",
   "portalDeliveryState",
+  "fanboxManagementUrl",
+  "portalLinkState",
 ];
 const PORTAL_DELIVERY_STATES = new Set([
   "not_issued",
@@ -87,6 +89,14 @@ const PORTAL_DELIVERY_STATES = new Set([
   "provisioned",
   "sent",
 ]);
+const PORTAL_LINK_STATES = new Set([
+  "not_issued",
+  "unrecoverable",
+  "needs_provisioning",
+  "available",
+]);
+const FANBOX_MANAGEMENT_URL_PATTERN =
+  /^https:\\/\\/www\\.fanbox\\.cc\\/manage\\/relationships\\/[A-Za-z0-9_-]+$/;
 const PORTAL_DELIVERY_LABELS = {
   not_issued: "ポータル: 未発行",
   issued: "ポータル: 発行済み・未連携",
@@ -379,6 +389,17 @@ function isNonBlankString(value) {
 
 function isPortalDeliveryState(value) {
   return typeof value === "string" && PORTAL_DELIVERY_STATES.has(value);
+}
+
+function isPortalLinkState(value) {
+  return typeof value === "string" && PORTAL_LINK_STATES.has(value);
+}
+
+function isFanboxManagementUrl(value) {
+  return (
+    value === null ||
+    (typeof value === "string" && FANBOX_MANAGEMENT_URL_PATTERN.test(value))
+  );
 }
 
 function isCanonicalTimestamp(value) {
@@ -778,7 +799,9 @@ function validateSupporterResponse(value) {
           supporter.latestMonthKey.length === 7 &&
           MONTH_KEY_PATTERN.test(supporter.latestMonthKey))
       ) ||
-      !isPortalDeliveryState(supporter.portalDeliveryState)
+      !isPortalDeliveryState(supporter.portalDeliveryState) ||
+      !isFanboxManagementUrl(supporter.fanboxManagementUrl) ||
+      !isPortalLinkState(supporter.portalLinkState)
     ) {
       throw new TypeError("invalid supporter item");
     }
