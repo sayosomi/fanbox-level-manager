@@ -11,19 +11,49 @@ export const ADMIN_PAGE = `<!doctype html>
   </head>
   <body>
     <main>
-      <h1>FANBOX抽選口数管理</h1>
-      <p id="status" role="status">ローカル管理アプリケーションは起動しています。</p>
-      <section aria-labelledby="backup-destination-heading">
-        <h2 id="backup-destination-heading">バックアップ設定</h2>
-        <p id="backup-destination-current" role="status" aria-live="polite">
-          バックアップ先を読み込んでいます。
-        </p>
-        <button id="backup-destination-button" type="button">バックアップ先フォルダを選択</button>
-        <p id="backup-destination-status" role="status" aria-live="polite"></p>
-        <button id="backup-create-button" type="button" disabled>今すぐバックアップを作成</button>
-        <p id="backup-create-status" role="status" aria-live="polite"></p>
+      <header class="admin-header">
+        <h1>FANBOX抽選口数管理</h1>
+        <p id="status" role="status">ローカル管理アプリケーションは起動しています。</p>
+      </header>
+      <nav id="admin-navigation" class="admin-navigation" aria-label="管理メニュー">
+        <button id="supporter-view-button" type="button" aria-controls="supporter-view" aria-current="page">支援者</button>
+        <button id="fanbox-import-view-button" type="button" aria-controls="fanbox-import-view">FANBOX取込</button>
+        <button id="lottery-view-button" type="button" aria-controls="lottery-view">抽選</button>
+        <button id="month-end-view-button" type="button" aria-controls="month-end-view">月末処理</button>
+        <button id="settings-view-button" type="button" aria-controls="settings-view">設定</button>
+      </nav>
+      <section id="supporter-view" class="admin-view" aria-labelledby="heading">
+        <h2 id="heading">支援者一覧</h2>
+        <div class="supporter-list-toolbar">
+          <label for="supporter-search">表示名で検索</label>
+          <input id="supporter-search" type="search" autocomplete="off">
+          <label for="supporter-filter">状態で絞り込み</label>
+          <select id="supporter-filter">
+            <option value="all">すべて</option>
+            <option value="supporting">支援中</option>
+            <option value="stopped">停止</option>
+            <option value="not-sent">未送信</option>
+          </select>
+        </div>
+        <p id="list-status" role="status" aria-live="polite">支援者一覧を読み込んでいます。</p>
+        <div class="supporter-table-wrapper">
+          <table id="list">
+            <caption class="visually-hidden">支援者一覧</caption>
+            <thead>
+              <tr>
+                <th scope="col">支援者</th>
+                <th scope="col">口数</th>
+                <th scope="col">支援状態</th>
+                <th scope="col">確認ID</th>
+                <th scope="col">ポータル</th>
+                <th scope="col">操作</th>
+              </tr>
+            </thead>
+            <tbody id="list-body" aria-live="polite"></tbody>
+          </table>
+        </div>
       </section>
-      <section aria-labelledby="pdf-inspection-heading">
+      <section id="fanbox-import-view" class="admin-view" aria-labelledby="pdf-inspection-heading" hidden>
         <h2 id="pdf-inspection-heading">FANBOX PDF確認</h2>
         <p>
           <label for="pdf-inspection-file">PDFファイル</label>
@@ -34,24 +64,7 @@ export const ADMIN_PAGE = `<!doctype html>
         <p id="pdf-inspection-status" role="status" aria-live="polite"></p>
         <div id="pdf-inspection-result" aria-live="polite"></div>
       </section>
-      <section aria-labelledby="heading">
-        <h2 id="heading">支援者一覧</h2>
-        <p id="list-status" role="status">支援者一覧を読み込んでいます。</p>
-        <ul id="list" aria-live="polite"></ul>
-      </section>
-      <section aria-labelledby="month-end-heading">
-        <h2 id="month-end-heading">月末処理</h2>
-        <p id="month-end-source-status" role="status" aria-live="polite"></p>
-        <div id="month-end-source-details" aria-live="polite"></div>
-        <button id="month-end-source-refresh-button" type="button">FANBOX取込状態を再読み込み</button>
-        <p>
-          <label for="month-end-month">処理対象月</label>
-          <input id="month-end-month" type="month">
-        </p>
-        <button id="month-end-process-button" type="button" disabled>月末処理を実行</button>
-        <p id="month-end-process-status" role="status" aria-live="polite"></p>
-      </section>
-      <section aria-labelledby="lottery-result-heading">
+      <section id="lottery-view" class="admin-view" aria-labelledby="lottery-result-heading" hidden>
         <h2 id="lottery-result-heading">抽選結果登録</h2>
         <p>
           <label for="lottery-occurred-at">抽選実施日時（日本時間）</label>
@@ -63,6 +76,28 @@ export const ADMIN_PAGE = `<!doctype html>
         </p>
         <ul id="lottery-participant-list" aria-live="polite"></ul>
         <button id="lottery-result-button" type="button" disabled>抽選結果を反映</button>
+      </section>
+      <section id="month-end-view" class="admin-view" aria-labelledby="month-end-heading" hidden>
+        <h2 id="month-end-heading">月末処理</h2>
+        <p id="month-end-source-status" role="status" aria-live="polite"></p>
+        <div id="month-end-source-details" aria-live="polite"></div>
+        <button id="month-end-source-refresh-button" type="button">FANBOX取込状態を再読み込み</button>
+        <p>
+          <label for="month-end-month">処理対象月</label>
+          <input id="month-end-month" type="month">
+        </p>
+        <button id="month-end-process-button" type="button" disabled>月末処理を実行</button>
+        <p id="month-end-process-status" role="status" aria-live="polite"></p>
+      </section>
+      <section id="settings-view" class="admin-view" aria-labelledby="backup-destination-heading" hidden>
+        <h2 id="backup-destination-heading">バックアップ設定</h2>
+        <p id="backup-destination-current" role="status" aria-live="polite">
+          バックアップ先を読み込んでいます。
+        </p>
+        <button id="backup-destination-button" type="button">バックアップ先フォルダを選択</button>
+        <p id="backup-destination-status" role="status" aria-live="polite"></p>
+        <button id="backup-create-button" type="button" disabled>今すぐバックアップを作成</button>
+        <p id="backup-create-status" role="status" aria-live="polite"></p>
       </section>
     </main>
     <script src="/app.js" defer></script>
@@ -80,6 +115,8 @@ const SUPPORTER_KEYS = [
   "latestMonthKey",
   "legacyBaselineEligible",
   "portalDeliveryState",
+  "fanboxManagementUrl",
+  "portalLinkState",
 ];
 const PORTAL_DELIVERY_STATES = new Set([
   "not_issued",
@@ -87,17 +124,26 @@ const PORTAL_DELIVERY_STATES = new Set([
   "provisioned",
   "sent",
 ]);
+const PORTAL_LINK_STATES = new Set([
+  "not_issued",
+  "unrecoverable",
+  "needs_provisioning",
+  "available",
+]);
+const FANBOX_MANAGEMENT_URL_PATTERN =
+  /^https:\\/\\/www\\.fanbox\\.cc\\/manage\\/relationships\\/[A-Za-z0-9_-]+$/;
 const PORTAL_DELIVERY_LABELS = {
-  not_issued: "ポータル: 未発行",
-  issued: "ポータル: 発行済み・未連携",
-  provisioned: "ポータル: 発行済み・未送信",
-  sent: "ポータル: 送信済み",
+  not_issued: "未発行",
+  issued: "未連携",
+  provisioned: "未送信",
+  sent: "送信済み",
 };
 const MONTH_KEY_PATTERN = /^\\d{4}-(0[1-9]|1[0-2])$/;
 const PORTAL_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const CONFIRMATION_ID_PATTERN = /^[0-9A-F]{4}(?:-[0-9A-F]{4}){3}$/;
 const CANONICAL_TIMESTAMP_PATTERN =
   /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/;
+const MESSAGE_INFO_LINE_BREAK = String.fromCharCode(10);
 const PDF_IMPORT_BLOCKED_REASONS = new Set([
   "empty_relationships",
   "duplicate_relationship_id",
@@ -379,6 +425,17 @@ function isNonBlankString(value) {
 
 function isPortalDeliveryState(value) {
   return typeof value === "string" && PORTAL_DELIVERY_STATES.has(value);
+}
+
+function isPortalLinkState(value) {
+  return typeof value === "string" && PORTAL_LINK_STATES.has(value);
+}
+
+function isFanboxManagementUrl(value) {
+  return (
+    value === null ||
+    (typeof value === "string" && FANBOX_MANAGEMENT_URL_PATTERN.test(value))
+  );
 }
 
 function isCanonicalTimestamp(value) {
@@ -778,7 +835,9 @@ function validateSupporterResponse(value) {
           supporter.latestMonthKey.length === 7 &&
           MONTH_KEY_PATTERN.test(supporter.latestMonthKey))
       ) ||
-      !isPortalDeliveryState(supporter.portalDeliveryState)
+      !isPortalDeliveryState(supporter.portalDeliveryState) ||
+      !isFanboxManagementUrl(supporter.fanboxManagementUrl) ||
+      !isPortalLinkState(supporter.portalLinkState)
     ) {
       throw new TypeError("invalid supporter item");
     }
@@ -786,6 +845,21 @@ function validateSupporterResponse(value) {
     return supporter;
   });
 }
+
+const SUPPORTER_FILTER_VALUES = new Set([
+  "all",
+  "supporting",
+  "stopped",
+  "not-sent",
+]);
+const supporterListState = {
+  loaded: false,
+  supporters: [],
+  search: "",
+  filter: "all",
+  notice: null,
+};
+let supporterListUi = null;
 
 const lotteryState = {
   active: false,
@@ -1134,20 +1208,14 @@ async function submitLotteryResults(listStatus, supporterList) {
   }
 }
 
-function validatePortalLinkResponse(value) {
-  if (!isRecord(value) || !hasExactKeys(value, ["portalUrl", "verifiedAt"])) {
-    throw new TypeError("invalid portal link response");
-  }
-  if (!isCanonicalTimestamp(value.verifiedAt)) {
-    throw new TypeError("invalid portal link timestamp");
-  }
-  if (typeof value.portalUrl !== "string") {
+function validatePortalUrl(value) {
+  if (typeof value !== "string") {
     throw new TypeError("invalid portal link URL");
   }
 
   let portalUrl;
   try {
-    portalUrl = new URL(value.portalUrl);
+    portalUrl = new URL(value);
   } catch {
     throw new TypeError("invalid portal link URL");
   }
@@ -1167,7 +1235,26 @@ function validatePortalLinkResponse(value) {
     throw new TypeError("invalid portal link URL");
   }
 
-  return value.portalUrl;
+  return value;
+}
+
+function validatePortalLinkResponse(value) {
+  if (!isRecord(value) || !hasExactKeys(value, ["portalUrl", "verifiedAt"])) {
+    throw new TypeError("invalid portal link response");
+  }
+  if (!isCanonicalTimestamp(value.verifiedAt)) {
+    throw new TypeError("invalid portal link timestamp");
+  }
+
+  return validatePortalUrl(value.portalUrl);
+}
+
+function validateCurrentPortalLinkResponse(value) {
+  if (!isRecord(value) || !hasExactKeys(value, ["portalUrl"])) {
+    throw new TypeError("invalid current portal link response");
+  }
+
+  return validatePortalUrl(value.portalUrl);
 }
 
 function validatePortalSyncResponse(value) {
@@ -1194,20 +1281,20 @@ function validatePortalSentResponse(value) {
   return "sent";
 }
 
-function showPortalFailure(status, message) {
-  status.textContent = message;
+function isExactPortalLinkUnavailable(value) {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["error"]) &&
+    value.error === "portal_link_unavailable"
+  );
 }
 
-function showPortalSuccess(status, portalUrl) {
-  const success = document.createElement("p");
-  const warning = document.createElement("p");
-  const secretUrl = document.createElement("code");
-
-  success.textContent = "ポータルURLを発行しました。";
-  warning.textContent =
-    "この秘密のURLは保存されません。今すぐコピーしてください。";
-  secretUrl.textContent = portalUrl;
-  status.replaceChildren(success, warning, secretUrl);
+function isExactPortalStateConflict(value) {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["error"]) &&
+    value.error === "portal_state_conflict"
+  );
 }
 
 const PDF_RELATIONSHIP_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -2429,85 +2516,238 @@ function renderLegacyBaselineControl(supporter, listStatus, supporterList) {
   return control;
 }
 
+function getSupporterListUi(status, list) {
+  if (supporterListUi === null) {
+    supporterListUi = { status, list };
+  }
+  return supporterListUi;
+}
+
+function getFilteredSupporters() {
+  const search = supporterListState.search.trim().toLowerCase();
+  return supporterListState.supporters.filter((supporter) => {
+    if (
+      search.length > 0 &&
+      !supporter.displayName.toLowerCase().includes(search)
+    ) {
+      return false;
+    }
+    if (supporterListState.filter === "supporting" && !supporter.supporting) {
+      return false;
+    }
+    if (supporterListState.filter === "stopped" && supporter.supporting) {
+      return false;
+    }
+    if (
+      supporterListState.filter === "not-sent" &&
+      supporter.portalDeliveryState === "sent"
+    ) {
+      return false;
+    }
+    return true;
+  });
+}
+
+function renderSupporterList() {
+  if (supporterListUi === null || !supporterListState.loaded) {
+    return;
+  }
+
+  const filteredSupporters = getFilteredSupporters();
+  const total = supporterListState.supporters.length;
+  if (total === 0) {
+    supporterListUi.status.textContent = "支援者はいません。";
+    supporterListUi.list.replaceChildren();
+    return;
+  }
+  if (filteredSupporters.length === 0) {
+    supporterListUi.status.textContent = "条件に一致する支援者はいません。";
+    supporterListUi.list.replaceChildren();
+    return;
+  }
+
+  const notice =
+    supporterListState.notice === null ? "" : supporterListState.notice + " ";
+  supporterListUi.status.textContent =
+    notice + "表示: " + filteredSupporters.length + "人 / 全" + total + "人";
+  supporterListUi.list.replaceChildren(
+    ...filteredSupporters.map((supporter) =>
+      renderSupporter(
+        supporter,
+        supporterListUi.status,
+        supporterListUi.list,
+      ),
+    ),
+  );
+}
+
+function createSupporterStatusBadge(text, className) {
+  const badge = document.createElement("span");
+  badge.setAttribute("class", "status-badge " + className);
+  badge.setAttribute("role", "status");
+  badge.textContent = text;
+  return badge;
+}
+
+function configureSupporterButton(button, text, className) {
+  button.type = "button";
+  button.textContent = text;
+  if (className !== "") {
+    button.setAttribute("class", className);
+  }
+}
+
+async function parsePortalResponse(response) {
+  try {
+    return await response.json();
+  } catch {
+    throw new Error("invalid portal response");
+  }
+}
+
+async function handlePortalLinkMutationResponse(
+  response,
+  status,
+  listStatus,
+  supporterList,
+  successMessage,
+) {
+  const responseBody = await parsePortalResponse(response);
+  if (response.status === 503) {
+    if (!isExactPortalNotConfigured(responseBody)) {
+      throw new Error("invalid portal configuration response");
+    }
+    status.textContent = "ポータル連携が設定されていません。";
+    return;
+  }
+  if (response.status === 409) {
+    if (!isExactPortalStateConflict(responseBody)) {
+      throw new Error("invalid portal state conflict");
+    }
+    await loadSupporters(
+      listStatus,
+      supporterList,
+      "ポータル状態が変わっています。最新の状態を確認してください。",
+    );
+    return;
+  }
+  if (response.status !== 200) {
+    throw new Error("portal link request failed");
+  }
+
+  validatePortalLinkResponse(responseBody);
+  await loadSupporters(listStatus, supporterList, successMessage);
+}
+
+async function writeClipboardText(text, status, successMessage) {
+  if (
+    typeof navigator === "undefined" ||
+    navigator.clipboard === undefined ||
+    typeof navigator.clipboard.writeText !== "function"
+  ) {
+    status.textContent = "コピーできませんでした。";
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(text);
+    status.textContent = successMessage;
+  } catch {
+    status.textContent = "コピーできませんでした。";
+  }
+}
+
 function renderSupporter(supporter, listStatus, supporterList) {
-  const item = document.createElement("li");
-  const name = document.createElement("h3");
-  const confirmationId = document.createElement("p");
-  const entries = document.createElement("p");
-  const supportStatus = document.createElement("p");
-  const latestMonth = document.createElement("p");
-  const portalDeliveryStatus = document.createElement("p");
-  const portalButton = document.createElement("button");
-  const portalLinkStatus = document.createElement("p");
+  const row = document.createElement("tr");
+  const nameCell = document.createElement("th");
+  const entriesCell = document.createElement("td");
+  const supportStateCell = document.createElement("td");
+  const confirmationCell = document.createElement("td");
+  const portalCell = document.createElement("td");
+  const operationCell = document.createElement("td");
+  const confirmationIdText = document.createElement("span");
+  const confirmationCopyButton = document.createElement("button");
+  const confirmationStatus = document.createElement("span");
+  const portalDeliveryStatus = createSupporterStatusBadge(
+    PORTAL_DELIVERY_LABELS[supporter.portalDeliveryState],
+    "portal-delivery-status",
+  );
+  const portalStatus = document.createElement("p");
+  const primaryActions = document.createElement("div");
+  const secondaryDetails = document.createElement("details");
+  const secondarySummary = document.createElement("summary");
+  const secondaryActions = document.createElement("div");
   const syncButton = document.createElement("button");
   const syncStatus = document.createElement("p");
   const sentButton = document.createElement("button");
   const sentStatus = document.createElement("p");
+  const latestMonth = document.createElement("p");
   const legacyBaselineControl = supporter.legacyBaselineEligible
     ? renderLegacyBaselineControl(supporter, listStatus, supporterList)
     : null;
-  let portalDeliveryState = supporter.portalDeliveryState;
+  const portalButtons = [];
+  const portalDeliveryState = supporter.portalDeliveryState;
   let portalOperationActive = false;
 
   function updatePortalButtons() {
-    portalButton.disabled = portalOperationActive;
-    syncButton.disabled = portalOperationActive;
+    for (const button of portalButtons) {
+      button.disabled = portalOperationActive;
+    }
     sentButton.disabled =
       portalOperationActive || portalDeliveryState !== "provisioned";
   }
 
-  function updatePortalDeliveryState() {
-    portalDeliveryStatus.textContent = PORTAL_DELIVERY_LABELS[portalDeliveryState];
-    updatePortalButtons();
+  function registerPortalButton(button) {
+    portalButtons.push(button);
+    return button;
   }
 
-  async function syncSupporterToCloudflare() {
+  async function issuePortalLink() {
     if (portalOperationActive) {
       return;
     }
 
     portalOperationActive = true;
     updatePortalButtons();
-    syncStatus.textContent = "Cloudflareへ同期しています。";
-
+    portalStatus.textContent = "URLを発行しています。";
     try {
-      const { id: supporterId } = supporter;
-      const response = await fetch("/api/portal-sync", {
+      const response = await fetch("/api/portal-link/issue", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ supporterId }),
+        body: JSON.stringify({ supporterId: supporter.id }),
         cache: "no-store",
         credentials: "omit",
         redirect: "error",
         referrerPolicy: "no-referrer",
       });
-      if (response.status === 503) {
-        syncStatus.textContent = "ポータル連携が設定されていません。";
-        return;
-      }
-      if (response.status !== 200) {
-        throw new Error("portal sync request failed");
-      }
-
-      const verifiedAt = validatePortalSyncResponse(await response.json());
-      syncStatus.textContent = "Cloudflare同期完了: " + verifiedAt;
+      await handlePortalLinkMutationResponse(
+        response,
+        portalStatus,
+        listStatus,
+        supporterList,
+        "URLを発行しました。",
+      );
     } catch {
-      syncStatus.textContent = "Cloudflareへ同期できませんでした。";
+      portalStatus.textContent = "URLを発行できませんでした。";
     } finally {
       portalOperationActive = false;
       updatePortalButtons();
     }
   }
 
-  async function prepareSupporterPortalLink() {
-    if (portalOperationActive) {
+  async function reissuePortalLink() {
+    if (
+      portalOperationActive ||
+      (supporter.portalLinkState !== "unrecoverable" &&
+        supporter.portalLinkState !== "available")
+    ) {
       return;
     }
     if (
       !window.confirm(
-        "新しいポータルURLを発行します。以前のURLがある場合、以前のURLは現在のURLではなくなります。続行しますか？",
+        "以前の個人用ポータルURLは無効になります。新しいURLを再発行します。続行しますか？",
       )
     ) {
       return;
@@ -2515,38 +2755,137 @@ function renderSupporter(supporter, listStatus, supporterList) {
 
     portalOperationActive = true;
     updatePortalButtons();
-    portalLinkStatus.textContent = "ポータルURLを準備しています。";
-
+    portalStatus.textContent = "URLを再発行しています。";
     try {
-      const { id: supporterId } = supporter;
-      const response = await fetch("/api/portal-link", {
+      const response = await fetch("/api/portal-link/reissue", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ supporterId }),
+        body: JSON.stringify({ supporterId: supporter.id }),
         cache: "no-store",
         credentials: "omit",
         redirect: "error",
         referrerPolicy: "no-referrer",
       });
-      if (response.status === 503) {
-        showPortalFailure(portalLinkStatus, "ポータル連携が設定されていません。");
+      await handlePortalLinkMutationResponse(
+        response,
+        portalStatus,
+        listStatus,
+        supporterList,
+        "URLを再発行しました。",
+      );
+    } catch {
+      portalStatus.textContent = "URLを再発行できませんでした。";
+    } finally {
+      portalOperationActive = false;
+      updatePortalButtons();
+    }
+  }
+
+  async function provisionPortalLink() {
+    if (
+      portalOperationActive ||
+      supporter.portalLinkState !== "needs_provisioning"
+    ) {
+      return;
+    }
+
+    portalOperationActive = true;
+    updatePortalButtons();
+    portalStatus.textContent = "ポータル連携を再試行しています。";
+    try {
+      const response = await fetch("/api/portal-link/provision", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ supporterId: supporter.id }),
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+        referrerPolicy: "no-referrer",
+      });
+      await handlePortalLinkMutationResponse(
+        response,
+        portalStatus,
+        listStatus,
+        supporterList,
+        "ポータル連携を再試行しました。",
+      );
+    } catch {
+      portalStatus.textContent = "ポータル連携を再試行できませんでした。";
+    } finally {
+      portalOperationActive = false;
+      updatePortalButtons();
+    }
+  }
+
+  async function fetchCurrentPortalUrl() {
+    const response = await fetch("/api/portal-link/current", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ supporterId: supporter.id }),
+      cache: "no-store",
+      credentials: "omit",
+      redirect: "error",
+      referrerPolicy: "no-referrer",
+    });
+    const responseBody = await parsePortalResponse(response);
+    if (response.status === 409) {
+      if (!isExactPortalLinkUnavailable(responseBody)) {
+        throw new Error("invalid current portal link conflict");
+      }
+      return null;
+    }
+    if (response.status === 503) {
+      if (!isExactPortalNotConfigured(responseBody)) {
+        throw new Error("invalid portal configuration response");
+      }
+      throw new Error("portal-not-configured");
+    }
+    if (response.status !== 200) {
+      throw new Error("current portal link request failed");
+    }
+
+    return validateCurrentPortalLinkResponse(responseBody);
+  }
+
+  async function copyPortalLink(messageMode) {
+    if (portalOperationActive) {
+      return;
+    }
+
+    portalOperationActive = true;
+    updatePortalButtons();
+    portalStatus.textContent = "現在のURLを取得しています。";
+    try {
+      const portalUrl = await fetchCurrentPortalUrl();
+      if (portalUrl === null) {
+        portalStatus.textContent = "現在のURLは利用できません。";
         return;
       }
-      if (!response.ok) {
-        throw new Error("portal link request failed");
-      }
-
-      const result = validatePortalLinkResponse(await response.json());
-      portalDeliveryState = "provisioned";
-      updatePortalDeliveryState();
-      showPortalSuccess(portalLinkStatus, result);
-    } catch {
-      showPortalFailure(
-        portalLinkStatus,
-        "ポータルURLを準備できませんでした。",
+      const clipboardText = messageMode
+        ? "確認ID: " +
+          supporter.confirmationId +
+          MESSAGE_INFO_LINE_BREAK +
+          portalUrl
+        : portalUrl;
+      await writeClipboardText(
+        clipboardText,
+        portalStatus,
+        messageMode
+          ? "送信用情報をコピーしました。"
+          : "URLをコピーしました。",
       );
+    } catch (error) {
+      if (error instanceof Error && error.message === "portal-not-configured") {
+        portalStatus.textContent = "ポータル連携が設定されていません。";
+      } else {
+        portalStatus.textContent = "コピーできませんでした。";
+      }
     } finally {
       portalOperationActive = false;
       updatePortalButtons();
@@ -2568,36 +2907,43 @@ function renderSupporter(supporter, listStatus, supporterList) {
     portalOperationActive = true;
     updatePortalButtons();
     sentStatus.textContent = "送信済みとして記録しています。";
-
     try {
-      const { id: supporterId } = supporter;
       const response = await fetch("/api/portal-link/sent", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ supporterId }),
+        body: JSON.stringify({ supporterId: supporter.id }),
         cache: "no-store",
         credentials: "omit",
         redirect: "error",
         referrerPolicy: "no-referrer",
       });
+      const responseBody = await parsePortalResponse(response);
       if (response.status === 409) {
-        sentStatus.textContent =
-          "ポータル状態が更新されています。一覧を再読み込みしてください。";
+        if (!isExactPortalStateConflict(responseBody)) {
+          throw new Error("invalid portal sent conflict");
+        }
+        await loadSupporters(
+          listStatus,
+          supporterList,
+          "ポータル状態が変わっています。最新の状態を確認してください。",
+        );
         return;
       }
-      if (!response.ok) {
+      if (response.status !== 200) {
         throw new Error("portal sent request failed");
       }
 
-      const result = validatePortalSentResponse(await response.json());
+      const result = validatePortalSentResponse(responseBody);
       if (result !== "sent") {
         throw new TypeError("invalid portal sent response");
       }
-      portalDeliveryState = "sent";
-      updatePortalDeliveryState();
-      sentStatus.textContent = "送信済みとして記録しました。";
+      await loadSupporters(
+        listStatus,
+        supporterList,
+        "送信済みとして記録しました。",
+      );
     } catch {
       sentStatus.textContent = "ポータル送信状態を記録できませんでした。";
     } finally {
@@ -2606,55 +2952,201 @@ function renderSupporter(supporter, listStatus, supporterList) {
     }
   }
 
-  name.textContent = supporter.displayName;
-  confirmationId.textContent = "確認ID: " + supporter.confirmationId;
-  entries.textContent = \`\${supporter.entryCount}口\`;
-  supportStatus.textContent = supporter.supporting ? "支援中" : "支援停止";
-  latestMonth.textContent = \`最新処理月: \${supporter.latestMonthKey ?? "未処理"}\`;
-  portalDeliveryStatus.setAttribute("role", "status");
-  portalButton.type = "button";
-  portalButton.textContent = "ポータルURLを発行・再発行";
-  syncButton.type = "button";
-  syncButton.textContent = "Cloudflareへ同期";
+  confirmationCopyButton.type = "button";
+  confirmationCopyButton.textContent = "確認IDをコピー";
+  confirmationCopyButton.setAttribute("class", "compact-copy-button");
+  confirmationCopyButton.addEventListener("click", () => {
+    void writeClipboardText(
+      supporter.confirmationId,
+      confirmationStatus,
+      "確認IDをコピーしました。",
+    );
+  });
+  confirmationIdText.textContent = supporter.confirmationId;
+  confirmationStatus.setAttribute("role", "status");
+  confirmationStatus.setAttribute("aria-live", "polite");
+  confirmationCell.replaceChildren(
+    confirmationIdText,
+    confirmationCopyButton,
+    confirmationStatus,
+  );
+
+  nameCell.setAttribute("scope", "row");
+  if (supporter.fanboxManagementUrl === null) {
+    nameCell.textContent = supporter.displayName;
+  } else {
+    const nameLink = document.createElement("a");
+    nameLink.textContent = supporter.displayName;
+    nameLink.href = supporter.fanboxManagementUrl;
+    nameLink.target = "_blank";
+    nameLink.rel = "noopener noreferrer";
+    nameLink.referrerPolicy = "no-referrer";
+    nameLink.setAttribute("href", supporter.fanboxManagementUrl);
+    nameLink.setAttribute("target", "_blank");
+    nameLink.setAttribute("rel", "noopener noreferrer");
+    nameLink.setAttribute("referrerpolicy", "no-referrer");
+    nameCell.replaceChildren(nameLink);
+  }
+
+  entriesCell.textContent = supporter.entryCount + "口";
+  supportStateCell.replaceChildren(
+    createSupporterStatusBadge(
+      supporter.supporting ? "支援中" : "停止",
+      supporter.supporting ? "supporting" : "stopped",
+    ),
+  );
+  portalCell.replaceChildren(portalDeliveryStatus);
+  if (supporter.portalLinkState === "unrecoverable") {
+    const unrecoverable = document.createElement("span");
+    unrecoverable.textContent = "URL保存なし";
+    unrecoverable.setAttribute("class", "portal-recovery-state");
+    portalCell.replaceChildren(portalDeliveryStatus, unrecoverable);
+  }
+
+  configureSupporterButton(syncButton, "Cloudflareへ同期", "secondary-button");
+  registerPortalButton(syncButton);
   syncStatus.setAttribute("role", "status");
   syncStatus.setAttribute("aria-live", "polite");
-  sentButton.type = "button";
-  sentButton.textContent = "送信済みとして記録";
-  sentStatus.setAttribute("role", "status");
-  portalButton.addEventListener("click", () => {
-    void prepareSupporterPortalLink();
-  });
   syncButton.addEventListener("click", () => {
-    void syncSupporterToCloudflare();
+    if (portalOperationActive) {
+      return;
+    }
+
+    portalOperationActive = true;
+    updatePortalButtons();
+    syncStatus.textContent = "Cloudflareへ同期しています。";
+    void (async () => {
+      try {
+        const response = await fetch("/api/portal-sync", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ supporterId: supporter.id }),
+          cache: "no-store",
+          credentials: "omit",
+          redirect: "error",
+          referrerPolicy: "no-referrer",
+        });
+        if (response.status === 503) {
+          syncStatus.textContent = "ポータル連携が設定されていません。";
+          return;
+        }
+        if (response.status !== 200) {
+          throw new Error("portal sync request failed");
+        }
+
+        const verifiedAt = validatePortalSyncResponse(await response.json());
+        syncStatus.textContent = "Cloudflare同期完了: " + verifiedAt;
+      } catch {
+        syncStatus.textContent = "Cloudflareへ同期できませんでした。";
+      } finally {
+        portalOperationActive = false;
+        updatePortalButtons();
+      }
+    })();
   });
+  configureSupporterButton(sentButton, "送信済みとして記録", "secondary-button");
+  sentStatus.setAttribute("role", "status");
+  sentStatus.setAttribute("aria-live", "polite");
   sentButton.addEventListener("click", () => {
     void markPortalSent();
   });
-  updatePortalDeliveryState();
-  item.replaceChildren(
-    name,
-    confirmationId,
-    entries,
-    supportStatus,
+
+  latestMonth.textContent =
+    "最新処理月: " + (supporter.latestMonthKey ?? "未処理");
+  secondarySummary.textContent = "その他";
+  const secondaryActionContents = [
     latestMonth,
-    portalDeliveryStatus,
-    portalButton,
-    portalLinkStatus,
     syncButton,
     syncStatus,
     sentButton,
     sentStatus,
     ...(legacyBaselineControl === null ? [] : [legacyBaselineControl]),
+  ];
+
+  if (supporter.portalLinkState === "not_issued") {
+    const issueButton = registerPortalButton(document.createElement("button"));
+    configureSupporterButton(issueButton, "URLを発行", "primary-button");
+    issueButton.addEventListener("click", () => {
+      void issuePortalLink();
+    });
+    primaryActions.replaceChildren(issueButton);
+  } else if (supporter.portalLinkState === "needs_provisioning") {
+    const provisionButton = registerPortalButton(
+      document.createElement("button"),
+    );
+    configureSupporterButton(
+      provisionButton,
+      "連携を再試行",
+      "primary-button",
+    );
+    provisionButton.addEventListener("click", () => {
+      void provisionPortalLink();
+    });
+    primaryActions.replaceChildren(provisionButton);
+  } else if (supporter.portalLinkState === "available") {
+    const messageCopyButton = registerPortalButton(
+      document.createElement("button"),
+    );
+    const urlCopyButton = registerPortalButton(document.createElement("button"));
+    configureSupporterButton(
+      messageCopyButton,
+      "送信用情報をコピー",
+      "primary-button",
+    );
+    configureSupporterButton(urlCopyButton, "URLをコピー", "secondary-button");
+    messageCopyButton.addEventListener("click", () => {
+      void copyPortalLink(true);
+    });
+    urlCopyButton.addEventListener("click", () => {
+      void copyPortalLink(false);
+    });
+    primaryActions.replaceChildren(messageCopyButton, urlCopyButton);
+  }
+
+  if (
+    supporter.portalLinkState === "unrecoverable" ||
+    supporter.portalLinkState === "available"
+  ) {
+    const reissueButton = registerPortalButton(document.createElement("button"));
+    configureSupporterButton(reissueButton, "URLを再発行…", "danger-button");
+    reissueButton.addEventListener("click", () => {
+      void reissuePortalLink();
+    });
+    secondaryActionContents.push(reissueButton);
+  }
+
+  portalStatus.setAttribute("role", "status");
+  portalStatus.setAttribute("aria-live", "polite");
+  primaryActions.setAttribute("class", "supporter-primary-actions");
+  secondaryActions.setAttribute("class", "supporter-secondary-actions");
+  secondaryActions.replaceChildren(...secondaryActionContents);
+  secondaryDetails.replaceChildren(secondarySummary, secondaryActions);
+  operationCell.replaceChildren(primaryActions, portalStatus, secondaryDetails);
+  row.replaceChildren(
+    nameCell,
+    entriesCell,
+    supportStateCell,
+    confirmationCell,
+    portalCell,
+    operationCell,
   );
-  return item;
+  updatePortalButtons();
+  return row;
 }
 
 function showListState(status, list, message) {
+  supporterListState.loaded = false;
+  supporterListState.supporters = [];
+  supporterListState.notice = null;
   status.textContent = message;
   list.replaceChildren();
 }
 
-async function loadSupporters(status, list) {
+async function loadSupporters(status, list, notice = null) {
+  getSupporterListUi(status, list);
+  supporterListState.notice = null;
   showListState(status, list, "支援者一覧を読み込んでいます。");
   prepareLotteryParticipantLoad();
 
@@ -2671,20 +3163,13 @@ async function loadSupporters(status, list) {
     }
 
     const supporters = validateSupporterResponse(await response.json());
+    supporterListState.supporters = supporters;
+    supporterListState.loaded = true;
+    supporterListState.notice = notice;
     lotteryState.supporters = supporters;
     lotteryState.loaded = true;
     renderLotteryParticipants(supporters);
-    if (supporters.length === 0) {
-      showListState(status, list, "支援者はいません。");
-      return;
-    }
-
-    status.textContent = "";
-    list.replaceChildren(
-      ...supporters.map((supporter) =>
-        renderSupporter(supporter, status, list),
-      ),
-    );
+    renderSupporterList();
   } catch {
     showListState(status, list, "支援者一覧を読み込めませんでした。");
     setLotteryParticipantState(
@@ -2693,6 +3178,58 @@ async function loadSupporters(status, list) {
   }
 }
 
+function initializeAdminNavigation() {
+  const navigationViews = [
+    {
+      button: document.getElementById("supporter-view-button"),
+      view: document.getElementById("supporter-view"),
+    },
+    {
+      button: document.getElementById("fanbox-import-view-button"),
+      view: document.getElementById("fanbox-import-view"),
+    },
+    {
+      button: document.getElementById("lottery-view-button"),
+      view: document.getElementById("lottery-view"),
+    },
+    {
+      button: document.getElementById("month-end-view-button"),
+      view: document.getElementById("month-end-view"),
+    },
+    {
+      button: document.getElementById("settings-view-button"),
+      view: document.getElementById("settings-view"),
+    },
+  ];
+
+  if (
+    navigationViews.some(({ button, view }) => button === null || view === null)
+  ) {
+    return;
+  }
+
+  function activateAdminView(activeView) {
+    for (const { button, view } of navigationViews) {
+      const isActive = view === activeView;
+      view.hidden = !isActive;
+      if (isActive) {
+        button.setAttribute("aria-current", "page");
+      } else {
+        button.removeAttribute("aria-current");
+      }
+    }
+  }
+
+  for (const { button, view } of navigationViews) {
+    button.addEventListener("click", () => {
+      activateAdminView(view);
+    });
+  }
+
+  activateAdminView(navigationViews[0].view);
+}
+
+initializeAdminNavigation();
 document.documentElement.dataset.adminReady = "true";
 const pdfInspectionFile = document.getElementById("pdf-inspection-file");
 const pdfInspectionButton = document.getElementById("pdf-inspection-button");
@@ -2700,7 +3237,10 @@ const pdfImportButton = document.getElementById("pdf-import-button");
 const pdfInspectionStatus = document.getElementById("pdf-inspection-status");
 const pdfInspectionResult = document.getElementById("pdf-inspection-result");
 const listStatus = document.getElementById("list-status");
-const supporterList = document.getElementById("list");
+const supporterSearchInput = document.getElementById("supporter-search");
+const supporterFilterSelect = document.getElementById("supporter-filter");
+const supporterListBody = document.getElementById("list-body");
+const supporterList = supporterListBody ?? document.getElementById("list");
 const lotteryOccurredAtInput = document.getElementById("lottery-occurred-at");
 const lotteryResultStatus = document.getElementById("lottery-result-status");
 const lotteryParticipantStatus = document.getElementById(
@@ -2869,15 +3409,54 @@ if (
 }
 
 if (listStatus !== null && supporterList !== null) {
+  supporterListUi = {
+    status: listStatus,
+    list: supporterList,
+  };
+  if (supporterSearchInput !== null) {
+    supporterListState.search = supporterSearchInput.value;
+    supporterSearchInput.addEventListener("input", () => {
+      supporterListState.search = supporterSearchInput.value;
+      supporterListState.notice = null;
+      renderSupporterList();
+    });
+  }
+  if (
+    supporterFilterSelect !== null &&
+    SUPPORTER_FILTER_VALUES.has(supporterFilterSelect.value)
+  ) {
+    supporterListState.filter = supporterFilterSelect.value;
+    supporterFilterSelect.addEventListener("change", () => {
+      supporterListState.filter = SUPPORTER_FILTER_VALUES.has(
+        supporterFilterSelect.value,
+      )
+        ? supporterFilterSelect.value
+        : "all";
+      supporterListState.notice = null;
+      renderSupporterList();
+    });
+  }
   void loadSupporters(listStatus, supporterList);
 }
 `;
 
 export const ADMIN_STYLES = `:root {
+  --base: #faf4ed;
+  --surface: #fffaf3;
+  --overlay: #f2e9e1;
+  --text: #575279;
+  --muted: #9893a5;
+  --border: #dfdad9;
+  --pine: #286983;
+  --foam: #56949f;
+  --iris: #907aa9;
+  --rose: #d7827e;
+  --gold: #ea9d34;
+  --love: #b4637a;
   color-scheme: light;
   font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic", sans-serif;
-  color: #252525;
-  background: #f4f5f7;
+  color: var(--text);
+  background-color: var(--base);
 }
 
 * {
@@ -2885,85 +3464,366 @@ export const ADMIN_STYLES = `:root {
 }
 
 body {
-  margin: 0;
   min-width: 320px;
+  margin: 0;
+  color: var(--text);
+  background-color: var(--base);
 }
 
 main {
-  width: min(100% - 2rem, 56rem);
+  width: min(100% - 2rem, 78rem);
+  min-width: 0;
   margin: 0 auto;
-  padding: clamp(2rem, 8vw, 6rem) 0;
+  padding: clamp(1.5rem, 4vw, 3.5rem) 0;
 }
 
-h1 {
+.admin-header h1 {
   margin: 0;
   font-size: clamp(1.6rem, 3vw, 2.4rem);
   line-height: 1.3;
 }
 
 #status {
-  margin: 1.5rem 0 0;
-  padding: 1rem 1.25rem;
-  border: 1px solid #cfd4dc;
-  border-radius: 0.5rem;
-  background: #ffffff;
-}
-
-section {
-  margin-top: 2rem;
-}
-
-h2 {
-  margin: 0;
-  font-size: 1.35rem;
-}
-
-#list-status {
   margin: 0.75rem 0 0;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  color: var(--text);
+  background-color: var(--surface);
+}
+
+.admin-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  align-items: stretch;
+  margin-top: 1.25rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  background-color: var(--overlay);
+}
+
+.admin-navigation button {
+  flex: 1 1 8rem;
+  min-height: 2.4rem;
+  padding: 0.45rem 0.85rem;
+  border: 1px solid transparent;
+  border-radius: 0.45rem;
+  color: var(--text);
+  background-color: transparent;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.admin-navigation button:hover {
+  color: var(--text);
+  background-color: var(--surface);
+}
+
+.admin-navigation button[aria-current="page"] {
+  border-color: var(--pine);
+  color: var(--base);
+  background-color: var(--pine);
+}
+
+.admin-view[hidden] {
+  display: none;
+}
+
+.admin-view {
+  min-width: 0;
+  margin-top: 1rem;
+  padding: clamp(1rem, 2vw, 1.5rem);
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  background-color: var(--surface);
+}
+
+.admin-view h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: 1.25rem;
+}
+
+.admin-view [role="status"] {
+  color: var(--text);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  min-height: 2.25rem;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  color: var(--text);
+  background-color: var(--surface);
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--foam);
+  background-color: var(--overlay);
+}
+
+button:disabled {
+  border-color: var(--border);
+  color: var(--text);
+  background-color: var(--overlay);
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.primary-button,
+#pdf-inspection-button,
+#pdf-import-button,
+#backup-create-button,
+#month-end-process-button,
+#lottery-result-button {
+  border-color: var(--pine);
+  color: var(--base);
+  background-color: var(--pine);
+}
+
+.primary-button:hover,
+#pdf-inspection-button:hover,
+#pdf-import-button:hover,
+#backup-create-button:hover,
+#month-end-process-button:hover,
+#lottery-result-button:hover {
+  border-color: var(--foam);
+  background-color: var(--pine);
+}
+
+.primary-button:disabled,
+#pdf-inspection-button:disabled,
+#pdf-import-button:disabled,
+#backup-create-button:disabled,
+#month-end-process-button:disabled,
+#lottery-result-button:disabled,
+#list button:disabled {
+  border-color: var(--border);
+  color: var(--text);
+  background-color: var(--overlay);
+}
+
+.secondary-button {
+  border-color: var(--foam);
+  color: var(--pine);
+  background-color: var(--surface);
+}
+
+.danger-button {
+  border-color: var(--love);
+  color: var(--text);
+  background-color: var(--surface);
+}
+
+.danger-button:hover {
+  color: var(--text);
+  background-color: var(--overlay);
+}
+
+input,
+select {
+  min-height: 2.25rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  color: var(--text);
+  background-color: var(--surface);
+}
+
+input[type="file"] {
+  max-width: 100%;
+  padding: 0.25rem;
+}
+
+input[type="file"]::file-selector-button {
+  margin-right: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  color: var(--text);
+  background-color: var(--overlay);
+  font: inherit;
+  cursor: pointer;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 3px solid var(--iris);
+  outline-offset: 2px;
+}
+
+.supporter-list-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  margin-top: 1rem;
+}
+
+.supporter-list-toolbar input {
+  min-width: 14rem;
+}
+
+.supporter-table-wrapper {
+  max-width: 100%;
+  margin-top: 1rem;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background-color: var(--surface);
 }
 
 #list {
-  display: grid;
-  gap: 0.75rem;
-  margin: 1rem 0 0;
-  padding: 0;
-  list-style: none;
+  width: 100%;
+  min-width: 60rem;
+  border-collapse: collapse;
 }
 
-#list li {
-  padding: 1rem 1.25rem;
-  border: 1px solid #cfd4dc;
-  border-radius: 0.5rem;
-  background: #ffffff;
+#list tbody {
+  background-color: var(--surface);
 }
 
-#list h3,
-#list p {
-  margin: 0;
+#list th,
+#list td {
+  padding: 0.5rem 0.65rem;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
 }
 
-#list p + p {
+#list thead th {
+  color: var(--text);
+  background-color: var(--overlay);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+#list tbody tr:hover {
+  background-color: var(--overlay);
+}
+
+#list tbody tr:last-child th,
+#list tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+#list a {
+  color: var(--pine);
+  font-weight: 600;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  background-color: var(--overlay);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.status-badge.supporting {
+  border-color: var(--foam);
+  color: var(--pine);
+}
+
+.status-badge.stopped {
+  color: var(--text);
+}
+
+.status-badge.portal-delivery-status {
+  border-color: var(--rose);
+}
+
+.portal-recovery-state {
+  display: block;
+  margin-top: 0.25rem;
+  padding-left: 0.4rem;
+  border-left: 3px solid var(--gold);
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.supporter-primary-actions,
+.supporter-secondary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+#list td p {
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+}
+
+#list details {
   margin-top: 0.35rem;
 }
 
+#list summary {
+  color: var(--pine);
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+#list button {
+  min-height: 1.9rem;
+  padding: 0.3rem 0.55rem;
+}
+
+#list .compact-copy-button {
+  margin-left: 0.35rem;
+  min-height: 1.6rem;
+  padding: 0.15rem 0.4rem;
+  font-size: 0.75rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 #lottery-participant-status,
-#lottery-result-status {
+#lottery-result-status,
+#pdf-inspection-status {
   min-height: 1.5rem;
 }
 
 #lottery-participant-list {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.5rem;
   margin: 1rem 0 0;
   padding: 0;
   list-style: none;
 }
 
 #lottery-participant-list li {
-  padding: 1rem 1.25rem;
-  border: 1px solid #cfd4dc;
-  border-radius: 0.5rem;
-  background: #ffffff;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  background-color: var(--overlay);
 }
 
 #lottery-participant-list h3,
@@ -2979,37 +3839,31 @@ h2 {
   display: flex;
   gap: 0.5rem;
   align-items: center;
-  margin-top: 0.75rem;
+  margin-top: 0.65rem;
 }
 
-#lottery-result-button {
-  margin-top: 1rem;
-}
-
-#pdf-inspection-button {
-  margin-top: 0.25rem;
-}
-
-#pdf-import-button {
-  margin-top: 0.25rem;
-}
-
-#pdf-inspection-status {
-  min-height: 1.5rem;
+#lottery-result-button,
+#pdf-inspection-button,
+#pdf-import-button,
+#backup-destination-button,
+#backup-create-button,
+#month-end-source-refresh-button,
+#month-end-process-button {
+  margin-top: 0.5rem;
 }
 
 #pdf-inspection-result {
   display: grid;
-  gap: 0.75rem;
+  gap: 0.5rem;
   margin-top: 1rem;
 }
 
 #pdf-inspection-result section {
   margin-top: 0;
-  padding: 1rem 1.25rem;
-  border: 1px solid #cfd4dc;
-  border-radius: 0.5rem;
-  background: #ffffff;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.45rem;
+  background-color: var(--overlay);
 }
 
 #pdf-inspection-result h3,
@@ -3024,5 +3878,20 @@ h2 {
 
 .pdf-inspection-text {
   white-space: pre-wrap;
+}
+
+@media (max-width: 48rem) {
+  main {
+    width: min(100% - 1rem, 78rem);
+    padding-top: 1rem;
+  }
+
+  .admin-navigation button {
+    flex-basis: 7rem;
+  }
+
+  .supporter-list-toolbar input {
+    min-width: min(14rem, 100%);
+  }
 }
 `;

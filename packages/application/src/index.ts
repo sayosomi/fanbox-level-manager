@@ -29,6 +29,7 @@ export { createSupporterListService } from "./supporter-list-service.js";
 export type {
   SupporterListItem,
   SupporterListService,
+  SupporterPortalLinkState,
 } from "./supporter-list-service.js";
 export { deriveSupporterConfirmationId } from "./supporter-confirmation-id.js";
 export {
@@ -41,7 +42,12 @@ export type {
   CreateSupporterPortalAccessServiceOptions,
   IssueSupporterPortalAccessResult,
   PortalTokenBytesGenerator,
+  PortalTokenEncryptionKeyProvider,
   SupporterPortalAccessService,
+} from "./supporter-portal-access-service.js";
+export {
+  PortalAccessAlreadyIssuedError,
+  SupporterPortalTokenRecoveryError,
 } from "./supporter-portal-access-service.js";
 export type {
   SupporterPortalSnapshot,
@@ -71,9 +77,22 @@ export {
 } from "./supporter-portal-link-service.js";
 export type {
   CreateSupporterPortalLinkServiceOptions,
+  CurrentSupporterPortalLinkResult,
   PrepareSupporterPortalLinkResult,
+  SupporterPortalLinkResult,
   SupporterPortalLinkService,
 } from "./supporter-portal-link-service.js";
+export {
+  createSupporterPortalTokenCodec,
+  SupporterPortalTokenAuthenticationError,
+  SupporterPortalTokenFormatError,
+  SupporterPortalTokenSyntaxError,
+} from "./supporter-portal-token-codec.js";
+export type {
+  CreateSupporterPortalTokenCodecOptions,
+  PortalTokenNonceGenerator,
+  SupporterPortalTokenCodec,
+} from "./supporter-portal-token-codec.js";
 export {
   createSupporterPortalDeliveryService,
   SupporterPortalDeliveryConflictError,

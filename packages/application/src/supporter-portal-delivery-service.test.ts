@@ -8,8 +8,9 @@ import type { LocalStore, SupporterPortalAccessRecord } from "@sayosomi/storage"
 import {
   SupporterPortalDeliveryConflictError,
   createSupporterPortalDeliveryService,
-  createSupporterPortalAccessService,
+  createSupporterPortalAccessService as createRawSupporterPortalAccessService,
 } from "./index.js";
+import type { CreateSupporterPortalAccessServiceOptions } from "./index.js";
 
 const openStores: LocalStore[] = [];
 
@@ -30,6 +31,18 @@ function fixedClock(): Date {
   return new Date("2026-09-04T00:00:00.000Z");
 }
 
+const TEST_KEY = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
+
+function createSupporterPortalAccessService(
+  store: LocalStore,
+  options: Omit<CreateSupporterPortalAccessServiceOptions, "getEncryptionKey"> = {},
+): ReturnType<typeof createRawSupporterPortalAccessService> {
+  return createRawSupporterPortalAccessService(store, {
+    getEncryptionKey: async () => new Uint8Array(TEST_KEY),
+    ...options,
+  });
+}
+
 function provisionedAccess(
   supporterId: string,
 ): SupporterPortalAccessRecord {
@@ -37,6 +50,7 @@ function provisionedAccess(
     supporterId,
     tokenHash:
       "0f007385b6f9d4b7eeb2748605afe1a984a0a3bfa3f014d09e2a784ce9e5cd1a",
+    encryptedToken: Uint8Array.from([1, 2, 3]),
     issuedAt: "2026-09-04T00:00:00.000Z",
     provisionedAt: "2026-09-04T00:01:00.000Z",
     sentAt: null,
@@ -50,7 +64,7 @@ afterEach(() => {
 });
 
 describe("supporter portal delivery application service", () => {
-  it("maps no access, issued, provisioned, and sent states exactly", () => {
+  it("maps no access, issued, provisioned, and sent states exactly", async () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const supporter = createSupporter(store, "delivery-state-supporter");
     const accessService = createSupporterPortalAccessService(store, {
@@ -62,7 +76,7 @@ describe("supporter portal delivery application service", () => {
       "not_issued",
     );
 
-    accessService.issueSupporterPortalAccess(supporter.id);
+    await accessService.issueSupporterPortalAccess(supporter.id);
     expect(service.getSupporterPortalDeliveryState(supporter.id)).toBe("issued");
 
     const issued = accessService.getSupporterPortalAccess(supporter.id);
@@ -81,14 +95,14 @@ describe("supporter portal delivery application service", () => {
     expect(service.getSupporterPortalDeliveryState(supporter.id)).toBe("sent");
   });
 
-  it("returns only a state string and never an access record", () => {
+  it("returns only a state string and never an access record", async () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const supporter = createSupporter(store, "delivery-privacy-supporter");
     const accessService = createSupporterPortalAccessService(store, {
       generateTokenBytes: () => new Uint8Array(32),
     });
     const service = createSupporterPortalDeliveryService(store);
-    const issued = accessService.issueSupporterPortalAccess(supporter.id);
+    const issued = await accessService.issueSupporterPortalAccess(supporter.id);
     accessService.markSupporterPortalAccessProvisioned(
       supporter.id,
       issued.tokenHash,
@@ -118,14 +132,14 @@ describe("supporter portal delivery application service", () => {
     expect(store.getSupporterPortalAccess(supporter.id)).toBeNull();
   });
 
-  it("rejects mark-sent when access is issued but unprovisioned", () => {
+  it("rejects mark-sent when access is issued but unprovisioned", async () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const supporter = createSupporter(store, "issued-mark-supporter");
     const accessService = createSupporterPortalAccessService(store, {
       generateTokenBytes: () => new Uint8Array(32),
     });
     const service = createSupporterPortalDeliveryService(store);
-    const issued = accessService.issueSupporterPortalAccess(supporter.id);
+    const issued = await accessService.issueSupporterPortalAccess(supporter.id);
 
     expect(() =>
       service.markCurrentSupporterPortalAccessSent(supporter.id),
@@ -133,14 +147,14 @@ describe("supporter portal delivery application service", () => {
     expect(store.getSupporterPortalAccess(supporter.id)).toEqual(issued.access);
   });
 
-  it("persists sent state through the existing guarded storage operation", () => {
+  it("persists sent state through the existing guarded storage operation", async () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const supporter = createSupporter(store, "provisioned-mark-supporter");
     const accessService = createSupporterPortalAccessService(store, {
       generateTokenBytes: () => new Uint8Array(32),
     });
     const service = createSupporterPortalDeliveryService(store);
-    const issued = accessService.issueSupporterPortalAccess(supporter.id);
+    const issued = await accessService.issueSupporterPortalAccess(supporter.id);
     accessService.markSupporterPortalAccessProvisioned(
       supporter.id,
       issued.tokenHash,
@@ -152,14 +166,14 @@ describe("supporter portal delivery application service", () => {
     expect(store.getSupporterPortalAccess(supporter.id)?.sentAt).not.toBeNull();
   });
 
-  it("keeps already-sent access idempotently successful", () => {
+  it("keeps already-sent access idempotently successful", async () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const supporter = createSupporter(store, "already-sent-supporter");
     const accessService = createSupporterPortalAccessService(store, {
       generateTokenBytes: () => new Uint8Array(32),
     });
     const service = createSupporterPortalDeliveryService(store);
-    const issued = accessService.issueSupporterPortalAccess(supporter.id);
+    const issued = await accessService.issueSupporterPortalAccess(supporter.id);
     accessService.markSupporterPortalAccessProvisioned(
       supporter.id,
       issued.tokenHash,

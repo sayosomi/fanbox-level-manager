@@ -12,6 +12,7 @@ import type { LocalStore } from "./index.js";
 const openStores: LocalStore[] = [];
 const FIRST_HASH = "a".repeat(64);
 const SECOND_HASH = "b".repeat(64);
+const CIPHERTEXT = Uint8Array.from([1, 2, 3]);
 
 function track(store: LocalStore): LocalStore {
   openStores.push(store);
@@ -58,16 +59,19 @@ describe("supporter portal access storage", () => {
     const access = store.replaceSupporterPortalAccessToken(
       supporter.id,
       FIRST_HASH,
+      CIPHERTEXT,
     );
 
     expect(access).toEqual({
       supporterId: supporter.id,
       tokenHash: FIRST_HASH,
+      encryptedToken: CIPHERTEXT,
       issuedAt,
       provisionedAt: null,
       sentAt: null,
     });
     expect(Object.keys(access).sort()).toEqual([
+      "encryptedToken",
       "issuedAt",
       "provisionedAt",
       "sentAt",
@@ -87,7 +91,7 @@ describe("supporter portal access storage", () => {
     );
     const supporter = createSupporter(store, "reissue-supporter");
 
-    store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH);
+    store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH, CIPHERTEXT);
     store.markSupporterPortalAccessProvisioned(supporter.id, FIRST_HASH);
     store.markSupporterPortalAccessSent(supporter.id, FIRST_HASH);
 
@@ -95,11 +99,13 @@ describe("supporter portal access storage", () => {
     const reissued = store.replaceSupporterPortalAccessToken(
       supporter.id,
       SECOND_HASH,
+      CIPHERTEXT,
     );
 
     expect(reissued).toEqual({
       supporterId: supporter.id,
       tokenHash: SECOND_HASH,
+      encryptedToken: CIPHERTEXT,
       issuedAt: "2026-09-04T00:01:00.000Z",
       provisionedAt: null,
       sentAt: null,
@@ -113,7 +119,7 @@ describe("supporter portal access storage", () => {
     );
     const supporter = createSupporter(store, "same-hash-supporter");
 
-    store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH);
+    store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH, CIPHERTEXT);
     store.markSupporterPortalAccessProvisioned(supporter.id, FIRST_HASH);
     store.markSupporterPortalAccessSent(supporter.id, FIRST_HASH);
 
@@ -121,6 +127,7 @@ describe("supporter portal access storage", () => {
     const replaced = store.replaceSupporterPortalAccessToken(
       supporter.id,
       FIRST_HASH,
+      CIPHERTEXT,
     );
 
     expect(replaced.issuedAt).toBe("2026-09-04T00:02:00.000Z");
@@ -135,14 +142,20 @@ describe("supporter portal access storage", () => {
     const firstAccess = store.replaceSupporterPortalAccessToken(
       firstSupporter.id,
       FIRST_HASH,
+      CIPHERTEXT,
     );
     const secondAccess = store.replaceSupporterPortalAccessToken(
       secondSupporter.id,
       SECOND_HASH,
+      CIPHERTEXT,
     );
 
     expect(() =>
-      store.replaceSupporterPortalAccessToken(secondSupporter.id, FIRST_HASH),
+      store.replaceSupporterPortalAccessToken(
+        secondSupporter.id,
+        FIRST_HASH,
+        CIPHERTEXT,
+      ),
     ).toThrow(PortalTokenHashConflictError);
     expect(store.getSupporterPortalAccess(firstSupporter.id)).toEqual(firstAccess);
     expect(store.getSupporterPortalAccess(secondSupporter.id)).toEqual(secondAccess);
@@ -167,7 +180,7 @@ describe("supporter portal access storage", () => {
     );
     const supporter = createSupporter(store, "provisioned-supporter");
 
-    store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH);
+    store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH, CIPHERTEXT);
     now = "2026-09-04T00:01:00.000Z";
     const provisioned = store.markSupporterPortalAccessProvisioned(
       supporter.id,
@@ -188,8 +201,8 @@ describe("supporter portal access storage", () => {
     const store = track(openLocalStore(":memory:"));
     const supporter = createSupporter(store, "stale-provision-supporter");
 
-    store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH);
-    store.replaceSupporterPortalAccessToken(supporter.id, SECOND_HASH);
+    store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH, CIPHERTEXT);
+    store.replaceSupporterPortalAccessToken(supporter.id, SECOND_HASH, CIPHERTEXT);
 
     expect(() =>
       store.markSupporterPortalAccessProvisioned(supporter.id, FIRST_HASH),
@@ -204,7 +217,7 @@ describe("supporter portal access storage", () => {
     );
     const supporter = createSupporter(store, "sent-supporter");
 
-    store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH);
+    store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH, CIPHERTEXT);
     expect(() =>
       store.markSupporterPortalAccessSent(supporter.id, FIRST_HASH),
     ).toThrow(PortalAccessNotProvisionedError);
@@ -229,9 +242,9 @@ describe("supporter portal access storage", () => {
     const store = track(openLocalStore(":memory:"));
     const supporter = createSupporter(store, "stale-sent-supporter");
 
-    store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH);
+    store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH, CIPHERTEXT);
     store.markSupporterPortalAccessProvisioned(supporter.id, FIRST_HASH);
-    store.replaceSupporterPortalAccessToken(supporter.id, SECOND_HASH);
+    store.replaceSupporterPortalAccessToken(supporter.id, SECOND_HASH, CIPHERTEXT);
 
     expect(() =>
       store.markSupporterPortalAccessSent(supporter.id, FIRST_HASH),
@@ -252,12 +265,16 @@ describe("supporter portal access storage", () => {
 
     for (const invalidHash of invalidHashes) {
       expect(() =>
-        store.replaceSupporterPortalAccessToken(supporter.id, invalidHash),
+        store.replaceSupporterPortalAccessToken(
+          supporter.id,
+          invalidHash,
+          CIPHERTEXT,
+        ),
       ).toThrow(TypeError);
     }
     expect(store.getSupporterPortalAccess(supporter.id)).toBeNull();
 
-    store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH);
+    store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH, CIPHERTEXT);
     const before = store.getSupporterPortalAccess(supporter.id);
     for (const invalidHash of invalidHashes) {
       expect(() =>
@@ -268,6 +285,26 @@ describe("supporter portal access storage", () => {
       ).toThrow(TypeError);
     }
     expect(store.getSupporterPortalAccess(supporter.id)).toEqual(before);
+  });
+
+  it("rejects empty or non-byte ciphertext before changing state", () => {
+    const store = track(openLocalStore(":memory:"));
+    const supporter = createSupporter(store, "invalid-ciphertext-supporter");
+
+    for (const encryptedToken of [
+      new Uint8Array(),
+      "ciphertext" as unknown as Uint8Array,
+    ]) {
+      expect(() =>
+        store.replaceSupporterPortalAccessToken(
+          supporter.id,
+          FIRST_HASH,
+          encryptedToken,
+        ),
+      ).toThrow(TypeError);
+    }
+
+    expect(store.getSupporterPortalAccess(supporter.id)).toBeNull();
   });
 
   it("does not change supporter, month, or entry-count operation state", () => {
@@ -294,7 +331,7 @@ describe("supporter portal access storage", () => {
     const beforeMonth = store.getMonthlyState(supporter.id, "2026-09");
     const beforeOperations = store.listEntryCountOperations(supporter.id);
 
-    store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH);
+    store.replaceSupporterPortalAccessToken(supporter.id, FIRST_HASH, CIPHERTEXT);
     now = "2026-09-04T00:01:00.000Z";
     store.markSupporterPortalAccessProvisioned(supporter.id, FIRST_HASH);
     now = "2026-09-04T00:02:00.000Z";

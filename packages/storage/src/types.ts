@@ -12,6 +12,7 @@ export type SupporterRecord = Readonly<{
 export type SupporterPortalAccessRecord = Readonly<{
   supporterId: string;
   tokenHash: string;
+  encryptedToken: Uint8Array | null;
   issuedAt: string;
   provisionedAt: string | null;
   sentAt: string | null;
@@ -178,6 +179,7 @@ export interface LocalStore {
   replaceSupporterPortalAccessToken(
     supporterId: string,
     tokenHash: string,
+    encryptedToken: Uint8Array,
   ): SupporterPortalAccessRecord;
   markSupporterPortalAccessProvisioned(
     supporterId: string,

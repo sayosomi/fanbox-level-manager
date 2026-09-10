@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   PortalAccessNotProvisionedError,
@@ -7,8 +10,11 @@ import {
 } from "@sayosomi/storage";
 import type { LocalStore } from "@sayosomi/storage";
 import {
-  createSupporterPortalAccessService,
+  createSupporterPortalAccessService as createRawSupporterPortalAccessService,
+  createSupporterPortalTokenCodec,
+  SupporterPortalTokenRecoveryError,
 } from "./index.js";
+import type { CreateSupporterPortalAccessServiceOptions } from "./index.js";
 
 const openStores: LocalStore[] = [];
 
@@ -19,6 +25,30 @@ function track(store: LocalStore): LocalStore {
 
 function fixedClock(): Date {
   return new Date("2026-09-04T00:00:00.000Z");
+}
+
+const TEST_KEY = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
+const SECOND_RAW_TOKEN = "B".repeat(43);
+
+type DatabaseInspection = {
+  prepare(source: string): {
+    run(...parameters: unknown[]): { changes: number };
+  };
+};
+
+function databaseOf(store: LocalStore): DatabaseInspection {
+  return (store as unknown as { database: DatabaseInspection }).database;
+}
+
+function createSupporterPortalAccessService(
+  store: LocalStore,
+  options: Omit<CreateSupporterPortalAccessServiceOptions, "getEncryptionKey"> &
+    Partial<Pick<CreateSupporterPortalAccessServiceOptions, "getEncryptionKey">> = {},
+): ReturnType<typeof createRawSupporterPortalAccessService> {
+  return createRawSupporterPortalAccessService(store, {
+    getEncryptionKey: async () => new Uint8Array(TEST_KEY),
+    ...options,
+  });
 }
 
 function createSupporter(
@@ -40,14 +70,14 @@ afterEach(() => {
 });
 
 describe("supporter portal access application service", () => {
-  it("issues the exact deterministic zero-byte fixture", () => {
+  it("issues the exact deterministic zero-byte fixture", async () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const supporter = createSupporter(store, "fixture-supporter");
     const service = createSupporterPortalAccessService(store, {
       generateTokenBytes: () => new Uint8Array(32),
     });
 
-    const result = service.issueSupporterPortalAccess(supporter.id);
+    const result = await service.issueSupporterPortalAccess(supporter.id);
 
     expect(result.rawToken).toBe(
       "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -58,20 +88,21 @@ describe("supporter portal access application service", () => {
     expect(result.access).toEqual({
       supporterId: supporter.id,
       tokenHash: result.tokenHash,
+      encryptedToken: expect.any(Uint8Array),
       issuedAt: "2026-09-04T00:00:00.000Z",
       provisionedAt: null,
       sentAt: null,
     });
   });
 
-  it("keeps raw tokens out of persisted access records", () => {
+  it("keeps raw tokens out of persisted access records", async () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const supporter = createSupporter(store, "privacy-supporter");
     const service = createSupporterPortalAccessService(store, {
       generateTokenBytes: () => new Uint8Array(32),
     });
 
-    const issued = service.issueSupporterPortalAccess(supporter.id);
+    const issued = await service.issueSupporterPortalAccess(supporter.id);
     const persisted = service.getSupporterPortalAccess(supporter.id);
 
     expect(persisted?.tokenHash).toBe(issued.tokenHash);
@@ -79,12 +110,12 @@ describe("supporter portal access application service", () => {
     expect(JSON.stringify(persisted)).not.toContain(issued.rawToken);
   });
 
-  it("uses the default generator's base64url and SHA-256 contracts", () => {
+  it("uses the default generator's base64url and SHA-256 contracts", async () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const supporter = createSupporter(store, "default-generator-supporter");
     const service = createSupporterPortalAccessService(store);
 
-    const result = service.issueSupporterPortalAccess(supporter.id);
+    const result = await service.issueSupporterPortalAccess(supporter.id);
     const independentlyHashed = createHash("sha256")
       .update(result.rawToken, "utf8")
       .digest("hex");
@@ -95,7 +126,7 @@ describe("supporter portal access application service", () => {
     expect(result.tokenHash).toBe(independentlyHashed);
   });
 
-  it("rejects invalid custom generator output before creating access state", () => {
+  it("rejects invalid custom generator output before creating access state", async () => {
     const invalidGenerators = [
       () => "not bytes" as unknown as Uint8Array,
       () => new Uint8Array(31),
@@ -114,27 +145,27 @@ describe("supporter portal access application service", () => {
         generateTokenBytes,
       });
 
-      expect(() => service.issueSupporterPortalAccess(supporter.id)).toThrow(
-        TypeError,
-      );
+      await expect(
+        service.issueSupporterPortalAccess(supporter.id),
+      ).rejects.toThrow(TypeError);
       expect(store.getSupporterPortalAccess(supporter.id)).toBeNull();
     }
   });
 
-  it("returns an immutable result with the exact public shape", () => {
+  it("returns an immutable result with the exact public shape", async () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const supporter = createSupporter(store, "result-shape-supporter");
     const service = createSupporterPortalAccessService(store, {
       generateTokenBytes: () => new Uint8Array(32),
     });
 
-    const result = service.issueSupporterPortalAccess(supporter.id);
+    const result = await service.issueSupporterPortalAccess(supporter.id);
 
     expect(Object.keys(result)).toEqual(["rawToken", "tokenHash", "access"]);
     expect(Object.isFrozen(result)).toBe(true);
   });
 
-  it("supports inactive supporters and preserves delegated state guards", () => {
+  it("supports inactive supporters and preserves delegated state guards", async () => {
     let now = "2026-09-04T00:00:00.000Z";
     const store = track(
       openLocalStore(":memory:", { clock: () => new Date(now) }),
@@ -145,7 +176,7 @@ describe("supporter portal access application service", () => {
       generateTokenBytes: () => new Uint8Array(32).fill(fill),
     });
 
-    const first = service.issueSupporterPortalAccess(supporter.id);
+    const first = await service.issueSupporterPortalAccess(supporter.id);
     expect(first.access.provisionedAt).toBeNull();
     expect(service.getSupporterPortalAccess(supporter.id)).toEqual(first.access);
     expect(() =>
@@ -168,7 +199,7 @@ describe("supporter portal access application service", () => {
 
     fill = 1;
     now = "2026-09-04T00:03:00.000Z";
-    const reissued = service.issueSupporterPortalAccess(supporter.id);
+    const reissued = await service.issueSupporterPortalAccess(supporter.id);
     expect(reissued.tokenHash).not.toBe(first.tokenHash);
     expect(reissued.access.provisionedAt).toBeNull();
     expect(reissued.access.sentAt).toBeNull();
@@ -176,4 +207,123 @@ describe("supporter portal access application service", () => {
       service.markSupporterPortalAccessProvisioned(supporter.id, first.tokenHash),
     ).toThrow(StalePortalAccessError);
   });
+
+  it("recovers the same token after a store restart without putting plaintext in SQLite", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "fanbox-level-manager-"));
+    const databasePath = join(directory, "portal.sqlite");
+
+    try {
+      const store = track(openLocalStore(databasePath, { clock: fixedClock }));
+      const supporter = createSupporter(store, "restart-supporter");
+      const service = createSupporterPortalAccessService(store, {
+        generateTokenBytes: () => new Uint8Array(32),
+      });
+      const issued = await service.issueSupporterPortalAccess(supporter.id);
+      store.markSupporterPortalAccessProvisioned(
+        supporter.id,
+        issued.tokenHash,
+      );
+      const snapshot = store.createDatabaseSnapshot();
+      expect(new TextDecoder().decode(snapshot)).not.toContain(issued.rawToken);
+      expect(
+        JSON.stringify(store.getSupporterPortalAccess(supporter.id)),
+      ).not.toContain(issued.rawToken);
+
+      store.close();
+      const reopened = track(
+        openLocalStore(databasePath, { clock: fixedClock }),
+      );
+      const restartedService = createSupporterPortalAccessService(reopened);
+      await expect(
+        restartedService.recoverSupporterPortalAccessToken(supporter.id),
+      ).resolves.toBe(issued.rawToken);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("reports legacy and unsafe credentials through one non-secret recovery failure", async () => {
+    const store = track(openLocalStore(":memory:", { clock: fixedClock }));
+    const supporter = createSupporter(store, "unrecoverable-supporter");
+    const service = createSupporterPortalAccessService(store, {
+      generateTokenBytes: () => new Uint8Array(32),
+    });
+    const issued = await service.issueSupporterPortalAccess(supporter.id);
+    databaseOf(store)
+      .prepare(
+        "UPDATE supporter_portal_access SET encrypted_token = NULL WHERE supporter_id = ?",
+      )
+      .run(supporter.id);
+
+    const error = await service
+      .recoverSupporterPortalAccessToken(supporter.id)
+      .catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(SupporterPortalTokenRecoveryError);
+    expect(error).toMatchObject({ supporterId: supporter.id });
+    expect(String(error)).not.toContain(issued.rawToken);
+    expect(String(error)).not.toContain(issued.tokenHash);
+    expect(String(error)).not.toContain(Buffer.from(TEST_KEY).toString("hex"));
+    expect(String(error)).not.toContain("/level#");
+  });
+
+  it.each(["wrong key", "tampered ciphertext", "hash mismatch"])(
+    "fails safely for %s without rotating or replacing the credential",
+    async (failure) => {
+      const store = track(openLocalStore(":memory:", { clock: fixedClock }));
+      const supporter = createSupporter(store, `unsafe-${failure}`);
+      const service = createSupporterPortalAccessService(store);
+      const issued = await service.issueSupporterPortalAccess(supporter.id);
+      const before = store.getSupporterPortalAccess(supporter.id);
+      if (before === null) {
+        throw new Error("expected issued access");
+      }
+
+      if (failure === "wrong key") {
+        const wrongKeyService = createSupporterPortalAccessService(store, {
+          getEncryptionKey: async () => new Uint8Array(32).fill(0xff),
+        });
+        await expect(
+          wrongKeyService.recoverSupporterPortalAccessToken(supporter.id),
+        ).rejects.toBeInstanceOf(SupporterPortalTokenRecoveryError);
+      } else {
+        let replacement = before.encryptedToken;
+        if (replacement === null) {
+          throw new Error("expected ciphertext");
+        }
+        if (failure === "tampered ciphertext") {
+          replacement = new Uint8Array(replacement);
+          replacement[replacement.length - 1] =
+            (replacement[replacement.length - 1] ?? 0) ^ 0xff;
+        } else {
+          replacement = createSupporterPortalTokenCodec().encrypt(
+            SECOND_RAW_TOKEN,
+            TEST_KEY,
+          );
+        }
+        databaseOf(store)
+          .prepare(
+            "UPDATE supporter_portal_access SET encrypted_token = ? WHERE supporter_id = ?",
+          )
+          .run(Buffer.from(replacement), supporter.id);
+        await expect(
+          service.recoverSupporterPortalAccessToken(supporter.id),
+        ).rejects.toBeInstanceOf(SupporterPortalTokenRecoveryError);
+      }
+
+      expect(store.getSupporterPortalAccess(supporter.id)?.tokenHash).toBe(
+        before.tokenHash,
+      );
+      expect(store.getSupporterPortalAccess(supporter.id)?.issuedAt).toBe(
+        before.issuedAt,
+      );
+      expect(store.getSupporterPortalAccess(supporter.id)?.provisionedAt).toBe(
+        before.provisionedAt,
+      );
+      expect(store.getSupporterPortalAccess(supporter.id)?.sentAt).toBe(
+        before.sentAt,
+      );
+      expect(issued.rawToken).toHaveLength(43);
+    },
+  );
 });

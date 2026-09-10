@@ -4,10 +4,6 @@ import {
   StalePortalAccessError,
 } from "@sayosomi/storage";
 import type { LocalStore, SupporterPortalAccessRecord } from "@sayosomi/storage";
-import {
-  createSupporterPortalAccessService,
-  type SupporterPortalAccessService,
-} from "./supporter-portal-access-service.js";
 
 export type SupporterPortalDeliveryState =
   | "not_issued"
@@ -53,24 +49,21 @@ function isDeliveryConflict(error: unknown): boolean {
 export function createSupporterPortalDeliveryService(
   store: LocalStore,
 ): SupporterPortalDeliveryService {
-  const portalAccessService: SupporterPortalAccessService =
-    createSupporterPortalAccessService(store);
-
   return {
     getSupporterPortalDeliveryState(supporterId) {
       return getDeliveryState(
-        portalAccessService.getSupporterPortalAccess(supporterId),
+        store.getSupporterPortalAccess(supporterId),
       );
     },
 
     markCurrentSupporterPortalAccessSent(supporterId) {
-      const current = portalAccessService.getSupporterPortalAccess(supporterId);
+      const current = store.getSupporterPortalAccess(supporterId);
       if (current === null || current.provisionedAt === null) {
         throw new SupporterPortalDeliveryConflictError();
       }
 
       try {
-        portalAccessService.markSupporterPortalAccessSent(
+        store.markSupporterPortalAccessSent(
           supporterId,
           current.tokenHash,
         );

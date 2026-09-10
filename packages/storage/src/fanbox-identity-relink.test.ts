@@ -89,7 +89,11 @@ describe("FANBOX relationship identity relink persistence", () => {
       }),
     );
     const tokenHash = "a".repeat(64);
-    store.replaceSupporterPortalAccessToken(supporter.id, tokenHash);
+    store.replaceSupporterPortalAccessToken(
+      supporter.id,
+      tokenHash,
+      Uint8Array.from([1, 2, 3]),
+    );
     store.markSupporterPortalAccessProvisioned(supporter.id, tokenHash);
     store.markSupporterPortalAccessSent(supporter.id, tokenHash);
 
@@ -268,9 +272,9 @@ describe("FANBOX relationship identity relink persistence", () => {
     expect(store.getSupporterByRelationshipId("race-replacement")).toBeNull();
   });
 
-  it("keeps the storage schema at version 6", () => {
+  it("keeps the storage schema at version 7", () => {
     const store = createStore();
-    expect(CURRENT_SCHEMA_VERSION).toBe(6);
-    expect(databaseOf(store).pragma("user_version", { simple: true })).toBe(6);
+    expect(CURRENT_SCHEMA_VERSION).toBe(7);
+    expect(databaseOf(store).pragma("user_version", { simple: true })).toBe(7);
   });
 });

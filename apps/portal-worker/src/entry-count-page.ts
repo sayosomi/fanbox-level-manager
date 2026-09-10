@@ -19,19 +19,23 @@ const ENTRY_COUNT_PAGE_HTML = `<!doctype html>
   </head>
   <body>
     <main class="page-shell">
-      <h1>抽選口数の確認</h1>
+      <header class="page-header">
+        <h1>抽選口数の確認</h1>
+        <p class="page-intro">次回の抽選で使われる口数と、これまでの履歴を確認できます。</p>
+      </header>
       <p id="status" class="status" role="status" aria-live="polite">読み込み中です。</p>
 
-      <section aria-labelledby="summary-heading">
-        <h2 id="summary-heading">現在の情報</h2>
+      <section class="current-count-hero" aria-labelledby="current-count-label">
+        <p id="current-count-label" class="hero-label">次回抽選</p>
+        <p id="entry-count" class="current-count">—</p>
+      </section>
+
+      <section class="summary-surface" aria-labelledby="summary-heading">
+        <h2 id="summary-heading">確認情報</h2>
         <dl class="summary-list">
           <div class="summary-item">
             <dt>確認ID</dt>
             <dd id="confirmation-id">—</dd>
-          </div>
-          <div class="summary-item">
-            <dt>現在の口数</dt>
-            <dd id="entry-count">—</dd>
           </div>
           <div class="summary-item">
             <dt>最終更新</dt>
@@ -40,7 +44,7 @@ const ENTRY_COUNT_PAGE_HTML = `<!doctype html>
         </dl>
       </section>
 
-      <section aria-labelledby="history-heading">
+      <section class="history-surface" aria-labelledby="history-heading">
         <h2 id="history-heading">口数履歴</h2>
         <div id="history" class="history-list" aria-live="polite"></div>
       </section>
@@ -305,9 +309,21 @@ const ENTRY_COUNT_PAGE_SCRIPT = String.raw`(() => {
 
 const ENTRY_COUNT_PAGE_STYLE = `:root {
   color-scheme: light;
+  --base: #faf4ed;
+  --surface: #fffaf3;
+  --overlay: #f2e9e1;
+  --text: #575279;
+  --muted: #9893a5;
+  --border: #dfdad9;
+  --pine: #286983;
+  --foam: #56949f;
+  --iris: #907aa9;
+  --rose: #d7827e;
+  --gold: #ea9d34;
+  --love: #b4637a;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #f5f5f3;
-  color: #252525;
+  background-color: var(--base);
+  color: var(--text);
 }
 
 * {
@@ -317,86 +333,146 @@ const ENTRY_COUNT_PAGE_STYLE = `:root {
 body {
   margin: 0;
   min-width: 280px;
+  min-height: 100vh;
+  background-color: var(--base);
+  color: var(--text);
 }
 
 .page-shell {
-  width: min(100% - 2rem, 42rem);
+  width: min(calc(100% - 2rem), 44rem);
   margin: 0 auto;
-  padding: 3rem 0 4rem;
+  padding: clamp(1.75rem, 6vw, 4rem) 0 4rem;
 }
 
 h1,
 h2 {
   line-height: 1.3;
+  color: var(--text);
 }
 
 h1 {
-  margin: 0 0 1rem;
+  margin: 0;
   font-size: clamp(1.7rem, 5vw, 2.4rem);
 }
 
 h2 {
-  margin: 0 0 1rem;
+  margin: 0 0 1.1rem;
   font-size: 1.25rem;
 }
 
-section {
-  margin-top: 2rem;
-  padding: 1.25rem;
-  border: 1px solid #d8d8d3;
-  border-radius: 0.75rem;
-  background: #ffffff;
+.page-header {
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.page-intro {
+  max-width: 38rem;
+  margin: 0.75rem 0 0;
+  line-height: 1.7;
 }
 
 .status {
+  display: inline-block;
+  max-width: 100%;
   min-height: 1.5rem;
+  margin: 1.25rem 0 0;
+  padding: 0.45rem 0.7rem;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background-color: var(--overlay);
+  color: var(--text);
+}
+
+.current-count-hero,
+.summary-surface,
+.history-surface {
+  margin-top: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 1rem;
+  background-color: var(--surface);
+}
+
+.current-count-hero {
+  padding: clamp(1.5rem, 7vw, 2.75rem) clamp(1.25rem, 6vw, 2.5rem);
+  border-color: var(--pine);
+  border-inline-start: 0.35rem solid var(--foam);
+  background-color: var(--pine);
+  color: var(--base);
+}
+
+.hero-label {
   margin: 0;
-  color: #555555;
+  color: var(--base);
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.current-count {
+  max-width: 100%;
+  margin: 0.45rem 0 0;
+  overflow-wrap: anywhere;
+  color: var(--base);
+  font-size: clamp(3rem, 14vw, 5.75rem);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-surface,
+.history-surface {
+  padding: 1.25rem;
+}
+
+.summary-surface {
+  border-top: 0.25rem solid var(--iris);
+}
+
+.history-surface {
+  border-top: 0.25rem solid var(--rose);
 }
 
 .summary-list {
   display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
   margin: 0;
 }
 
 .summary-item {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 1rem;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid #eeeeea;
-}
-
-.summary-item:last-child {
-  padding-bottom: 0;
-  border-bottom: 0;
+  min-width: 0;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
 }
 
 dt {
-  color: #555555;
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 700;
 }
 
 dd {
-  margin: 0;
+  margin: 0.4rem 0 0;
+  overflow-wrap: anywhere;
   font-size: 1.2rem;
   font-weight: 700;
-  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .history-list {
   display: grid;
-  gap: 0.75rem;
+  border-top: 1px solid var(--border);
 }
 
 .history-item {
   display: grid;
-  grid-template-columns: 5rem 1fr auto;
+  grid-template-columns: minmax(5.5rem, 7rem) minmax(0, 1fr) auto;
   gap: 0.75rem;
   align-items: baseline;
   padding: 0.75rem 0;
-  border-bottom: 1px solid #eeeeea;
+  border-bottom: 1px solid var(--border);
 }
 
 .history-item:last-child {
@@ -408,23 +484,37 @@ dd {
   font-variant-numeric: tabular-nums;
 }
 
-.history-month,
+.history-month {
+  color: var(--text);
+  font-weight: 700;
+}
+
 .history-reason,
 .history-empty {
-  color: #555555;
+  min-width: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
 }
 
 .history-entry-count {
+  color: var(--text);
+  font-size: 1.1rem;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 @media (max-width: 30rem) {
   .page-shell {
+    width: min(calc(100% - 1.5rem), 44rem);
     padding-top: 2rem;
   }
 
+  .summary-list {
+    grid-template-columns: 1fr;
+  }
+
   .history-item {
-    grid-template-columns: 1fr auto;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .history-reason {

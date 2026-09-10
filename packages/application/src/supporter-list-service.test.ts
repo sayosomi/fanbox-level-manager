@@ -59,15 +59,20 @@ describe("supporter list application service", () => {
       latestMonthKey: "2026-09",
       legacyBaselineEligible: false,
       portalDeliveryState: "not_issued",
+      fanboxManagementUrl:
+        "https://www.fanbox.cc/manage/relationships/relationship-1",
+      portalLinkState: "not_issued",
     });
     expect(item && Object.keys(item).sort()).toEqual([
       "confirmationId",
       "displayName",
       "entryCount",
+      "fanboxManagementUrl",
       "id",
       "latestMonthKey",
       "legacyBaselineEligible",
       "portalDeliveryState",
+      "portalLinkState",
       "supporting",
     ]);
     for (const forbiddenField of [
@@ -86,17 +91,26 @@ describe("supporter list application service", () => {
     }
   });
 
-  it("projects all four portal delivery states without access details", () => {
+  it("projects portal-link state independently from delivery state", () => {
     const records = [
       supporterRecord({ id: "not-issued" }),
       supporterRecord({ id: "issued" }),
-      supporterRecord({ id: "provisioned" }),
+      supporterRecord({ id: "legacy-provisioned" }),
+      supporterRecord({ id: "needs-provisioning" }),
+      supporterRecord({ id: "available" }),
+      supporterRecord({ id: "legacy-sent" }),
       supporterRecord({ id: "sent" }),
     ];
-    const access = (id: string, provisionedAt: string | null, sentAt: string | null) =>
+    const access = (
+      id: string,
+      encryptedToken: Uint8Array | null,
+      provisionedAt: string | null,
+      sentAt: string | null,
+    ) =>
       Object.freeze({
         supporterId: id,
         tokenHash: `${id}-token-hash`,
+        encryptedToken,
         issuedAt: "2026-09-04T00:00:00.000Z",
         provisionedAt,
         sentAt,
@@ -105,15 +119,48 @@ describe("supporter list application service", () => {
       storeReturning(
         records,
         new Map([
-          ["issued", access("issued", null, null)],
+          ["issued", access("issued", null, null, null)],
           [
-            "provisioned",
-            access("provisioned", "2026-09-04T00:01:00.000Z", null),
+            "legacy-provisioned",
+            access(
+              "legacy-provisioned",
+              null,
+              "2026-09-04T00:01:00.000Z",
+              null,
+            ),
+          ],
+          [
+            "needs-provisioning",
+            access(
+              "needs-provisioning",
+              new Uint8Array([1, 2, 3]),
+              null,
+              null,
+            ),
+          ],
+          [
+            "available",
+            access(
+              "available",
+              new Uint8Array([4, 5, 6]),
+              "2026-09-04T00:01:00.000Z",
+              null,
+            ),
+          ],
+          [
+            "legacy-sent",
+            access(
+              "legacy-sent",
+              null,
+              "2026-09-04T00:01:00.000Z",
+              "2026-09-04T00:02:00.000Z",
+            ),
           ],
           [
             "sent",
             access(
               "sent",
+              new Uint8Array([7, 8, 9]),
               "2026-09-04T00:01:00.000Z",
               "2026-09-04T00:02:00.000Z",
             ),
@@ -122,20 +169,47 @@ describe("supporter list application service", () => {
       ),
     );
 
-    expect(service.listSupporters().map((item) => item.portalDeliveryState)).toEqual([
-      "not_issued",
-      "issued",
-      "provisioned",
-      "sent",
+    expect(
+      service
+        .listSupporters()
+        .map((item) => [item.id, item.portalLinkState, item.portalDeliveryState]),
+    ).toEqual([
+      ["not-issued", "not_issued", "not_issued"],
+      ["issued", "unrecoverable", "issued"],
+      ["legacy-provisioned", "unrecoverable", "provisioned"],
+      ["needs-provisioning", "needs_provisioning", "issued"],
+      ["available", "available", "provisioned"],
+      ["legacy-sent", "unrecoverable", "sent"],
+      ["sent", "available", "sent"],
     ]);
     for (const item of service.listSupporters()) {
-      expect(Object.keys(item)).toHaveLength(8);
+      expect(Object.keys(item)).toHaveLength(10);
       expect(item).not.toHaveProperty("tokenHash");
       expect(item).not.toHaveProperty("issuedAt");
       expect(item).not.toHaveProperty("provisionedAt");
       expect(item).not.toHaveProperty("sentAt");
       expect(item).not.toHaveProperty("access");
     }
+  });
+
+  it("only creates a FANBOX management URL for contract-valid relationship IDs", () => {
+    const service = createSupporterListService(
+      storeReturning([
+        supporterRecord({
+          id: "safe",
+          fanboxRelationshipId: "Abc_123-xyz",
+        }),
+        supporterRecord({
+          id: "unsafe",
+          fanboxRelationshipId: "relationship/with spaces",
+        }),
+      ]),
+    );
+
+    expect(service.listSupporters().map((item) => item.fanboxManagementUrl)).toEqual([
+      "https://www.fanbox.cc/manage/relationships/Abc_123-xyz",
+      null,
+    ]);
   });
 
   it("only marks a history-empty one-entry supporter eligible", () => {

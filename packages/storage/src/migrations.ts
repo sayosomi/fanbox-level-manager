@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 
-export const CURRENT_SCHEMA_VERSION = 6;
+export const CURRENT_SCHEMA_VERSION = 7;
 
 const CANONICAL_MONTH_CHECK = `
   length(%COLUMN%) = 7
@@ -286,6 +286,16 @@ ALTER TABLE entry_count_operations_new RENAME TO entry_count_operations;
 ALTER TABLE supporter_portal_access_entry_count_new RENAME TO supporter_portal_access;
 `;
 
+const VERSION_SEVEN_SCHEMA = `
+ALTER TABLE supporter_portal_access
+ADD COLUMN encrypted_token BLOB NULL CHECK (
+  encrypted_token IS NULL OR (
+    typeof(encrypted_token) = 'blob'
+    AND length(encrypted_token) > 0
+  )
+);
+`;
+
 type SqliteDatabase = Database.Database;
 
 export function configureDatabase(
@@ -364,6 +374,15 @@ export function applyVersionSixMigration(database: SqliteDatabase): void {
       throw new Error("entry-count migration produced foreign-key violations");
     }
     database.pragma("user_version = 6");
+  });
+
+  migrate();
+}
+
+export function applyVersionSevenMigration(database: SqliteDatabase): void {
+  const migrate = database.transaction((): void => {
+    database.exec(VERSION_SEVEN_SCHEMA);
+    database.pragma("user_version = 7");
   });
 
   migrate();

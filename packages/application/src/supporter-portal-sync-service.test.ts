@@ -8,11 +8,12 @@ import {
 import type { LocalStore } from "@sayosomi/storage";
 import {
   createLotteryEntryCountService,
-  createSupporterPortalAccessService,
+  createSupporterPortalAccessService as createRawSupporterPortalAccessService,
   createSupporterPortalSyncService,
   SupporterPortalRemoteError,
 } from "./index.js";
 import type { PortalAdminFetch } from "./index.js";
+import type { CreateSupporterPortalAccessServiceOptions } from "./index.js";
 
 const PORTAL_ORIGIN = "https://portal.example";
 const ADMIN_TOKEN = "sync-secret-value";
@@ -20,6 +21,7 @@ const VERIFIED_AT = "2026-09-05T00:00:00.000Z";
 const RAW_TOKEN_A = "A".repeat(43);
 const HASH_A =
   "0f007385b6f9d4b7eeb2748605afe1a984a0a3bfa3f014d09e2a784ce9e5cd1a";
+const TEST_KEY = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
 
 type RecordedRequest = Readonly<{
   input: string | URL;
@@ -108,6 +110,16 @@ function createService(
     portalOrigin,
     syncApiToken: ADMIN_TOKEN,
     fetch: fakeFetch,
+  });
+}
+
+function createSupporterPortalAccessService(
+  store: LocalStore,
+  options: Omit<CreateSupporterPortalAccessServiceOptions, "getEncryptionKey"> = {},
+): ReturnType<typeof createRawSupporterPortalAccessService> {
+  return createRawSupporterPortalAccessService(store, {
+    getEncryptionKey: async () => new Uint8Array(TEST_KEY),
+    ...options,
   });
 }
 
@@ -221,7 +233,7 @@ describe("syncSupporter", () => {
       new Date("2026-09-04T00:00:00.000Z"),
     );
     const accessService = issueAccess(store, supporter.id);
-    const issued = accessService.issueSupporterPortalAccess(supporter.id);
+    const issued = await accessService.issueSupporterPortalAccess(supporter.id);
     const fake = createFakeFetch();
     const service = createService(store, fake.fetch);
 
@@ -447,7 +459,7 @@ describe("provisionSupporterPortalAccess preflight", () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const supporter = createSupporter(store, "stale-preflight");
     const accessService = issueAccess(store, supporter.id);
-    accessService.issueSupporterPortalAccess(supporter.id);
+    await accessService.issueSupporterPortalAccess(supporter.id);
     const fake = createFakeFetch();
     const service = createService(store, fake.fetch);
 
@@ -463,7 +475,7 @@ describe("provisionSupporterPortalAccess", () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const supporter = createSupporter(store, "provision-success");
     const accessService = issueAccess(store, supporter.id);
-    const issued = accessService.issueSupporterPortalAccess(supporter.id);
+    const issued = await accessService.issueSupporterPortalAccess(supporter.id);
     const fake = createFakeFetch(() => jsonResponse(200, { status: "ok" }));
     const service = createService(store, fake.fetch);
 
@@ -507,7 +519,7 @@ describe("provisionSupporterPortalAccess", () => {
     );
     const supporter = createSupporter(store, "provision-idempotency");
     const accessService = issueAccess(store, supporter.id);
-    const issued = accessService.issueSupporterPortalAccess(supporter.id);
+    const issued = await accessService.issueSupporterPortalAccess(supporter.id);
     const fake = createFakeFetch(() => jsonResponse(200, { status: "ok" }));
     const service = createService(store, fake.fetch);
 
@@ -565,7 +577,7 @@ describe("provisionSupporterPortalAccess", () => {
       const store = track(openLocalStore(":memory:", { clock: fixedClock }));
       const supporter = createSupporter(store, `provision-failure-${code}`);
       const accessService = issueAccess(store, supporter.id);
-      const issued = accessService.issueSupporterPortalAccess(supporter.id);
+      const issued = await accessService.issueSupporterPortalAccess(supporter.id);
       const fake = createFakeFetch(() => response());
       const service = createService(store, fake.fetch);
 
@@ -593,17 +605,17 @@ describe("provisionSupporterPortalAccess", () => {
     const accessService = createSupporterPortalAccessService(store, {
       generateTokenBytes: () => new Uint8Array(32).fill(fill),
     });
-    const first = accessService.issueSupporterPortalAccess(supporter.id);
+    const first = await accessService.issueSupporterPortalAccess(supporter.id);
     let requestCount = 0;
     let requestHash: unknown;
     let reissued:
-      | ReturnType<typeof accessService.issueSupporterPortalAccess>
+      | Awaited<ReturnType<typeof accessService.issueSupporterPortalAccess>>
       | undefined;
     const fake = createFakeFetch(async (request) => {
       requestCount += 1;
       requestHash = requestBody(request).tokenHash;
       fill = 1;
-      reissued = accessService.issueSupporterPortalAccess(supporter.id);
+      reissued = await accessService.issueSupporterPortalAccess(supporter.id);
       return jsonResponse(200, { status: "ok" });
     });
     const service = createService(store, fake.fetch);

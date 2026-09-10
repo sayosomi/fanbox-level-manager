@@ -7,10 +7,6 @@ import {
   StalePortalAccessError,
 } from "@sayosomi/storage";
 import {
-  createSupporterPortalAccessService,
-  type SupporterPortalAccessService,
-} from "./supporter-portal-access-service.js";
-import {
   createSupporterPortalSnapshotService,
   type SupporterPortalSnapshotService,
 } from "./supporter-portal-snapshot-service.js";
@@ -58,6 +54,10 @@ export class SupporterPortalRemoteError extends Error {
 
 export interface SupporterPortalSyncService {
   syncSupporter(supporterId: string): Promise<SupporterPortalSyncResult>;
+
+  provisionCurrentSupporterPortalAccess(
+    supporterId: string,
+  ): Promise<SupporterPortalAccessRecord>;
 
   provisionSupporterPortalAccess(
     supporterId: string,
@@ -199,7 +199,7 @@ class SupporterPortalSyncServiceImplementation
 {
   constructor(
     private readonly snapshotService: SupporterPortalSnapshotService,
-    private readonly accessService: SupporterPortalAccessService,
+    private readonly store: LocalStore,
     private readonly portalOrigin: string,
     private readonly syncApiToken: string,
     private readonly adminFetch: PortalAdminFetch,
@@ -263,8 +263,7 @@ class SupporterPortalSyncServiceImplementation
       throw new TypeError("expectedTokenHash must be a lowercase SHA-256 hex string");
     }
 
-    const currentAccess =
-      this.accessService.getSupporterPortalAccess(supporterId);
+    const currentAccess = this.store.getSupporterPortalAccess(supporterId);
     if (currentAccess === null) {
       throw new PortalAccessNotIssuedError(supporterId);
     }
@@ -298,9 +297,23 @@ class SupporterPortalSyncServiceImplementation
       );
     }
 
-    return this.accessService.markSupporterPortalAccessProvisioned(
+    return this.store.markSupporterPortalAccessProvisioned(
       supporterId,
       expectedTokenHash,
+    );
+  }
+
+  async provisionCurrentSupporterPortalAccess(
+    supporterId: string,
+  ): Promise<SupporterPortalAccessRecord> {
+    const currentAccess = this.store.getSupporterPortalAccess(supporterId);
+    if (currentAccess === null) {
+      throw new PortalAccessNotIssuedError(supporterId);
+    }
+
+    return this.provisionSupporterPortalAccess(
+      supporterId,
+      currentAccess.tokenHash,
     );
   }
 
@@ -341,7 +354,7 @@ export function createSupporterPortalSyncService(
 
   return new SupporterPortalSyncServiceImplementation(
     createSupporterPortalSnapshotService(store),
-    createSupporterPortalAccessService(store),
+    store,
     portalOrigin,
     syncApiToken,
     adminFetch,

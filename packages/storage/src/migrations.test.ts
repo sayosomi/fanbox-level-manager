@@ -15,6 +15,7 @@ import {
   applyVersionThreeMigration,
   applyVersionFourMigration,
   applyVersionFiveMigration,
+  applyVersionSixMigration,
   configureDatabase,
 } from "./migrations.js";
 
@@ -51,7 +52,7 @@ afterEach(() => {
 });
 
 describe("schema migration and connection setup", () => {
-  it("migrates an empty in-memory database to version 6", () => {
+  it("migrates an empty in-memory database to version 7", () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const database = databaseOf(store);
     const tables = database
@@ -65,8 +66,8 @@ describe("schema migration and connection setup", () => {
       .map((row) => (row as { name: string }).name)
       .filter((name) => name !== "sqlite_sequence");
 
-    expect(CURRENT_SCHEMA_VERSION).toBe(6);
-    expect(database.pragma("user_version", { simple: true })).toBe(6);
+    expect(CURRENT_SCHEMA_VERSION).toBe(7);
+    expect(database.pragma("user_version", { simple: true })).toBe(7);
     expect(tables).toEqual([
       "backup_settings",
       "entry_count_operations",
@@ -194,7 +195,7 @@ describe("schema migration and connection setup", () => {
       const reopened = track(
         openLocalStore(databasePath, { clock: fixedClock }),
       );
-      expect(databaseOf(reopened).pragma("user_version", { simple: true })).toBe(6);
+      expect(databaseOf(reopened).pragma("user_version", { simple: true })).toBe(7);
       expect(reopened.getSupporterById(created.id)).toEqual(expectedSupporter);
       expect(reopened.listEntryCountOperations(created.id)).toEqual([operation]);
       expect(
@@ -211,7 +212,7 @@ describe("schema migration and connection setup", () => {
 
     try {
       const store = track(openLocalStore(databasePath, { clock: fixedClock }));
-      databaseOf(store).pragma("user_version = 7");
+      databaseOf(store).pragma("user_version = 8");
       store.close();
       const before = readFileSync(databasePath);
 
@@ -222,8 +223,8 @@ describe("schema migration and connection setup", () => {
         openLocalStore(databasePath, { clock: fixedClock });
       } catch (error: unknown) {
         expect(error).toBeInstanceOf(UnsupportedSchemaVersionError);
-        expect((error as UnsupportedSchemaVersionError).actualVersion).toBe(7);
-        expect((error as UnsupportedSchemaVersionError).supportedVersion).toBe(6);
+        expect((error as UnsupportedSchemaVersionError).actualVersion).toBe(8);
+        expect((error as UnsupportedSchemaVersionError).supportedVersion).toBe(7);
       }
 
       expect(readFileSync(databasePath)).toEqual(before);
@@ -232,7 +233,7 @@ describe("schema migration and connection setup", () => {
     }
   });
 
-  it("migrates a real version-1 database through version 5 without changing data", () => {
+  it("migrates a real version-1 database to the current schema without changing data", () => {
     const directory = mkdtempSync(join(tmpdir(), "fanbox-level-manager-"));
     const databasePath = join(directory, "version-one.sqlite");
 
@@ -291,7 +292,7 @@ describe("schema migration and connection setup", () => {
         openLocalStore(databasePath, { clock: fixedClock }),
       );
 
-      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(6);
+      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(7);
       expect(migrated.getSupporterById("supporter-v1")).toEqual({
         id: "supporter-v1",
         fanboxRelationshipId: "relationship-v1",
@@ -317,7 +318,7 @@ describe("schema migration and connection setup", () => {
     }
   });
 
-  it("migrates a real version-2 database to version 5 without changing data", () => {
+  it("migrates a real version-2 database to the current schema without changing data", () => {
     const directory = mkdtempSync(join(tmpdir(), "fanbox-level-manager-"));
     const databasePath = join(directory, "version-two.sqlite");
 
@@ -402,7 +403,7 @@ describe("schema migration and connection setup", () => {
         openLocalStore(databasePath, { clock: fixedClock }),
       );
 
-      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(6);
+      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(7);
       expect(migrated.getSupporterById("supporter-v2")).toEqual({
         id: "supporter-v2",
         fanboxRelationshipId: "relationship-v2",
@@ -440,7 +441,7 @@ describe("schema migration and connection setup", () => {
     }
   });
 
-  it("migrates a real version-3 database to version 5 without changing data", () => {
+  it("migrates a real version-3 database to the current schema without changing data", () => {
     const directory = mkdtempSync(join(tmpdir(), "fanbox-level-manager-"));
     const databasePath = join(directory, "version-three.sqlite");
 
@@ -498,7 +499,7 @@ describe("schema migration and connection setup", () => {
         openLocalStore(databasePath, { clock: fixedClock }),
       );
 
-      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(6);
+      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(7);
       expect(migrated.getSupporterById("supporter-v3")).toEqual({
         id: "supporter-v3",
         fanboxRelationshipId: "relationship-v3",
@@ -512,6 +513,7 @@ describe("schema migration and connection setup", () => {
       expect(migrated.getSupporterPortalAccess("supporter-v3")).toEqual({
         supporterId: "supporter-v3",
         tokenHash,
+        encryptedToken: null,
         issuedAt: "2026-09-03T00:00:00.000Z",
         provisionedAt: null,
         sentAt: null,
@@ -784,7 +786,7 @@ describe("schema migration and connection setup", () => {
         openLocalStore(databasePath, { clock: fixedClock }),
       );
       const migratedDatabase = databaseOf(migrated);
-      expect(migratedDatabase.pragma("user_version", { simple: true })).toBe(6);
+      expect(migratedDatabase.pragma("user_version", { simple: true })).toBe(7);
       expect(
         migratedDatabase
           .prepare(
@@ -967,7 +969,7 @@ describe("schema migration and connection setup", () => {
         openLocalStore(databasePath, { clock: fixedClock }),
       );
       const reopenedDatabase = databaseOf(reopened);
-      expect(reopenedDatabase.pragma("user_version", { simple: true })).toBe(6);
+      expect(reopenedDatabase.pragma("user_version", { simple: true })).toBe(7);
       expect({
         supporters: reopenedDatabase
           .prepare("SELECT id, current_entry_count FROM supporters ORDER BY id")
@@ -1013,10 +1015,114 @@ describe("schema migration and connection setup", () => {
       "issued_at",
       "provisioned_at",
       "sent_at",
+      "encrypted_token",
     ]);
     expect(table?.strict).toBe(1);
     expect(columns).not.toContain("raw_token");
     expect(columns).not.toContain("url");
+  });
+
+  it("migrates v6 portal access rows to v7 without changing credential metadata", () => {
+    const directory = mkdtempSync(join(tmpdir(), "fanbox-level-manager-"));
+    const databasePath = join(directory, "v6.sqlite");
+
+    try {
+      const legacyDatabase = new Database(databasePath);
+      configureDatabase(legacyDatabase);
+      applyVersionOneMigration(legacyDatabase);
+      applyVersionTwoMigration(legacyDatabase);
+      applyVersionThreeMigration(legacyDatabase);
+      applyVersionFourMigration(legacyDatabase);
+      applyVersionFiveMigration(legacyDatabase);
+      applyVersionSixMigration(legacyDatabase);
+      legacyDatabase
+        .prepare(
+          `INSERT INTO supporters (
+             id,
+             fanbox_relationship_id,
+             display_name,
+             current_entry_count,
+             supporting,
+             latest_month_key,
+             created_at,
+             updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "v6-supporter",
+          "v6-relationship",
+          "V6 supporter",
+          1,
+          1,
+          null,
+          "2026-09-01T00:00:00.000Z",
+          "2026-09-02T00:00:00.000Z",
+        );
+      legacyDatabase
+        .prepare(
+          `INSERT INTO supporter_portal_access (
+             supporter_id,
+             token_hash,
+             issued_at,
+             provisioned_at,
+             sent_at
+           ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "v6-supporter",
+          "a".repeat(64),
+          "2026-09-03T00:00:00.000Z",
+          "2026-09-03T00:01:00.000Z",
+          "2026-09-03T00:02:00.000Z",
+        );
+      const before = legacyDatabase
+        .prepare(
+          `SELECT supporter_id, token_hash, issued_at, provisioned_at, sent_at
+           FROM supporter_portal_access`,
+        )
+        .all();
+      legacyDatabase.close();
+
+      const migrated = track(
+        openLocalStore(databasePath, { clock: fixedClock }),
+      );
+      const migratedDatabase = databaseOf(migrated);
+      expect(migratedDatabase.pragma("user_version", { simple: true })).toBe(7);
+      expect(
+        migratedDatabase
+          .prepare(
+            `SELECT supporter_id,
+                    token_hash,
+                    issued_at,
+                    provisioned_at,
+                    sent_at,
+                    encrypted_token
+             FROM supporter_portal_access`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          ...(before[0] as Record<string, unknown>),
+          encrypted_token: null,
+        },
+      ]);
+      migrated.close();
+
+      const reopened = track(
+        openLocalStore(databasePath, { clock: fixedClock }),
+      );
+      expect(databaseOf(reopened).pragma("user_version", { simple: true })).toBe(7);
+      expect(reopened.getSupporterPortalAccess("v6-supporter")).toEqual({
+        supporterId: "v6-supporter",
+        tokenHash: "a".repeat(64),
+        encryptedToken: null,
+        issuedAt: "2026-09-03T00:00:00.000Z",
+        provisionedAt: "2026-09-03T00:01:00.000Z",
+        sentAt: "2026-09-03T00:02:00.000Z",
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("enforces supporter portal access constraints", () => {

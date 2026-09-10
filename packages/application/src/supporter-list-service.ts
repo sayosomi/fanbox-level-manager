@@ -1,4 +1,8 @@
-import type { LocalStore, SupporterRecord } from "@sayosomi/storage";
+import type {
+  LocalStore,
+  SupporterPortalAccessRecord,
+  SupporterRecord,
+} from "@sayosomi/storage";
 import { deriveSupporterConfirmationId } from "./supporter-confirmation-id.js";
 import {
   createSupporterPortalDeliveryService,
@@ -15,16 +19,54 @@ export type SupporterListItem = Readonly<{
   latestMonthKey: string | null;
   legacyBaselineEligible: boolean;
   portalDeliveryState: SupporterPortalDeliveryState;
+  fanboxManagementUrl: string | null;
+  portalLinkState: SupporterPortalLinkState;
 }>;
+
+export type SupporterPortalLinkState =
+  | "not_issued"
+  | "unrecoverable"
+  | "needs_provisioning"
+  | "available";
 
 export interface SupporterListService {
   listSupporters(): readonly SupporterListItem[];
+}
+
+const FANBOX_RELATIONSHIP_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+function createFanboxManagementUrl(
+  fanboxRelationshipId: string,
+): string | null {
+  if (!FANBOX_RELATIONSHIP_ID_PATTERN.test(fanboxRelationshipId)) {
+    return null;
+  }
+
+  return `https://www.fanbox.cc/manage/relationships/${encodeURIComponent(
+    fanboxRelationshipId,
+  )}`;
+}
+
+function getPortalLinkState(
+  access: SupporterPortalAccessRecord | null,
+): SupporterPortalLinkState {
+  if (access === null) {
+    return "not_issued";
+  }
+  if (access.encryptedToken === null) {
+    return "unrecoverable";
+  }
+  if (access.provisionedAt === null) {
+    return "needs_provisioning";
+  }
+  return "available";
 }
 
 function toSupporterListItem(
   record: SupporterRecord,
   legacyBaselineEligible: boolean,
   portalDeliveryService: SupporterPortalDeliveryService,
+  portalAccess: SupporterPortalAccessRecord | null,
 ): SupporterListItem {
   return Object.freeze({
     id: record.id,
@@ -37,6 +79,8 @@ function toSupporterListItem(
     portalDeliveryState: portalDeliveryService.getSupporterPortalDeliveryState(
       record.id,
     ),
+    fanboxManagementUrl: createFanboxManagementUrl(record.fanboxRelationshipId),
+    portalLinkState: getPortalLinkState(portalAccess),
   });
 }
 
@@ -59,6 +103,7 @@ export function createSupporterListService(
               record,
               legacyBaselineEligible,
               portalDeliveryService,
+              store.getSupporterPortalAccess(record.id),
             );
           }),
       );

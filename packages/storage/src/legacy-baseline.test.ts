@@ -43,6 +43,7 @@ describe("legacy baseline assignment", () => {
     const portalAccess = store.replaceSupporterPortalAccessToken(
       supporter.id,
       "a".repeat(64),
+      Uint8Array.from([1, 2, 3]),
     );
     const before = store.getSupporterById(supporter.id);
 

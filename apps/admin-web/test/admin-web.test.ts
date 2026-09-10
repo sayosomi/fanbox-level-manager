@@ -13,6 +13,7 @@ import {
   FanboxSupporterImportError,
   MonthEndSourceConflictError,
   MonthEndSourceUnavailableError,
+  PortalAccessAlreadyIssuedError,
   SupporterPortalDeliveryConflictError,
 } from "@sayosomi/application";
 import type {
@@ -40,6 +41,7 @@ import {
   DuplicateFanboxRelationshipError,
   FanboxRelationshipNotFoundError,
   LegacyBaselineNotEligibleError,
+  PortalAccessNotIssuedError,
   StaleMonthError,
   SupporterNotFoundError,
   type LocalStore,
@@ -57,7 +59,7 @@ import {
   parseAdminPort,
   startProductionAdminServer,
 } from "../src/server.js";
-import { ADMIN_PAGE, ADMIN_SCRIPT } from "../src/page.js";
+import { ADMIN_PAGE, ADMIN_SCRIPT, ADMIN_STYLES } from "../src/page.js";
 
 type HttpResponse = Readonly<{
   statusCode: number;
@@ -244,6 +246,9 @@ const sampleSupporters: readonly SupporterListItem[] = Object.freeze([
     latestMonthKey: "2026-09",
     legacyBaselineEligible: false,
     portalDeliveryState: "provisioned",
+    fanboxManagementUrl:
+      "https://www.fanbox.cc/manage/relationships/relationship-1",
+    portalLinkState: "available",
   }),
   Object.freeze({
     id: "internal-supporter-id-2",
@@ -254,6 +259,8 @@ const sampleSupporters: readonly SupporterListItem[] = Object.freeze([
     latestMonthKey: null,
     legacyBaselineEligible: true,
     portalDeliveryState: "not_issued",
+    fanboxManagementUrl: null,
+    portalLinkState: "not_issued",
   }),
 ]);
 
@@ -461,6 +468,11 @@ function createPortalSyncService(
 ): SupporterPortalSyncService {
   return {
     syncSupporter: vi.fn(implementation),
+    provisionCurrentSupporterPortalAccess: vi.fn(
+      async () => {
+        throw new Error("not used");
+      },
+    ),
     provisionSupporterPortalAccess: vi.fn(
       async () => {
         throw new Error("not used");
@@ -578,7 +590,6 @@ describe("admin web server", () => {
       expect(response.body).not.toContain(hook);
     }
     for (const privateDataTerm of [
-      "supporter",
       "relationship",
       "token",
       "cloudflare",
@@ -4575,6 +4586,10 @@ describe("portal link route", () => {
     });
     const supporterIds: string[] = [];
     const portalService: SupporterPortalLinkService = {
+      getCurrentSupporterPortalLink: async () => null,
+      issueSupporterPortalLink: async () => result,
+      reissueSupporterPortalLink: async () => result,
+      provisionCurrentSupporterPortalLink: async () => result,
       prepareSupporterPortalLink: async (supporterId) => {
         supporterIds.push(supporterId);
         return result;
@@ -4660,6 +4675,16 @@ describe("portal link route", () => {
     const failureMessage =
       "Worker 500 token AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA hash 0f007385b6f9d4b7eeb2748605afe1a984a0a3bfa3f014d09e2a784ce9e5cd1a /private/admin.sqlite";
     const portalService: SupporterPortalLinkService = {
+      getCurrentSupporterPortalLink: async () => null,
+      issueSupporterPortalLink: async () => {
+        throw new Error(failureMessage);
+      },
+      reissueSupporterPortalLink: async () => {
+        throw new Error(failureMessage);
+      },
+      provisionCurrentSupporterPortalLink: async () => {
+        throw new Error(failureMessage);
+      },
       prepareSupporterPortalLink: async () => {
         throw new Error(failureMessage);
       },
@@ -4691,6 +4716,326 @@ describe("portal link route", () => {
       await closeServer(portalServer);
     }
   });
+
+  it.each([
+    [
+      "/api/portal-link/current",
+      "getCurrentSupporterPortalLink",
+      {
+        portalUrl: "https://portal.example/level#current-synthetic-token",
+        verifiedAt: "2026-09-05T12:34:56.789Z",
+      },
+      '{"portalUrl":"https://portal.example/level#current-synthetic-token"}',
+    ],
+    [
+      "/api/portal-link/issue",
+      "issueSupporterPortalLink",
+      {
+        portalUrl: "https://portal.example/level#issue-synthetic-token",
+        verifiedAt: "2026-09-05T12:34:56.789Z",
+      },
+      '{"portalUrl":"https://portal.example/level#issue-synthetic-token","verifiedAt":"2026-09-05T12:34:56.789Z"}',
+    ],
+    [
+      "/api/portal-link/reissue",
+      "reissueSupporterPortalLink",
+      {
+        portalUrl: "https://portal.example/level#reissue-synthetic-token",
+        verifiedAt: "2026-09-05T12:34:56.789Z",
+      },
+      '{"portalUrl":"https://portal.example/level#reissue-synthetic-token","verifiedAt":"2026-09-05T12:34:56.789Z"}',
+    ],
+    [
+      "/api/portal-link/provision",
+      "provisionCurrentSupporterPortalLink",
+      {
+        portalUrl: "https://portal.example/level#provision-synthetic-token",
+        verifiedAt: "2026-09-05T12:34:56.789Z",
+      },
+      '{"portalUrl":"https://portal.example/level#provision-synthetic-token","verifiedAt":"2026-09-05T12:34:56.789Z"}',
+    ],
+  ] as const)(
+    "dispatches %s only to %s and returns its exact success shape",
+    async (path, method, result, expectedBody) => {
+      const current = vi.fn(async () =>
+        method === "getCurrentSupporterPortalLink"
+          ? result
+          : null,
+      );
+      const issue = vi.fn(async () => result);
+      const reissue = vi.fn(async () => result);
+      const provision = vi.fn(async () => result);
+      const portalService: SupporterPortalLinkService = {
+        getCurrentSupporterPortalLink: current,
+        issueSupporterPortalLink: issue,
+        reissueSupporterPortalLink: reissue,
+        provisionCurrentSupporterPortalLink: provision,
+        prepareSupporterPortalLink: vi.fn(async () => result),
+      };
+      const portalServer = createAdminServer(
+        sampleSupporterListService,
+        portalService,
+      );
+      const portalPort = await listenOnEphemeralPort(portalServer);
+
+      try {
+        const response = await requestOnPort(
+          portalPort,
+          "POST",
+          path,
+          JSON.stringify({ supporterId: "internal-supporter-id" }),
+        );
+
+        expect(response.statusCode).toBe(200);
+        expect(response.body).toBe(expectedBody);
+        expectCommonSecurityHeaders(response.headers);
+        expect(response.headers["content-type"]).toBe(
+          "application/json; charset=UTF-8",
+        );
+        expect(
+          {
+            getCurrentSupporterPortalLink: current,
+            issueSupporterPortalLink: issue,
+            reissueSupporterPortalLink: reissue,
+            provisionCurrentSupporterPortalLink: provision,
+          }[method],
+        ).toHaveBeenCalledWith("internal-supporter-id");
+        for (const [name, call] of Object.entries({
+          getCurrentSupporterPortalLink: current,
+          issueSupporterPortalLink: issue,
+          reissueSupporterPortalLink: reissue,
+          provisionCurrentSupporterPortalLink: provision,
+        })) {
+          if (name !== method) {
+            expect(call).not.toHaveBeenCalled();
+          }
+        }
+      } finally {
+        await closeServer(portalServer);
+      }
+    },
+  );
+
+  it.each([
+    "/api/portal-link/current",
+    "/api/portal-link/issue",
+    "/api/portal-link/reissue",
+    "/api/portal-link/provision",
+  ])("returns 400 for malformed requests on %s", async (path) => {
+    for (const body of [
+      "",
+      "{not-json",
+      "null",
+      "[]",
+      JSON.stringify({}),
+      JSON.stringify({ supporterId: "id", extra: true }),
+      JSON.stringify({ supporterId: 123 }),
+      JSON.stringify({ supporterId: "   " }),
+    ]) {
+      const response = await request("POST", path, body);
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toBe('{"error":"invalid_request"}');
+      expectCommonSecurityHeaders(response.headers);
+    }
+  });
+
+  it.each([
+    "/api/portal-link/current",
+    "/api/portal-link/issue",
+    "/api/portal-link/reissue",
+    "/api/portal-link/provision",
+  ])("returns 405 and Allow: POST for %s", async (path) => {
+    for (const method of ["GET", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]) {
+      const response = await request(method, path);
+
+      expect(response.statusCode).toBe(405);
+      expect(response.headers.allow).toBe("POST");
+      expectCommonSecurityHeaders(response.headers);
+    }
+  });
+
+  it.each([
+    "/api/portal-link/current",
+    "/api/portal-link/issue",
+    "/api/portal-link/reissue",
+    "/api/portal-link/provision",
+  ])("returns 503 when portal operations are not configured on %s", async (path) => {
+    const response = await request(
+      "POST",
+      path,
+      JSON.stringify({ supporterId: "internal-supporter-id" }),
+    );
+
+    expect(response.statusCode).toBe(503);
+    expect(response.body).toBe('{"error":"portal_not_configured"}');
+    expectCommonSecurityHeaders(response.headers);
+  });
+
+  it("returns 409 when the current portal link is unavailable", async () => {
+    const current = vi.fn(async () => null);
+    const portalService: SupporterPortalLinkService = {
+      getCurrentSupporterPortalLink: current,
+      issueSupporterPortalLink: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+      reissueSupporterPortalLink: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+      provisionCurrentSupporterPortalLink: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+      prepareSupporterPortalLink: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+    };
+    const portalServer = createAdminServer(
+      sampleSupporterListService,
+      portalService,
+    );
+    const portalPort = await listenOnEphemeralPort(portalServer);
+
+    try {
+      const response = await requestOnPort(
+        portalPort,
+        "POST",
+        "/api/portal-link/current",
+        JSON.stringify({ supporterId: "internal-supporter-id" }),
+      );
+
+      expect(response.statusCode).toBe(409);
+      expect(response.body).toBe('{"error":"portal_link_unavailable"}');
+      expect(current).toHaveBeenCalledWith("internal-supporter-id");
+      expectCommonSecurityHeaders(response.headers);
+    } finally {
+      await closeServer(portalServer);
+    }
+  });
+
+  it.each([
+    ["/api/portal-link/issue", "issueSupporterPortalLink"],
+    ["/api/portal-link/reissue", "reissueSupporterPortalLink"],
+    ["/api/portal-link/provision", "provisionCurrentSupporterPortalLink"],
+  ] as const)("maps %s state conflicts to 409", async (path, method) => {
+    for (const error of [
+      new PortalAccessAlreadyIssuedError("internal-supporter-id"),
+      new PortalAccessNotIssuedError("internal-supporter-id"),
+    ]) {
+      const operation = vi.fn(async () => {
+        throw error;
+      });
+      const portalService: SupporterPortalLinkService = {
+        getCurrentSupporterPortalLink: vi.fn(async () => null),
+        issueSupporterPortalLink:
+          method === "issueSupporterPortalLink"
+            ? operation
+            : vi.fn(async () => {
+                throw new Error("not used");
+              }),
+        reissueSupporterPortalLink:
+          method === "reissueSupporterPortalLink"
+            ? operation
+            : vi.fn(async () => {
+                throw new Error("not used");
+              }),
+        provisionCurrentSupporterPortalLink:
+          method === "provisionCurrentSupporterPortalLink"
+            ? operation
+            : vi.fn(async () => {
+                throw new Error("not used");
+              }),
+        prepareSupporterPortalLink: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      };
+      const portalServer = createAdminServer(
+        sampleSupporterListService,
+        portalService,
+      );
+      const portalPort = await listenOnEphemeralPort(portalServer);
+
+      try {
+        const response = await requestOnPort(
+          portalPort,
+          "POST",
+          path,
+          JSON.stringify({ supporterId: "internal-supporter-id" }),
+        );
+
+        expect(response.statusCode).toBe(409);
+        expect(response.body).toBe('{"error":"portal_state_conflict"}');
+        expect(operation).toHaveBeenCalledWith("internal-supporter-id");
+        expectCommonSecurityHeaders(response.headers);
+      } finally {
+        await closeServer(portalServer);
+      }
+    }
+  });
+
+  it.each([
+    ["/api/portal-link/current", "getCurrentSupporterPortalLink", 500],
+    ["/api/portal-link/issue", "issueSupporterPortalLink", 502],
+    ["/api/portal-link/reissue", "reissueSupporterPortalLink", 502],
+    [
+      "/api/portal-link/provision",
+      "provisionCurrentSupporterPortalLink",
+      502,
+    ],
+  ] as const)("maps unexpected failures on %s to HTTP %s", async (path, method, statusCode) => {
+    const failureMessage =
+      "Worker 500 token synthetic-token hash synthetic-hash /private/admin.sqlite https://portal.example/level#synthetic";
+    const failure = vi.fn(async () => {
+      throw new Error(failureMessage);
+    });
+    const portalService: SupporterPortalLinkService = {
+      getCurrentSupporterPortalLink:
+        method === "getCurrentSupporterPortalLink"
+          ? failure
+          : vi.fn(async () => null),
+      issueSupporterPortalLink:
+        method === "issueSupporterPortalLink"
+          ? failure
+          : vi.fn(async () => {
+              throw new Error("not used");
+            }),
+      reissueSupporterPortalLink:
+        method === "reissueSupporterPortalLink"
+          ? failure
+          : vi.fn(async () => {
+              throw new Error("not used");
+            }),
+      provisionCurrentSupporterPortalLink:
+        method === "provisionCurrentSupporterPortalLink"
+          ? failure
+          : vi.fn(async () => {
+              throw new Error("not used");
+            }),
+      prepareSupporterPortalLink: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+    };
+    const portalServer = createAdminServer(
+      sampleSupporterListService,
+      portalService,
+    );
+    const portalPort = await listenOnEphemeralPort(portalServer);
+
+    try {
+      const response = await requestOnPort(
+        portalPort,
+        "POST",
+        path,
+        JSON.stringify({ supporterId: "internal-supporter-id" }),
+      );
+
+      expect(response.statusCode).toBe(statusCode);
+      expect(response.body).toBe('{"error":"portal_operation_failed"}');
+      expect(response.body).not.toContain(failureMessage);
+      expectCommonSecurityHeaders(response.headers);
+    } finally {
+      await closeServer(portalServer);
+    }
+  });
 });
 
 describe("portal sync route", () => {
@@ -4701,6 +5046,9 @@ describe("portal sync route", () => {
       syncSupporter: async (supporterId) => {
         supporterIds.push(supporterId);
         return { verifiedAt };
+      },
+      provisionCurrentSupporterPortalAccess: async () => {
+        throw new Error("not used");
       },
       provisionSupporterPortalAccess: async () => {
         throw new Error("not used");
@@ -4795,6 +5143,9 @@ describe("portal sync route", () => {
     const syncService: SupporterPortalSyncService = {
       syncSupporter: async () => {
         throw new Error(failureMessage);
+      },
+      provisionCurrentSupporterPortalAccess: async () => {
+        throw new Error("not used");
       },
       provisionSupporterPortalAccess: async () => {
         throw new Error("not used");
@@ -5360,6 +5711,16 @@ describe("admin server configuration", () => {
     const syncApiToken = "sync-secret-value";
     const store = { close: vi.fn() } as unknown as LocalStore;
     const portalService: SupporterPortalLinkService = {
+      getCurrentSupporterPortalLink: async () => null,
+      issueSupporterPortalLink: async () => {
+        throw new Error("not used");
+      },
+      reissueSupporterPortalLink: async () => {
+        throw new Error("not used");
+      },
+      provisionCurrentSupporterPortalLink: async () => {
+        throw new Error("not used");
+      },
       prepareSupporterPortalLink: async () => ({
         portalUrl:
           "https://portal.example/level#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -5372,12 +5733,17 @@ describe("admin server configuration", () => {
         options: CreateSupporterPortalLinkServiceOptions,
       ) => {
         expect(suppliedStore).toBe(store);
-        expect(options).toEqual({ portalOrigin, syncApiToken });
+        expect(options.portalOrigin).toBe(portalOrigin);
+        expect(options.syncApiToken).toBe(syncApiToken);
+        expect(options.getEncryptionKey).toEqual(expect.any(Function));
         return portalService;
       },
     );
     const syncService: SupporterPortalSyncService = {
       syncSupporter: async () => ({ verifiedAt: "2026-09-05T12:34:56.789Z" }),
+      provisionCurrentSupporterPortalAccess: async () => {
+        throw new Error("not used");
+      },
       provisionSupporterPortalAccess: async () => {
         throw new Error("not used");
       },
@@ -5643,6 +6009,11 @@ describe("admin server configuration", () => {
     expect(ADMIN_SCRIPT).not.toContain("fileInput.value = \"\"");
     expect(ADMIN_SCRIPT).toContain('"portalDeliveryState"');
     expect(ADMIN_SCRIPT).toContain("PORTAL_DELIVERY_STATES");
+    expect(ADMIN_SCRIPT).toContain('"fanboxManagementUrl"');
+    expect(ADMIN_SCRIPT).toContain('"portalLinkState"');
+    expect(ADMIN_SCRIPT).toContain("PORTAL_LINK_STATES");
+    expect(ADMIN_SCRIPT).toContain("FANBOX_MANAGEMENT_URL_PATTERN");
+    expect(ADMIN_SCRIPT).toContain("isFanboxManagementUrl");
     for (const deliveryState of [
       "not_issued",
       "issued",
@@ -5650,6 +6021,14 @@ describe("admin server configuration", () => {
       "sent",
     ]) {
       expect(ADMIN_SCRIPT).toContain(deliveryState);
+    }
+    for (const linkState of [
+      "not_issued",
+      "unrecoverable",
+      "needs_provisioning",
+      "available",
+    ]) {
+      expect(ADMIN_SCRIPT).toContain(linkState);
     }
     expect(ADMIN_SCRIPT).not.toContain("nextLotteryEntryCount");
     expect(ADMIN_SCRIPT).not.toContain("currentLevel");
@@ -5668,24 +6047,40 @@ describe("admin server configuration", () => {
     expect(ADMIN_SCRIPT).toContain("支援者はいません。");
     expect(ADMIN_SCRIPT).toContain("支援者一覧を読み込めませんでした。");
     expect(ADMIN_SCRIPT).toContain('createElement("button")');
-    expect(ADMIN_SCRIPT).toContain("ポータルURLを発行・再発行");
-    expect(ADMIN_SCRIPT).toContain("ポータル: 未発行");
-    expect(ADMIN_SCRIPT).toContain("ポータル: 発行済み・未連携");
-    expect(ADMIN_SCRIPT).toContain("ポータル: 発行済み・未送信");
-    expect(ADMIN_SCRIPT).toContain("ポータル: 送信済み");
+    expect(ADMIN_PAGE).toContain('<table id="list">');
+    expect(ADMIN_PAGE).toContain('<tbody id="list-body"');
+    for (const column of ["支援者", "口数", "支援状態", "確認ID", "ポータル", "操作"]) {
+      expect(ADMIN_PAGE).toContain("<th scope=\"col\">" + column + "</th>");
+    }
+    expect(ADMIN_PAGE).toContain('id="supporter-search"');
+    expect(ADMIN_PAGE).toContain('id="supporter-filter"');
+    expect(ADMIN_SCRIPT).toContain("URLを発行");
+    expect(ADMIN_SCRIPT).toContain("未発行");
+    expect(ADMIN_SCRIPT).toContain("未連携");
+    expect(ADMIN_SCRIPT).toContain("未送信");
+    expect(ADMIN_SCRIPT).toContain("送信済み");
     expect(ADMIN_SCRIPT).toContain("送信済みとして記録");
     expect(ADMIN_SCRIPT).toContain("window.confirm");
     expect(ADMIN_SCRIPT).toContain(
-      "新しいポータルURLを発行します。以前のURLがある場合、以前のURLは現在のURLではなくなります。続行しますか？",
+      "以前の個人用ポータルURLは無効になります。新しいURLを再発行します。続行しますか？",
     );
-    expect(ADMIN_SCRIPT).toContain('fetch("/api/portal-link", {');
-    expect(ADMIN_SCRIPT).toContain('body: JSON.stringify({ supporterId })');
+    expect(ADMIN_SCRIPT).toContain('fetch("/api/portal-link/issue", {');
+    expect(ADMIN_SCRIPT).toContain('fetch("/api/portal-link/reissue", {');
+    expect(ADMIN_SCRIPT).toContain('fetch("/api/portal-link/provision", {');
+    expect(ADMIN_SCRIPT).toContain('fetch("/api/portal-link/current", {');
+    expect(ADMIN_SCRIPT).not.toContain('fetch("/api/portal-link", {');
     expect(ADMIN_SCRIPT).toContain('hasExactKeys(value, ["portalUrl", "verifiedAt"])');
+    expect(ADMIN_SCRIPT).toContain('hasExactKeys(value, ["portalUrl"])');
+    expect(ADMIN_SCRIPT).toContain("validateCurrentPortalLinkResponse");
     expect(ADMIN_SCRIPT).toContain("CANONICAL_TIMESTAMP_PATTERN");
     expect(ADMIN_SCRIPT).toContain('portalUrl.pathname !== "/level"');
     expect(ADMIN_SCRIPT).toContain("PORTAL_TOKEN_PATTERN");
     expect(ADMIN_SCRIPT).toContain("ポータル連携が設定されていません。");
-    expect(ADMIN_SCRIPT).toContain("ポータルURLを準備できませんでした。");
+    expect(ADMIN_SCRIPT).toContain("URLを発行できませんでした。");
+    expect(ADMIN_SCRIPT).toContain("URL保存なし");
+    expect(ADMIN_SCRIPT).toContain("navigator.clipboard.writeText");
+    expect(ADMIN_SCRIPT).toContain("確認ID: ");
+    expect(ADMIN_SCRIPT).toContain("MESSAGE_INFO_LINE_BREAK");
     expect(ADMIN_SCRIPT).toContain('fetch("/api/portal-link/sent", {');
     expect(ADMIN_SCRIPT).toContain(
       "この操作はメッセージを送信しません。ポータルURLをすでに本人へ送信済みの場合のみ記録します。続行しますか？",
@@ -5695,28 +6090,23 @@ describe("admin server configuration", () => {
     );
     expect(ADMIN_SCRIPT).toContain('value.portalDeliveryState !== "sent"');
     expect(ADMIN_SCRIPT).toContain(
-      "ポータル状態が更新されています。一覧を再読み込みしてください。",
+      "ポータル状態が変わっています。最新の状態を確認してください。",
     );
     expect(ADMIN_SCRIPT).toContain("ポータル送信状態を記録できませんでした。");
-    expect(ADMIN_SCRIPT).toContain('portalDeliveryState = "provisioned"');
-    expect(ADMIN_SCRIPT).toContain('portalDeliveryState = "sent"');
     expect(ADMIN_SCRIPT).toContain("portalOperationActive");
-    expect(ADMIN_SCRIPT).toContain("portalLinkStatus");
+    expect(ADMIN_SCRIPT).toContain("portalStatus");
     expect(ADMIN_SCRIPT).toContain("sentStatus");
-    expect(ADMIN_SCRIPT).toContain("秘密のURLは保存されません");
-    expect(ADMIN_SCRIPT).toContain("secretUrl.textContent = portalUrl");
-    expect(ADMIN_SCRIPT).not.toContain('createElement("a")');
+    expect(ADMIN_SCRIPT).toContain('createElement("a")');
+    expect(ADMIN_SCRIPT).toContain('target = "_blank"');
+    expect(ADMIN_SCRIPT).toContain('rel = "noopener noreferrer"');
+    expect(ADMIN_SCRIPT).toContain('referrerPolicy = "no-referrer"');
     expect(ADMIN_SCRIPT).not.toContain("dataset.supporterId");
     expect(ADMIN_SCRIPT).not.toContain("localStorage");
     expect(ADMIN_SCRIPT).not.toContain("sessionStorage");
     expect(ADMIN_SCRIPT).not.toContain("history.");
     expect(ADMIN_SCRIPT).not.toContain("console.");
-    expect(ADMIN_SCRIPT.indexOf('window.confirm')).toBeLessThan(
-      ADMIN_SCRIPT.indexOf('fetch("/api/portal-link", {'),
-    );
-    expect(ADMIN_SCRIPT.indexOf('window.confirm')).toBeLessThan(
-      ADMIN_SCRIPT.indexOf('fetch("/api/portal-link/sent", {'),
-    );
+    expect(ADMIN_SCRIPT).not.toContain("secretUrl.textContent");
+    expect(ADMIN_SCRIPT).not.toContain("textContent = portalUrl");
     expect(ADMIN_SCRIPT).toContain("createElement");
     expect(ADMIN_SCRIPT).toContain("textContent");
     expect(ADMIN_SCRIPT).toContain("replaceChildren");
@@ -5732,6 +6122,271 @@ describe("admin server configuration", () => {
     }
     expect(ADMIN_SCRIPT).not.toContain("textContent = supporter.id");
     expect(ADMIN_PAGE).not.toContain("/tmp/fanbox-level-manager-admin.sqlite");
+  });
+
+  it("defines the five-view navigation and canonical admin theme", () => {
+    const navigationStart = ADMIN_PAGE.indexOf('<nav id="admin-navigation"');
+    const navigationEnd = ADMIN_PAGE.indexOf("</nav>", navigationStart);
+    expect(navigationStart).toBeGreaterThanOrEqual(0);
+    expect(navigationEnd).toBeGreaterThan(navigationStart);
+    const navigation = ADMIN_PAGE.slice(navigationStart, navigationEnd);
+    expect(navigation.match(/<button\b/g)).toHaveLength(5);
+
+    let previousIndex = -1;
+    for (const label of ["支援者", "FANBOX取込", "抽選", "月末処理", "設定"]) {
+      const currentIndex = navigation.indexOf(">" + label + "</button>");
+      expect(currentIndex).toBeGreaterThan(previousIndex);
+      previousIndex = currentIndex;
+    }
+    expect(navigation).toContain('aria-label="管理メニュー"');
+    expect(navigation).toContain('aria-current="page"');
+    for (const viewId of [
+      "supporter-view",
+      "fanbox-import-view",
+      "lottery-view",
+      "month-end-view",
+      "settings-view",
+    ]) {
+      expect(navigation).toContain('aria-controls="' + viewId + '"');
+      expect(ADMIN_PAGE).toContain('id="' + viewId + '"');
+    }
+    expect(ADMIN_PAGE).toContain(
+      '<section id="fanbox-import-view" class="admin-view" aria-labelledby="pdf-inspection-heading" hidden>',
+    );
+    for (const color of [
+      "#faf4ed",
+      "#fffaf3",
+      "#f2e9e1",
+      "#575279",
+      "#9893a5",
+      "#dfdad9",
+      "#286983",
+      "#56949f",
+      "#907aa9",
+      "#d7827e",
+      "#ea9d34",
+      "#b4637a",
+    ]) {
+      expect(ADMIN_STYLES).toContain(color);
+    }
+    expect(ADMIN_STYLES).toContain("background-color: var(--base)");
+    expect(ADMIN_STYLES).toContain("background-color: var(--surface)");
+    expect(ADMIN_STYLES).toContain("background-color: var(--pine)");
+    expect(ADMIN_STYLES).toContain("var(--love)");
+    expect(ADMIN_STYLES).toContain("var(--gold)");
+    expect(ADMIN_STYLES).toContain(":focus-visible");
+    expect(ADMIN_STYLES).toContain("flex-wrap: wrap");
+    expect(ADMIN_STYLES).toContain("overflow-x: auto");
+    expect(ADMIN_STYLES).toMatch(
+      /#status \{[\s\S]*color: var\(--text\);[\s\S]*background-color: var\(--surface\);/,
+    );
+    expect(ADMIN_STYLES).not.toMatch(
+      /#status \{[\s\S]*color: var\(--muted\);/,
+    );
+    expect(ADMIN_STYLES).toMatch(
+      /\.admin-view \[role="status"\] \{[\s\S]*color: var\(--text\);/,
+    );
+    expect(ADMIN_STYLES).not.toMatch(
+      /\.admin-view \[role="status"\] \{[\s\S]*color: var\(--muted\);/,
+    );
+    expect(ADMIN_STYLES).toMatch(
+      /\.admin-navigation button \{[\s\S]*color: var\(--text\);[\s\S]*background-color: transparent;/,
+    );
+    expect(ADMIN_STYLES).toMatch(
+      /\.portal-recovery-state \{[\s\S]*border-left: 3px solid var\(--gold\);[\s\S]*color: var\(--text\);/,
+    );
+    expect(ADMIN_STYLES).toMatch(
+      /\.danger-button \{[\s\S]*border-color: var\(--love\);[\s\S]*color: var\(--text\);[\s\S]*background-color: var\(--surface\);/,
+    );
+    expect(ADMIN_STYLES).toMatch(
+      /\.danger-button:hover \{[\s\S]*color: var\(--text\);[\s\S]*background-color: var\(--overlay\);/,
+    );
+    expect(ADMIN_STYLES).toMatch(
+      /\.primary-button,[\s\S]*#lottery-result-button \{[\s\S]*color: var\(--base\);[\s\S]*background-color: var\(--pine\);/,
+    );
+    expect(ADMIN_STYLES).toMatch(
+      /\.primary-button:hover,[\s\S]*#lottery-result-button:hover \{[\s\S]*background-color: var\(--pine\);/,
+    );
+  });
+
+  it("switches views without fetching or reconstructing workflow sections", () => {
+    type FakeListener = () => void;
+
+    class FakeElement {
+      readonly listeners = new Map<string, FakeListener>();
+      readonly attributes = new Map<string, string>();
+      hidden = false;
+      value = "";
+
+      addEventListener(type: string, listener: FakeListener): void {
+        this.listeners.set(type, listener);
+      }
+
+      click(): void {
+        this.listeners.get("click")?.();
+      }
+
+      getAttribute(name: string): string | null {
+        return this.attributes.get(name) ?? null;
+      }
+
+      removeAttribute(name: string): void {
+        this.attributes.delete(name);
+      }
+
+      setAttribute(name: string, value: string): void {
+        this.attributes.set(name, value);
+      }
+    }
+
+    const viewIds = [
+      "supporter-view",
+      "fanbox-import-view",
+      "lottery-view",
+      "month-end-view",
+      "settings-view",
+    ];
+    const buttonIds = [
+      "supporter-view-button",
+      "fanbox-import-view-button",
+      "lottery-view-button",
+      "month-end-view-button",
+      "settings-view-button",
+    ];
+    const elements = new Map<string, FakeElement>();
+    const navigation = new FakeElement();
+    elements.set("admin-navigation", navigation);
+    const views = viewIds.map((id) => {
+      const view = new FakeElement();
+      elements.set(id, view);
+      return view;
+    });
+    const buttons = buttonIds.map((id) => {
+      const button = new FakeElement();
+      elements.set(id, button);
+      return button;
+    });
+    const fakeDocument = {
+      documentElement: { dataset: {} as Record<string, string> },
+      getElementById: (id: string): FakeElement | null =>
+        elements.get(id) ?? null,
+    };
+    const fetchMock = vi.fn();
+
+    runInNewContext(ADMIN_SCRIPT, {
+      Array,
+      Date,
+      document: fakeDocument,
+      Error,
+      fetch: fetchMock,
+      HTMLButtonElement: FakeElement,
+      HTMLInputElement: FakeElement,
+      Map,
+      Number,
+      Object,
+      Set,
+      TypeError,
+      URL,
+      window: { confirm: vi.fn(() => true) },
+    });
+
+    expect(buttons).toHaveLength(5);
+    expect(views.filter((view) => !view.hidden)).toEqual([views[0]]);
+    expect(buttons[0]?.getAttribute("aria-current")).toBe("page");
+    expect(
+      buttons
+        .slice(1)
+        .every((button) => button.getAttribute("aria-current") === null),
+    ).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    const supporterView = views[0];
+    if (supporterView === undefined) {
+      throw new Error("supporter view was not created");
+    }
+    supporterView.value = "existing search state";
+    for (let index = 1; index < buttons.length; index += 1) {
+      buttons[index]?.click();
+      expect(views.filter((view) => !view.hidden)).toEqual([views[index]]);
+      expect(buttons[index]?.getAttribute("aria-current")).toBe("page");
+      expect(
+        buttons
+          .filter((_, buttonIndex) => buttonIndex !== index)
+          .every((button) => button.getAttribute("aria-current") === null),
+      ).toBe(true);
+      expect(fetchMock).not.toHaveBeenCalled();
+    }
+
+    buttons[0]?.click();
+    expect(views[0]).toBe(supporterView);
+    expect(supporterView.value).toBe("existing search state");
+    expect(views.filter((view) => !view.hidden)).toEqual([supporterView]);
+  });
+
+  it.each([
+    [
+      "portalLinkState",
+      {
+        ...sampleSupporters[0],
+        portalLinkState: "invalid-state",
+      },
+    ],
+    [
+      "fanboxManagementUrl",
+      {
+        ...sampleSupporters[0],
+        fanboxManagementUrl: "https://evil.example/relationships/synthetic",
+      },
+    ],
+  ] as const)("rejects a supporter with an invalid %s", async (_field, supporter) => {
+    class FakeElement {
+      readonly children: FakeElement[] = [];
+      textContent = "";
+
+      replaceChildren(...children: FakeElement[]): void {
+        this.children.splice(0, this.children.length, ...children);
+      }
+    }
+
+    const listStatus = new FakeElement();
+    const supporterList = new FakeElement();
+    const fakeDocument = {
+      documentElement: { dataset: {} as Record<string, string> },
+      getElementById: (id: string): FakeElement | null =>
+        id === "list-status"
+          ? listStatus
+          : id === "list"
+            ? supporterList
+            : null,
+      createElement: (): FakeElement => new FakeElement(),
+    };
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ supporters: [supporter] }),
+    }));
+
+    runInNewContext(ADMIN_SCRIPT, {
+      Array,
+      Date,
+      document: fakeDocument,
+      Error,
+      fetch: fetchMock,
+      HTMLButtonElement: class {},
+      HTMLInputElement: class {},
+      Map,
+      Number,
+      Object,
+      Set,
+      TypeError,
+      URL,
+      window: { confirm: vi.fn(() => true) },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(listStatus.textContent).toBe("支援者一覧を読み込めませんでした。");
+    expect(supporterList.children).toHaveLength(0);
   });
 
   it("renders and executes the per-supporter Cloudflare sync action", async () => {
@@ -5820,6 +6475,8 @@ describe("admin server configuration", () => {
                   latestMonthKey: null,
                   legacyBaselineEligible: false,
                   portalDeliveryState: "not_issued",
+                  fanboxManagementUrl: null,
+                  portalLinkState: "not_issued",
                 },
               ],
             }),
@@ -5852,14 +6509,18 @@ describe("admin server configuration", () => {
 
     const row = elements.get("list")?.children[0];
     expect(row).toBeDefined();
-    const syncButton = row?.children[8];
-    const syncStatus = row?.children[9];
-    const portalButton = row?.children[6];
-    const sentButton = row?.children[10];
+    const operationCell = row?.children[5];
+    const secondaryActions = operationCell?.children[2]?.children[1];
+    const syncButton = secondaryActions?.children[1];
+    const syncStatus = secondaryActions?.children[2];
+    const portalButton = operationCell?.children[0]?.children[0];
+    const sentButton = secondaryActions?.children[3];
     expect(syncButton?.textContent).toBe("Cloudflareへ同期");
     expect(syncButton?.disabled).toBe(false);
     expect(sentButton?.disabled).toBe(true);
-    expect(row?.children[1]?.textContent).toBe("確認ID: 3630-5118-9AE4-0646");
+    expect(row?.children[3]?.children[0]?.textContent).toContain(
+      "3630-5118-9AE4-0646",
+    );
 
     syncButton?.click();
     syncButton?.click();
@@ -5963,6 +6624,8 @@ describe("admin server configuration", () => {
             latestMonthKey: null,
             legacyBaselineEligible: true,
             portalDeliveryState: "not_issued",
+            fanboxManagementUrl: null,
+            portalLinkState: "not_issued",
           },
         ],
       },
@@ -5977,6 +6640,8 @@ describe("admin server configuration", () => {
             latestMonthKey: null,
             legacyBaselineEligible: false,
             portalDeliveryState: "not_issued",
+            fanboxManagementUrl: null,
+            portalLinkState: "not_issued",
           },
         ],
       },
@@ -6038,7 +6703,7 @@ describe("admin server configuration", () => {
 
     const list = elements.get("list");
     const row = list?.children[0];
-    const control = row?.children[row.children.length - 1];
+    const control = row?.children[5]?.children[2]?.children[1]?.children.at(-1);
     const levelInput = control?.children[1];
     const baselineButton = control?.children[2];
     expect(levelInput?.value).toBe("");
@@ -6079,6 +6744,391 @@ describe("admin server configuration", () => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(visibleText(list as FakeElement)).not.toContain("旧管理口数を設定");
+  });
+
+  it("renders a local table and drives the explicit portal state machine", async () => {
+    type FakeListener = () => void;
+    type FakeResponse = Readonly<{
+      ok: boolean;
+      status: number;
+      json: () => Promise<unknown>;
+    }>;
+
+    class FakeElement {
+      readonly children: FakeElement[] = [];
+      readonly listeners = new Map<string, FakeListener>();
+      readonly attributes = new Map<string, string>();
+      readonly dataset: Record<string, string> = {};
+      disabled = false;
+      tagName = "";
+      textContent = "";
+      type = "";
+      value = "";
+      href = "";
+      target = "";
+      rel = "";
+      referrerPolicy = "";
+
+      addEventListener(type: string, listener: FakeListener): void {
+        this.listeners.set(type, listener);
+      }
+
+      click(): void {
+        if (!this.disabled) {
+          this.listeners.get("click")?.();
+        }
+      }
+
+      dispatch(type: string): void {
+        this.listeners.get(type)?.();
+      }
+
+      replaceChildren(...children: FakeElement[]): void {
+        this.children.splice(0, this.children.length, ...children);
+      }
+
+      setAttribute(name: string, value: string): void {
+        this.attributes.set(name, value);
+      }
+    }
+
+    class FakeButtonElement extends FakeElement {}
+    class FakeInputElement extends FakeElement {}
+    const elements = new Map<string, FakeElement>([
+      ["list-status", new FakeElement()],
+      ["supporter-search", new FakeInputElement()],
+      ["supporter-filter", new FakeElement()],
+      ["list", new FakeElement()],
+      ["list-body", new FakeElement()],
+    ]);
+    const portalUrl =
+      "https://portal.example/level#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    const initialSupporters: SupporterListItem[] = [
+      {
+        id: "opaque-alpha",
+        confirmationId: "AAAA-BBBB-CCCC-DDDD",
+        displayName: "Alpha",
+        entryCount: 2,
+        supporting: true,
+        latestMonthKey: "2026-09",
+        legacyBaselineEligible: false,
+        portalDeliveryState: "provisioned",
+        fanboxManagementUrl:
+          "https://www.fanbox.cc/manage/relationships/alpha",
+        portalLinkState: "available",
+      },
+      {
+        id: "opaque-beta",
+        confirmationId: "1111-2222-3333-4444",
+        displayName: "Beta",
+        entryCount: 1,
+        supporting: false,
+        latestMonthKey: null,
+        legacyBaselineEligible: false,
+        portalDeliveryState: "not_issued",
+        fanboxManagementUrl: null,
+        portalLinkState: "not_issued",
+      },
+      {
+        id: "opaque-charlie",
+        confirmationId: "5555-6666-7777-8888",
+        displayName: "Charlie",
+        entryCount: 3,
+        supporting: true,
+        latestMonthKey: "2026-08",
+        legacyBaselineEligible: false,
+        portalDeliveryState: "issued",
+        fanboxManagementUrl:
+          "https://www.fanbox.cc/manage/relationships/charlie",
+        portalLinkState: "unrecoverable",
+      },
+      {
+        id: "opaque-delta",
+        confirmationId: "9999-AAAA-BBBB-CCCC",
+        displayName: "Delta",
+        entryCount: 4,
+        supporting: false,
+        latestMonthKey: "2026-09",
+        legacyBaselineEligible: false,
+        portalDeliveryState: "issued",
+        fanboxManagementUrl: null,
+        portalLinkState: "needs_provisioning",
+      },
+      {
+        id: "opaque-echo",
+        confirmationId: "DDDD-EEEE-FFFF-0000",
+        displayName: "Echo",
+        entryCount: 5,
+        supporting: true,
+        latestMonthKey: "2026-09",
+        legacyBaselineEligible: false,
+        portalDeliveryState: "sent",
+        fanboxManagementUrl: null,
+        portalLinkState: "available",
+      },
+    ];
+    let currentSupporters = initialSupporters;
+    const fetchCalls: Array<{
+      url: string;
+      options: Readonly<Record<string, unknown>>;
+    }> = [];
+    const confirmMock = vi.fn<(message: string) => boolean>(() => true);
+    const clipboardWrites: string[] = [];
+    const clipboardWriteText = vi.fn(async (text: string) => {
+      clipboardWrites.push(text);
+    });
+    const response = (status: number, body: unknown): FakeResponse => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => body,
+    });
+    const updateSupporter = (
+      id: string,
+      update: Partial<SupporterListItem>,
+    ): void => {
+      currentSupporters = currentSupporters.map((supporter) =>
+        supporter.id === id ? { ...supporter, ...update } : supporter,
+      );
+    };
+    const fetchMock = vi.fn(
+      (
+        url: string,
+        options: Readonly<Record<string, unknown>> = {},
+      ): Promise<FakeResponse> => {
+        fetchCalls.push({ url, options });
+        if (url === "/api/supporters") {
+          return Promise.resolve(response(200, { supporters: currentSupporters }));
+        }
+        if (url === "/api/portal-link/issue") {
+          updateSupporter("opaque-beta", {
+            portalDeliveryState: "provisioned",
+            portalLinkState: "available",
+          });
+          return Promise.resolve(response(200, {
+            portalUrl,
+            verifiedAt: "2026-09-10T06:00:00.000Z",
+          }));
+        }
+        if (url === "/api/portal-link/reissue") {
+          updateSupporter("opaque-charlie", {
+            portalDeliveryState: "provisioned",
+            portalLinkState: "available",
+          });
+          return Promise.resolve(response(200, {
+            portalUrl,
+            verifiedAt: "2026-09-10T06:01:00.000Z",
+          }));
+        }
+        if (url === "/api/portal-link/provision") {
+          updateSupporter("opaque-delta", {
+            portalDeliveryState: "provisioned",
+            portalLinkState: "available",
+          });
+          return Promise.resolve(response(200, {
+            portalUrl,
+            verifiedAt: "2026-09-10T06:02:00.000Z",
+          }));
+        }
+        if (url === "/api/portal-link/current") {
+          return Promise.resolve(response(200, { portalUrl }));
+        }
+        return Promise.reject(new Error("unexpected synthetic request"));
+      },
+    );
+    const fakeDocument = {
+      documentElement: { dataset: {} as Record<string, string> },
+      getElementById: (id: string): FakeElement | null =>
+        elements.get(id) ?? null,
+      createElement: (tagName: string): FakeElement => {
+        const element = new FakeElement();
+        element.tagName = tagName;
+        return element;
+      },
+    };
+    const treeText = (element: FakeElement): string =>
+      element.textContent + element.children.map(treeText).join("");
+    const find = (
+      element: FakeElement,
+      predicate: (candidate: FakeElement) => boolean,
+    ): FakeElement | undefined => {
+      if (predicate(element)) {
+        return element;
+      }
+      for (const child of element.children) {
+        const match = find(child, predicate);
+        if (match !== undefined) {
+          return match;
+        }
+      }
+      return undefined;
+    };
+    const rowFor = (name: string): FakeElement => {
+      const row = elements
+        .get("list-body")
+        ?.children.find((candidate) => treeText(candidate).includes(name));
+      if (row === undefined) {
+        throw new Error("expected supporter row");
+      }
+      return row;
+    };
+    const search = elements.get("supporter-search") as FakeInputElement;
+    const filter = elements.get("supporter-filter") as FakeElement;
+    filter.value = "all";
+
+    runInNewContext(ADMIN_SCRIPT, {
+      Array,
+      Date,
+      document: fakeDocument,
+      Error,
+      fetch: fetchMock,
+      HTMLButtonElement: FakeButtonElement,
+      HTMLInputElement: FakeInputElement,
+      Map,
+      navigator: { clipboard: { writeText: clipboardWriteText } },
+      Number,
+      Object,
+      Set,
+      TypeError,
+      URL,
+      window: { confirm: confirmMock },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const listBody = elements.get("list-body") as FakeElement;
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(1);
+    expect(listBody.children).toHaveLength(5);
+    expect(listBody.children.every((row) => row.tagName === "tr")).toBe(true);
+    expect(listBody.children[0]?.children).toHaveLength(6);
+    expect(treeText(listBody.children[0]!)).toContain("2口");
+    expect((treeText(listBody.children[0]!).match(/2口/g) ?? [])).toHaveLength(1);
+
+    const linkedName = rowFor("Alpha").children[0]?.children[0];
+    expect(linkedName?.tagName).toBe("a");
+    expect(linkedName?.href).toBe(
+      "https://www.fanbox.cc/manage/relationships/alpha",
+    );
+    expect(linkedName?.attributes.get("href")).toBe(
+      "https://www.fanbox.cc/manage/relationships/alpha",
+    );
+    expect(linkedName?.target).toBe("_blank");
+    expect(linkedName?.rel).toBe("noopener noreferrer");
+    expect(linkedName?.referrerPolicy).toBe("no-referrer");
+    expect(rowFor("Beta").children[0]?.children).toHaveLength(0);
+    expect(treeText(rowFor("Alpha"))).not.toContain("FANBOXを開く");
+    expect(treeText(rowFor("Charlie"))).toContain("URL保存なし");
+    expect(treeText(rowFor("Charlie"))).not.toContain(portalUrl);
+
+    search.value = "aLpHa";
+    search.dispatch("input");
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(1);
+    expect(listBody.children).toHaveLength(1);
+    expect(treeText(listBody.children[0]!)).toContain("Alpha");
+
+    search.value = "";
+    search.dispatch("input");
+    filter.value = "supporting";
+    filter.dispatch("change");
+    expect(listBody.children).toHaveLength(3);
+    filter.value = "stopped";
+    filter.dispatch("change");
+    expect(listBody.children).toHaveLength(2);
+    filter.value = "not-sent";
+    filter.dispatch("change");
+    expect(listBody.children).toHaveLength(4);
+    search.value = "alpha";
+    search.dispatch("input");
+    filter.value = "stopped";
+    filter.dispatch("change");
+    expect(listBody.children).toHaveLength(0);
+    expect(elements.get("list-status")?.textContent).toBe(
+      "条件に一致する支援者はいません。",
+    );
+    search.value = "";
+    search.dispatch("input");
+    filter.value = "all";
+    filter.dispatch("change");
+
+    const issueButton = find(rowFor("Beta"), (candidate) =>
+      candidate.textContent === "URLを発行",
+    );
+    issueButton?.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/issue")).toHaveLength(1);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/reissue")).toHaveLength(0);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/provision")).toHaveLength(0);
+    expect(fetchCalls.filter(({ url }) => url === "/api/supporters")).toHaveLength(2);
+    expect(elements.get("list-status")?.textContent).toContain("URLを発行しました。");
+
+    confirmMock.mockReturnValueOnce(false);
+    const unrecoverableReissue = find(rowFor("Charlie"), (candidate) =>
+      candidate.textContent === "URLを再発行…",
+    );
+    unrecoverableReissue?.click();
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/reissue")).toHaveLength(0);
+    expect(confirmMock.mock.calls.at(-1)?.[0]).toContain("無効になります");
+    confirmMock.mockReturnValueOnce(true);
+    unrecoverableReissue?.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/reissue")).toHaveLength(1);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/issue")).toHaveLength(1);
+
+    const provisionButton = find(rowFor("Delta"), (candidate) =>
+      candidate.textContent === "連携を再試行",
+    );
+    provisionButton?.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/provision")).toHaveLength(1);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/reissue")).toHaveLength(1);
+
+    const alphaRow = rowFor("Alpha");
+    const messageCopyButton = find(alphaRow, (candidate) =>
+      candidate.textContent === "送信用情報をコピー",
+    );
+    const urlCopyButton = find(alphaRow, (candidate) =>
+      candidate.textContent === "URLをコピー",
+    );
+    const confirmationCopyButton = find(alphaRow, (candidate) =>
+      candidate.textContent === "確認IDをコピー",
+    );
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/current")).toHaveLength(0);
+    messageCopyButton?.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const messageInfo = clipboardWrites.at(-1);
+    expect(messageInfo).toBe("確認ID: AAAA-BBBB-CCCC-DDDD\n" + portalUrl);
+    expect(messageInfo?.split("\n")).toEqual([
+      "確認ID: AAAA-BBBB-CCCC-DDDD",
+      portalUrl,
+    ]);
+    expect(messageInfo?.match(/\n/g)).toEqual(["\n"]);
+    expect(messageInfo?.includes("\r")).toBe(false);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/current")).toHaveLength(1);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/issue")).toHaveLength(1);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/reissue")).toHaveLength(1);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/provision")).toHaveLength(1);
+    urlCopyButton?.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(clipboardWrites.at(-1)).toBe(portalUrl);
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/current")).toHaveLength(2);
+    confirmationCopyButton?.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(clipboardWrites.at(-1)).toBe("AAAA-BBBB-CCCC-DDDD");
+    expect(fetchCalls.filter(({ url }) => url === "/api/portal-link/current")).toHaveLength(2);
+    expect(treeText(alphaRow)).not.toContain(portalUrl);
+    for (const candidate of [alphaRow, linkedName!]) {
+      for (const attribute of candidate.attributes.values()) {
+        expect(attribute).not.toContain(portalUrl);
+      }
+    }
+    expect(fetchCalls.some(({ url }) => url === "/api/portal-link")).toBe(false);
+
+    clipboardWriteText.mockRejectedValueOnce(new Error("clipboard unavailable"));
+    urlCopyButton?.click();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(treeText(alphaRow)).toContain("コピーできませんでした。");
+    expect(treeText(alphaRow)).not.toContain(portalUrl);
   });
 
   it("implements the settled month-end browser contract", async () => {
@@ -6558,6 +7608,9 @@ describe("admin server configuration", () => {
         latestMonthKey: "2026-09",
         legacyBaselineEligible: false,
         portalDeliveryState: "provisioned",
+        fanboxManagementUrl:
+          "https://www.fanbox.cc/manage/relationships/relationship-1",
+        portalLinkState: "available",
       }),
       Object.freeze({
         id: "internal-supporter-id-2",
@@ -6568,6 +7621,8 @@ describe("admin server configuration", () => {
         latestMonthKey: "2026-09",
         legacyBaselineEligible: false,
         portalDeliveryState: "not_issued",
+        fanboxManagementUrl: null,
+        portalLinkState: "not_issued",
       }),
     ];
     const supporterBodies: (readonly SupporterListItem[])[] = [

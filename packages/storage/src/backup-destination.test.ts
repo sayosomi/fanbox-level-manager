@@ -50,7 +50,7 @@ describe("backup destination storage", () => {
     ]);
   });
 
-  it("adds version 5 to a version 4 database while preserving existing data", () => {
+  it("migrates a version 4 database to the current schema while preserving existing data", () => {
     const databaseDirectory = mkdtempSync(join(tmpdir(), "fanbox-level-manager-"));
     const databasePath = join(databaseDirectory, "version-four.sqlite");
 
@@ -87,7 +87,7 @@ describe("backup destination storage", () => {
       legacyDatabase.close();
 
       const migrated = track(openLocalStore(databasePath));
-      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(6);
+      expect(databaseOf(migrated).pragma("user_version", { simple: true })).toBe(7);
       expect(migrated.getSupporterById("version-four-supporter")).toEqual({
         id: "version-four-supporter",
         fanboxRelationshipId: "version-four-relationship",
@@ -133,7 +133,7 @@ describe("backup destination storage", () => {
     const snapshot = store.createDatabaseSnapshot();
     const snapshotDatabase = new Database(Buffer.from(snapshot));
     try {
-      expect(snapshotDatabase.pragma("user_version", { simple: true })).toBe(6);
+      expect(snapshotDatabase.pragma("user_version", { simple: true })).toBe(7);
       expect(
         snapshotDatabase
           .prepare(

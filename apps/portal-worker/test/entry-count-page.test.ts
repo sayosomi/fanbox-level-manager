@@ -27,6 +27,53 @@ async function assetAt(path: string): Promise<string> {
   return (await responseAt(path)).text();
 }
 
+class FakeHTMLElement {
+  readonly tagName: string;
+  className = "";
+  textContent = "";
+  readonly children: FakeHTMLElement[] = [];
+
+  constructor(tagName: string) {
+    this.tagName = tagName;
+  }
+
+  append(...nodes: FakeHTMLElement[]) {
+    this.children.push(...nodes);
+  }
+
+  replaceChildren(...nodes: FakeHTMLElement[]) {
+    this.children.splice(0, this.children.length, ...nodes);
+  }
+}
+
+function createFakeDocument() {
+  const elements = new Map<string, FakeHTMLElement>(
+    [
+      ["status", new FakeHTMLElement("p")],
+      ["confirmation-id", new FakeHTMLElement("dd")],
+      ["entry-count", new FakeHTMLElement("p")],
+      ["verified-at", new FakeHTMLElement("dd")],
+      ["history", new FakeHTMLElement("div")],
+    ],
+  );
+  const createdElements = [...elements.values()];
+
+  return {
+    document: {
+      getElementById(id: string) {
+        return elements.get(id) ?? null;
+      },
+      createElement(tagName: string) {
+        const element = new FakeHTMLElement(tagName);
+        createdElements.push(element);
+        return element;
+      },
+    },
+    elements,
+    createdElements,
+  };
+}
+
 describe("supporter entry-count page", () => {
   it("serves the protected static page with the required structure and headers", async () => {
     const response = await responseAt("/level");
@@ -45,12 +92,28 @@ describe("supporter entry-count page", () => {
     expect(html).toContain('<html lang="ja">');
     expect(html).toContain("<title>抽選口数の確認</title>");
     expect(html).toContain("<h1>抽選口数の確認</h1>");
+    expect(html).toContain(
+      "<p class=\"page-intro\">次回の抽選で使われる口数と、これまでの履歴を確認できます。</p>",
+    );
     expect(html).toContain('id="status"');
-    expect(html).toContain('id="entry-count"');
+    expect((html.match(/id="entry-count"/g) ?? []).length).toBe(1);
+    expect(html).toContain(
+      '<section class="current-count-hero" aria-labelledby="current-count-label">',
+    );
+    expect(html).toContain('<p id="current-count-label" class="hero-label">次回抽選</p>');
     expect(html).toContain('<dt>確認ID</dt>');
     expect(html).toContain('id="confirmation-id"');
     expect(html).toContain('id="verified-at"');
     expect(html).toContain('id="history"');
+    const heroIndex = html.indexOf('<section class="current-count-hero"');
+    const confirmationIdIndex = html.indexOf('id="confirmation-id"');
+    const verifiedAtIndex = html.indexOf('id="verified-at"');
+    const historyIndex = html.indexOf('id="history"');
+    expect(heroIndex).toBeGreaterThan(html.indexOf("<h1>"));
+    expect(heroIndex).toBeLessThan(confirmationIdIndex);
+    expect(confirmationIdIndex).toBeLessThan(verifiedAtIndex);
+    expect(verifiedAtIndex).toBeLessThan(historyIndex);
+    expect(html).not.toMatch(/>[^<]*(?:Lv\.|レベル)[^<]*</i);
     expect(html).toContain('<link rel="stylesheet" href="/level/style.css">');
     expect(html).toContain('<script src="/level/app.js" defer></script>');
     expect(html).toContain(
@@ -65,6 +128,8 @@ describe("supporter entry-count page", () => {
     expect(html).not.toContain(TOKEN_HASH);
     expect(html).not.toContain(SUPPORTER_ID);
     expect(html).not.toContain(ADMIN_SECRET);
+    expect(html).not.toContain("fanbox.cc/manage/relationships/");
+    expect(html).not.toContain("relationship");
     expect(html).not.toMatch(/<script(?![^>]*\bsrc=)[^>]*>/i);
     expect(html).not.toMatch(/\son[a-z]+\s*=/i);
     expect(html).not.toMatch(/(?:src|href)\s*=\s*["'](?:https?:)?\/\//i);
@@ -162,6 +227,111 @@ describe("supporter entry-count page", () => {
     expect(script).not.toContain("insertAdjacentHTML");
     expect(script).not.toContain("document.write");
     expect(script).not.toContain("DOMParser");
+  });
+
+  it("renders the canonical current count once and keeps supporting data in order", async () => {
+    const script = await assetAt("/level/app.js");
+    const { document, elements, createdElements } = createFakeDocument();
+    const snapshot = {
+      confirmationId: "ABCD-1234-5678-9ABC",
+      entryCount: 15,
+      verifiedAt: "2026-09-05T00:00:00.000Z",
+      history: [
+        {
+          id: "history-first",
+          monthKey: "2026-07",
+          entryCount: 9,
+          reason: "当選",
+          occurredAt: "2026-07-01T00:00:00.000Z",
+          recordedAt: "2026-07-02T00:00:00.000Z",
+        },
+        {
+          id: "history-second",
+          monthKey: "2026-08",
+          entryCount: 11,
+          reason: "旧管理方式による履歴",
+          occurredAt: null,
+          recordedAt: "2026-08-02T00:00:00.000Z",
+        },
+      ],
+    };
+
+    const executeScript = new Function(
+      "document",
+      "HTMLElement",
+      "window",
+      "fetch",
+      script,
+    ) as (
+      document: ReturnType<typeof createFakeDocument>["document"],
+      HTMLElement: typeof FakeHTMLElement,
+      window: { location: { hash: string } },
+      fetch: () => Promise<{ status: number; json: () => Promise<unknown> }>,
+    ) => void;
+    executeScript(
+      document,
+      FakeHTMLElement,
+      { location: { hash: `#${RAW_TOKEN}` } },
+      () =>
+        Promise.resolve({
+          status: 200,
+          json: () => Promise.resolve(snapshot),
+        }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(elements.get("entry-count")?.textContent).toBe("15口");
+    expect(
+      createdElements.filter((element) => element.textContent === "15口"),
+    ).toHaveLength(1);
+    expect(elements.get("confirmation-id")?.textContent).toBe(
+      "ABCD-1234-5678-9ABC",
+    );
+    expect(elements.get("verified-at")?.textContent).toContain(
+      "2026/09/05 09:00",
+    );
+    expect(elements.get("history")?.children.map((row) => [
+      row.children[0]?.textContent,
+      row.children[1]?.textContent,
+      row.children[2]?.textContent,
+    ])).toEqual([
+      ["2026-07", "当選", "9口"],
+      ["2026-08", "旧管理方式による履歴", "11口"],
+    ]);
+  });
+
+  it("uses the settled Rosé Pine Dawn palette and responsive accessible surfaces", async () => {
+    const style = await assetAt("/level/style.css");
+    const palette = {
+      base: "#faf4ed",
+      surface: "#fffaf3",
+      overlay: "#f2e9e1",
+      text: "#575279",
+      muted: "#9893a5",
+      border: "#dfdad9",
+      pine: "#286983",
+      foam: "#56949f",
+      iris: "#907aa9",
+      rose: "#d7827e",
+      gold: "#ea9d34",
+      love: "#b4637a",
+    };
+
+    for (const [name, value] of Object.entries(palette)) {
+      expect(style).toContain(`--${name}: ${value};`);
+    }
+    expect(style).toMatch(/body \{[\s\S]*background-color: var\(--base\);/);
+    expect(style).toContain("background-color: var(--surface);");
+    expect(style).toContain(".current-count-hero {");
+    expect(style).toContain("background-color: var(--pine);");
+    expect(style).toContain("color: var(--text);");
+    expect(style).not.toMatch(
+      /color:\s*var\(--(?:muted|gold|love|rose|foam)\)/,
+    );
+    expect(style).toContain("@media (max-width: 30rem)");
+    expect(style).toContain("overflow-wrap: anywhere;");
+    expect(style).toContain("grid-template-columns: minmax(0, 1fr) auto;");
   });
 
   it("uses indistinguishable invalid-link handling and generic temporary failure handling", async () => {
