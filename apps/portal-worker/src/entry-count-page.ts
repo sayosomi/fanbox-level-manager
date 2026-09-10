@@ -20,18 +20,16 @@ const ENTRY_COUNT_PAGE_HTML = `<!doctype html>
   <body>
     <main class="page-shell">
       <header class="page-header">
-        <h1>抽選口数の確認</h1>
-        <p class="page-intro">次回の抽選で使われる口数と、これまでの履歴を確認できます。</p>
+        <h1>支援者情報</h1>
       </header>
       <p id="status" class="status" role="status" aria-live="polite">読み込み中です。</p>
 
       <section class="current-count-hero" aria-labelledby="current-count-label">
-        <p id="current-count-label" class="hero-label">次回抽選</p>
+        <p id="current-count-label" class="hero-label">抽選口数</p>
         <p id="entry-count" class="current-count">—</p>
       </section>
 
-      <section class="summary-surface" aria-labelledby="summary-heading">
-        <h2 id="summary-heading">確認情報</h2>
+      <div class="summary-surface">
         <dl class="summary-list">
           <div class="summary-item">
             <dt>確認ID</dt>
@@ -42,10 +40,10 @@ const ENTRY_COUNT_PAGE_HTML = `<!doctype html>
             <dd id="verified-at">—</dd>
           </div>
         </dl>
-      </section>
+      </div>
 
       <section class="history-surface" aria-labelledby="history-heading">
-        <h2 id="history-heading">口数履歴</h2>
+        <h2 id="history-heading">履歴</h2>
         <div id="history" class="history-list" aria-live="polite"></div>
       </section>
     </main>
@@ -71,6 +69,9 @@ const ENTRY_COUNT_PAGE_SCRIPT = String.raw`(() => {
     "抽選結果による口数増加",
     "抽選不参加による口数増加",
     "旧管理方式による履歴",
+  ]);
+  const HISTORY_REASON_LABELS = new Map([
+    ["旧管理方式による履歴", "旧管理方式から移行"],
   ]);
 
   const status = document.getElementById("status");
@@ -187,7 +188,14 @@ const ENTRY_COUNT_PAGE_SCRIPT = String.raw`(() => {
 
   function showStatus(message) {
     if (status instanceof HTMLElement) {
+      status.hidden = false;
       status.textContent = message;
+    }
+  }
+
+  function hideStatus() {
+    if (status instanceof HTMLElement) {
+      status.hidden = true;
     }
   }
 
@@ -232,7 +240,7 @@ const ENTRY_COUNT_PAGE_SCRIPT = String.raw`(() => {
 
         const reason = document.createElement("span");
         reason.className = "history-reason";
-        reason.textContent = entry.reason;
+        reason.textContent = HISTORY_REASON_LABELS.get(entry.reason) ?? entry.reason;
 
         const entryCount = document.createElement("span");
         entryCount.className = "history-entry-count";
@@ -261,7 +269,7 @@ const ENTRY_COUNT_PAGE_SCRIPT = String.raw`(() => {
     entryCount.textContent = snapshot.entryCount + "口";
     verifiedAt.textContent = finalUpdate;
     renderHistory(snapshot.history);
-    showStatus("情報を確認しました。");
+    hideStatus();
   }
 
   async function loadEntryCount() {
