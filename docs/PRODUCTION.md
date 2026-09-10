@@ -1,87 +1,172 @@
 # Production operations
 
-This runbook separates three concerns:
-
-1. reviewed repository source;
-2. external Cloudflare bootstrap and provisioning; and
-3. later Mac-local admin launch configuration.
+This is the operator runbook for the production fanbox-level-manager setup.
+The production system consists of the Mac-local admin application and the
+supporter-facing Cloudflare Worker.
 
 ## Safety
 
-Production operations begin from a clean, reviewed, merged `main`. Before any
-external mutation, verify that Wrangler is authenticated to the intended
-Cloudflare account. Never commit secrets or account credentials. Never place the
-sync credential in Git, URLs, Issues, documentation, or logs. Keep `.dev.vars*`
-and `.env*` uncommitted.
+Use a clean, reviewed `main` when updating production code. Never commit or
+publish production secrets, account credentials, personal supporter portal
+URLs/tokens, supporter identity mappings, or private production data.
 
-Use the same logical credential for the Worker `SYNC_API_TOKEN` and the Mac
-admin `FANBOX_PORTAL_SYNC_API_TOKEN`. Do not make a permanent plaintext secret
-file the long-term storage policy. This slice does not define a Mac Keychain
-contract.
+Only the Human supplies the production portal sync token. When the local admin
+prompts for it, enter it directly into that local hidden terminal prompt. Never
+paste the token into ChatGPT, Luna, GitHub, Issues, documentation, logs,
+screenshots, or another agent session. Do not ask an agent to wait for or
+receive the Human token in its terminal/session.
 
-## Reviewed repository source
+The launcher supports `FANBOX_PORTAL_SYNC_API_TOKEN` as an environment override,
+but persistent plaintext token storage is not the normal workflow.
 
-Review and merge the Worker source and configuration from `main`. The committed
-Worker configuration keeps the `DB` binding ID-less, declares the `migrations`
-directory, and names `SYNC_API_TOKEN` as required without containing a secret
-value or account-specific resource identifier.
+## Normal Mac admin startup
 
-The portal-worker package exposes explicit operator commands for deployment and
-remote migration. They do not authenticate, create or generate secrets, combine
-migration with deployment, create temporary files, or modify Mac configuration.
-From the repository root, use `npm run deploy --workspace=@sayosomi/portal-worker`
-for deployment and `npm run migrate:remote --workspace=@sayosomi/portal-worker`
-for the later remote migration step.
+Run from the repository root.
 
-## First production bootstrap
+After pulling or changing source, build first:
 
-Perform the following later, as an external operator action, in this order:
+```sh
+npm run build
+```
 
-1. Verify Wrangler is authenticated to the intended Cloudflare account.
-2. Prepare a strong `SYNC_API_TOKEN` without committing or logging it.
-3. Deploy the reviewed Worker source while supplying the required secret.
-4. Allow Wrangler automatic provisioning to create or link the `DB` D1 resource
-   from the ID-less committed binding.
-5. Apply the repository D1 migrations remotely to binding `DB`.
-6. Verify the deployed `/level` page.
-7. Verify privacy-safe failure behavior at the admin-auth boundary without
-   inserting real supporter data.
-8. Inspect any account-specific mutation Wrangler wrote into the working-tree
-   Wrangler configuration.
-9. Treat any resulting real D1 resource ID change as a separate, reviewable
-   repository change; do not silently mix it with other edits.
-10. Later configure the Mac-local admin with the deployed portal origin and the
-    same sync credential.
+Start the production admin:
 
-Automatic provisioning may write a real D1 resource ID into the operator's
-working-tree Wrangler configuration during the later first deployment. That
-account-specific mutation is not part of Issue #100.
+```sh
+npm run admin:production
+```
 
-## Mac admin production launch
+If prompted, enter the production portal sync token directly into the hidden
+prompt. Then open:
 
-After the portal is verified, start the Mac-local admin from a clean, reviewed,
-merged `main` checkout:
+```text
+http://127.0.0.1:4310
+```
 
-1. Run `npm run build`.
-2. Run `npm run admin:production`.
-3. If prompted, paste the KeePass-held production token. Input is hidden.
-4. Use `http://127.0.0.1:4310`.
+For a routine restart when the checked-out source and build are already current,
+`npm run admin:production` is sufficient.
 
-The live database defaults to
-`~/Library/Application Support/fanbox-level-manager/admin.sqlite3` and remains
-local to the Mac. Encrypted backups continue using the existing configured
-backup destination. The launcher never stores the token. Set
-`FANBOX_ADMIN_DB_PATH`, `FANBOX_PORTAL_ORIGIN`, `FANBOX_ADMIN_PORT`, or
-`FANBOX_PORTAL_SYNC_API_TOKEN` explicitly when an override is needed.
+Normal Mac admin startup does **not** deploy the Cloudflare Worker and does
+**not** run D1 migrations.
 
-## Ongoing deployment order
+## Stop and restart
 
-For subsequent production changes, preserve this order:
+The admin runs as a foreground process. Stop it normally in its terminal, for
+example with Ctrl-C.
 
-1. Review and merge the source.
-2. Apply required remote D1 migrations before relying on code that requires
-   them.
-3. Deploy with all required secrets configured.
-4. Verify the supporter page and authenticated-admin boundaries.
+Restart with:
 
-There is no automatic CI/CD deployment.
+```sh
+npm run admin:production
+```
+
+Enter the production portal sync token privately again if prompted. Do not
+introduce a plaintext token file merely to avoid the prompt.
+
+## Health check
+
+With the admin running, check its local health endpoint:
+
+```sh
+curl -fsS http://127.0.0.1:4310/api/health
+```
+
+Expected successful response:
+
+```json
+{"status":"ok"}
+```
+
+## Local production state
+
+The default production SQLite database is:
+
+```text
+~/Library/Application Support/fanbox-level-manager/admin.sqlite3
+```
+
+Encrypted backups use the backup destination configured through the existing
+admin backup workflow.
+
+Supporter/admin production data remains local to the Mac except for the
+privacy-minimized supporter portal state intentionally synchronized to
+Cloudflare. Do not place personal portal URLs, raw tokens, supporter identity
+mappings, or backup key material in repository documentation or logs.
+
+The default supporter portal origin used by the launcher is:
+
+```text
+https://fanbox-level-portal.sayosomi.workers.dev
+```
+
+The launcher also supports these explicit overrides when needed:
+
+- `FANBOX_ADMIN_DB_PATH`
+- `FANBOX_PORTAL_ORIGIN`
+- `FANBOX_ADMIN_PORT`
+- `FANBOX_PORTAL_SYNC_API_TOKEN`
+
+Do not treat the token override as a recommendation to persist plaintext
+secrets.
+
+## After repository source updates
+
+Before using newly reviewed code in production:
+
+1. Update the local checkout safely to the intended reviewed `main`.
+2. Confirm the worktree is clean and contains only the intended merged source.
+3. Run `npm run build`.
+4. Restart the local admin if the admin-side code changed.
+5. Deploy the Worker only if the reviewed change affects the Worker and needs to
+   be made live.
+6. Run a D1 migration only when the reviewed change explicitly requires one.
+
+A local-admin-only change does not require a Worker deployment. A Worker
+presentation/copy-only change does not require a D1 migration. Do not treat
+"source changed" as meaning every production operation must run.
+
+## Worker redeploy
+
+For a reviewed Worker change that needs to be made live, build from the intended
+reviewed source and deploy the portal-worker workspace:
+
+```sh
+npm run build
+npm run deploy --workspace=@sayosomi/portal-worker
+```
+
+After deployment, verify the public supporter page responds successfully, for
+example by checking `/level` on the production portal origin.
+
+There is no automatic production CI/CD deployment; merging a change does not by
+itself deploy the Worker.
+
+Worker redeployment is separate from ordinary Mac admin startup. Do not start
+the local admin merely to deploy the Worker, and do not use a personal
+supporter URL/token for a public deployment smoke check.
+
+## D1 migrations
+
+Run a remote D1 migration only when the reviewed change includes or requires a
+checked-in D1 migration:
+
+```sh
+npm run migrate:remote --workspace=@sayosomi/portal-worker
+```
+
+Do not run this command for ordinary admin startup, routine restart, or a
+Worker-only presentation/copy change. Do not compose or run ad hoc production
+SQL.
+
+When a reviewed release requires both a D1 migration and Worker deployment,
+follow the operation order required by that specific reviewed change rather
+than assuming a generic migration is always needed.
+
+## Production operational boundaries
+
+The production environment is already provisioned and operational. Routine use
+is therefore normally just the Mac admin startup described above.
+
+Supporter portal-link issuance and delivery are separate Human operations. They
+are not part of startup, restart, Worker deployment, or D1 migration. Do not
+issue, reissue, send, or mark supporter links sent merely as part of an
+application startup or deployment check.
