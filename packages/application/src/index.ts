@@ -29,6 +29,7 @@ export { createSupporterListService } from "./supporter-list-service.js";
 export type {
   SupporterListItem,
   SupporterListService,
+  SupporterPortalLinkState,
 } from "./supporter-list-service.js";
 export { deriveSupporterConfirmationId } from "./supporter-confirmation-id.js";
 export {

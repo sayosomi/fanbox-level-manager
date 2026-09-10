@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   FanboxPdfInspectionError,
   FanboxIdentityRelinkError,
+  PortalAccessAlreadyIssuedError,
   createFanboxPdfInspectionService,
   createFanboxIdentityRelinkService,
   createFanboxSupporterComparisonService,
@@ -47,6 +48,7 @@ import {
   FanboxRelationshipNotFoundError,
   LegacyBaselineNotEligibleError,
   openLocalStore,
+  PortalAccessNotIssuedError,
   StaleMonthError,
   SupporterNotFoundError,
   type LocalStore,
@@ -87,6 +89,9 @@ const PORTAL_NOT_CONFIGURED_BODY = JSON.stringify({
 const PORTAL_OPERATION_FAILED_BODY = JSON.stringify({
   error: "portal_operation_failed",
 });
+const PORTAL_LINK_UNAVAILABLE_BODY = JSON.stringify({
+  error: "portal_link_unavailable",
+});
 const PORTAL_DELIVERY_UNAVAILABLE_BODY = JSON.stringify({
   error: "portal_delivery_unavailable",
 });
@@ -100,6 +105,10 @@ const PORTAL_SENT_SUCCESS_BODY = JSON.stringify({
   portalDeliveryState: "sent",
 });
 const PORTAL_LINK_PATH = "/api/portal-link";
+const PORTAL_LINK_CURRENT_PATH = "/api/portal-link/current";
+const PORTAL_LINK_ISSUE_PATH = "/api/portal-link/issue";
+const PORTAL_LINK_REISSUE_PATH = "/api/portal-link/reissue";
+const PORTAL_LINK_PROVISION_PATH = "/api/portal-link/provision";
 const PORTAL_SENT_PATH = "/api/portal-link/sent";
 const PORTAL_SYNC_PATH = "/api/portal-sync";
 const LOTTERY_RESULTS_PATH = "/api/lottery-results";
@@ -604,6 +613,103 @@ async function sendPortalLink(
       }),
     );
   } catch {
+    sendPortalJson(response, 502, PORTAL_OPERATION_FAILED_BODY);
+  }
+}
+
+async function sendCurrentPortalLink(
+  request: IncomingMessage,
+  response: ServerResponse,
+  supporterPortalLinkService: SupporterPortalLinkService | undefined,
+): Promise<void> {
+  let body: string;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  const supporterId = parsePortalLinkRequest(body);
+  if (supporterId === null) {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  if (supporterPortalLinkService === undefined) {
+    sendPortalJson(response, 503, PORTAL_NOT_CONFIGURED_BODY);
+    return;
+  }
+
+  try {
+    const result =
+      await supporterPortalLinkService.getCurrentSupporterPortalLink(
+        supporterId,
+      );
+    if (result === null) {
+      sendPortalJson(response, 409, PORTAL_LINK_UNAVAILABLE_BODY);
+      return;
+    }
+
+    sendPortalJson(
+      response,
+      200,
+      JSON.stringify({ portalUrl: result.portalUrl }),
+    );
+  } catch {
+    sendPortalJson(response, 500, PORTAL_OPERATION_FAILED_BODY);
+  }
+}
+
+type ExplicitPortalLinkMethod =
+  | "issueSupporterPortalLink"
+  | "reissueSupporterPortalLink"
+  | "provisionCurrentSupporterPortalLink";
+
+async function sendExplicitPortalLink(
+  request: IncomingMessage,
+  response: ServerResponse,
+  supporterPortalLinkService: SupporterPortalLinkService | undefined,
+  method: ExplicitPortalLinkMethod,
+): Promise<void> {
+  let body: string;
+  try {
+    body = await readRequestBody(request);
+  } catch {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  const supporterId = parsePortalLinkRequest(body);
+  if (supporterId === null) {
+    sendPortalJson(response, 400, INVALID_REQUEST_BODY);
+    return;
+  }
+
+  if (supporterPortalLinkService === undefined) {
+    sendPortalJson(response, 503, PORTAL_NOT_CONFIGURED_BODY);
+    return;
+  }
+
+  try {
+    const result = await supporterPortalLinkService[method](supporterId);
+    sendPortalJson(
+      response,
+      200,
+      JSON.stringify({
+        portalUrl: result.portalUrl,
+        verifiedAt: result.verifiedAt,
+      }),
+    );
+  } catch (error: unknown) {
+    if (
+      error instanceof PortalAccessAlreadyIssuedError ||
+      error instanceof PortalAccessNotIssuedError
+    ) {
+      sendPortalJson(response, 409, PORTAL_STATE_CONFLICT_BODY);
+      return;
+    }
+
     sendPortalJson(response, 502, PORTAL_OPERATION_FAILED_BODY);
   }
 }
@@ -1726,6 +1832,10 @@ export function createAdminServer(
       requestPath === "/api/health" ||
       requestPath === "/api/supporters" ||
       requestPath === PORTAL_LINK_PATH ||
+      requestPath === PORTAL_LINK_CURRENT_PATH ||
+      requestPath === PORTAL_LINK_ISSUE_PATH ||
+      requestPath === PORTAL_LINK_REISSUE_PATH ||
+      requestPath === PORTAL_LINK_PROVISION_PATH ||
       requestPath === PORTAL_SENT_PATH ||
       requestPath === PORTAL_SYNC_PATH ||
       requestPath === LOTTERY_RESULTS_PATH ||
@@ -1752,6 +1862,41 @@ export function createAdminServer(
       }
 
       void sendPortalLink(request, response, supporterPortalLinkService);
+      return;
+    }
+
+    if (
+      requestPath === PORTAL_LINK_CURRENT_PATH ||
+      requestPath === PORTAL_LINK_ISSUE_PATH ||
+      requestPath === PORTAL_LINK_REISSUE_PATH ||
+      requestPath === PORTAL_LINK_PROVISION_PATH
+    ) {
+      if (request.method !== "POST") {
+        sendPortalMethodNotAllowed(response);
+        return;
+      }
+
+      if (requestPath === PORTAL_LINK_CURRENT_PATH) {
+        void sendCurrentPortalLink(
+          request,
+          response,
+          supporterPortalLinkService,
+        );
+        return;
+      }
+
+      const method =
+        requestPath === PORTAL_LINK_ISSUE_PATH
+          ? "issueSupporterPortalLink"
+          : requestPath === PORTAL_LINK_REISSUE_PATH
+            ? "reissueSupporterPortalLink"
+            : "provisionCurrentSupporterPortalLink";
+      void sendExplicitPortalLink(
+        request,
+        response,
+        supporterPortalLinkService,
+        method,
+      );
       return;
     }
 

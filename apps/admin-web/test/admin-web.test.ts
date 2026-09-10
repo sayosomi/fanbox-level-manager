@@ -13,6 +13,7 @@ import {
   FanboxSupporterImportError,
   MonthEndSourceConflictError,
   MonthEndSourceUnavailableError,
+  PortalAccessAlreadyIssuedError,
   SupporterPortalDeliveryConflictError,
 } from "@sayosomi/application";
 import type {
@@ -40,6 +41,7 @@ import {
   DuplicateFanboxRelationshipError,
   FanboxRelationshipNotFoundError,
   LegacyBaselineNotEligibleError,
+  PortalAccessNotIssuedError,
   StaleMonthError,
   SupporterNotFoundError,
   type LocalStore,
@@ -234,7 +236,12 @@ function ephemeralPort(): Promise<number> {
   });
 }
 
-const sampleSupporters: readonly SupporterListItem[] = Object.freeze([
+type LegacySupporterListItem = Omit<
+  SupporterListItem,
+  "fanboxManagementUrl" | "portalLinkState"
+>;
+
+const sampleSupporters: readonly LegacySupporterListItem[] = Object.freeze([
   Object.freeze({
     id: "internal-supporter-id",
     confirmationId: "3630-5118-9AE4-0646",
@@ -258,7 +265,7 @@ const sampleSupporters: readonly SupporterListItem[] = Object.freeze([
 ]);
 
 const sampleSupporterListService: SupporterListService = {
-  listSupporters: () => sampleSupporters,
+  listSupporters: () => sampleSupporters as readonly SupporterListItem[],
 };
 
 const samplePdfInspection: FanboxPdfInspection = Object.freeze({
@@ -4710,6 +4717,326 @@ describe("portal link route", () => {
       await closeServer(portalServer);
     }
   });
+
+  it.each([
+    [
+      "/api/portal-link/current",
+      "getCurrentSupporterPortalLink",
+      {
+        portalUrl: "https://portal.example/level#current-synthetic-token",
+        verifiedAt: "2026-09-05T12:34:56.789Z",
+      },
+      '{"portalUrl":"https://portal.example/level#current-synthetic-token"}',
+    ],
+    [
+      "/api/portal-link/issue",
+      "issueSupporterPortalLink",
+      {
+        portalUrl: "https://portal.example/level#issue-synthetic-token",
+        verifiedAt: "2026-09-05T12:34:56.789Z",
+      },
+      '{"portalUrl":"https://portal.example/level#issue-synthetic-token","verifiedAt":"2026-09-05T12:34:56.789Z"}',
+    ],
+    [
+      "/api/portal-link/reissue",
+      "reissueSupporterPortalLink",
+      {
+        portalUrl: "https://portal.example/level#reissue-synthetic-token",
+        verifiedAt: "2026-09-05T12:34:56.789Z",
+      },
+      '{"portalUrl":"https://portal.example/level#reissue-synthetic-token","verifiedAt":"2026-09-05T12:34:56.789Z"}',
+    ],
+    [
+      "/api/portal-link/provision",
+      "provisionCurrentSupporterPortalLink",
+      {
+        portalUrl: "https://portal.example/level#provision-synthetic-token",
+        verifiedAt: "2026-09-05T12:34:56.789Z",
+      },
+      '{"portalUrl":"https://portal.example/level#provision-synthetic-token","verifiedAt":"2026-09-05T12:34:56.789Z"}',
+    ],
+  ] as const)(
+    "dispatches %s only to %s and returns its exact success shape",
+    async (path, method, result, expectedBody) => {
+      const current = vi.fn(async () =>
+        method === "getCurrentSupporterPortalLink"
+          ? result
+          : null,
+      );
+      const issue = vi.fn(async () => result);
+      const reissue = vi.fn(async () => result);
+      const provision = vi.fn(async () => result);
+      const portalService: SupporterPortalLinkService = {
+        getCurrentSupporterPortalLink: current,
+        issueSupporterPortalLink: issue,
+        reissueSupporterPortalLink: reissue,
+        provisionCurrentSupporterPortalLink: provision,
+        prepareSupporterPortalLink: vi.fn(async () => result),
+      };
+      const portalServer = createAdminServer(
+        sampleSupporterListService,
+        portalService,
+      );
+      const portalPort = await listenOnEphemeralPort(portalServer);
+
+      try {
+        const response = await requestOnPort(
+          portalPort,
+          "POST",
+          path,
+          JSON.stringify({ supporterId: "internal-supporter-id" }),
+        );
+
+        expect(response.statusCode).toBe(200);
+        expect(response.body).toBe(expectedBody);
+        expectCommonSecurityHeaders(response.headers);
+        expect(response.headers["content-type"]).toBe(
+          "application/json; charset=UTF-8",
+        );
+        expect(
+          {
+            getCurrentSupporterPortalLink: current,
+            issueSupporterPortalLink: issue,
+            reissueSupporterPortalLink: reissue,
+            provisionCurrentSupporterPortalLink: provision,
+          }[method],
+        ).toHaveBeenCalledWith("internal-supporter-id");
+        for (const [name, call] of Object.entries({
+          getCurrentSupporterPortalLink: current,
+          issueSupporterPortalLink: issue,
+          reissueSupporterPortalLink: reissue,
+          provisionCurrentSupporterPortalLink: provision,
+        })) {
+          if (name !== method) {
+            expect(call).not.toHaveBeenCalled();
+          }
+        }
+      } finally {
+        await closeServer(portalServer);
+      }
+    },
+  );
+
+  it.each([
+    "/api/portal-link/current",
+    "/api/portal-link/issue",
+    "/api/portal-link/reissue",
+    "/api/portal-link/provision",
+  ])("returns 400 for malformed requests on %s", async (path) => {
+    for (const body of [
+      "",
+      "{not-json",
+      "null",
+      "[]",
+      JSON.stringify({}),
+      JSON.stringify({ supporterId: "id", extra: true }),
+      JSON.stringify({ supporterId: 123 }),
+      JSON.stringify({ supporterId: "   " }),
+    ]) {
+      const response = await request("POST", path, body);
+
+      expect(response.statusCode).toBe(400);
+      expect(response.body).toBe('{"error":"invalid_request"}');
+      expectCommonSecurityHeaders(response.headers);
+    }
+  });
+
+  it.each([
+    "/api/portal-link/current",
+    "/api/portal-link/issue",
+    "/api/portal-link/reissue",
+    "/api/portal-link/provision",
+  ])("returns 405 and Allow: POST for %s", async (path) => {
+    for (const method of ["GET", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]) {
+      const response = await request(method, path);
+
+      expect(response.statusCode).toBe(405);
+      expect(response.headers.allow).toBe("POST");
+      expectCommonSecurityHeaders(response.headers);
+    }
+  });
+
+  it.each([
+    "/api/portal-link/current",
+    "/api/portal-link/issue",
+    "/api/portal-link/reissue",
+    "/api/portal-link/provision",
+  ])("returns 503 when portal operations are not configured on %s", async (path) => {
+    const response = await request(
+      "POST",
+      path,
+      JSON.stringify({ supporterId: "internal-supporter-id" }),
+    );
+
+    expect(response.statusCode).toBe(503);
+    expect(response.body).toBe('{"error":"portal_not_configured"}');
+    expectCommonSecurityHeaders(response.headers);
+  });
+
+  it("returns 409 when the current portal link is unavailable", async () => {
+    const current = vi.fn(async () => null);
+    const portalService: SupporterPortalLinkService = {
+      getCurrentSupporterPortalLink: current,
+      issueSupporterPortalLink: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+      reissueSupporterPortalLink: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+      provisionCurrentSupporterPortalLink: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+      prepareSupporterPortalLink: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+    };
+    const portalServer = createAdminServer(
+      sampleSupporterListService,
+      portalService,
+    );
+    const portalPort = await listenOnEphemeralPort(portalServer);
+
+    try {
+      const response = await requestOnPort(
+        portalPort,
+        "POST",
+        "/api/portal-link/current",
+        JSON.stringify({ supporterId: "internal-supporter-id" }),
+      );
+
+      expect(response.statusCode).toBe(409);
+      expect(response.body).toBe('{"error":"portal_link_unavailable"}');
+      expect(current).toHaveBeenCalledWith("internal-supporter-id");
+      expectCommonSecurityHeaders(response.headers);
+    } finally {
+      await closeServer(portalServer);
+    }
+  });
+
+  it.each([
+    ["/api/portal-link/issue", "issueSupporterPortalLink"],
+    ["/api/portal-link/reissue", "reissueSupporterPortalLink"],
+    ["/api/portal-link/provision", "provisionCurrentSupporterPortalLink"],
+  ] as const)("maps %s state conflicts to 409", async (path, method) => {
+    for (const error of [
+      new PortalAccessAlreadyIssuedError("internal-supporter-id"),
+      new PortalAccessNotIssuedError("internal-supporter-id"),
+    ]) {
+      const operation = vi.fn(async () => {
+        throw error;
+      });
+      const portalService: SupporterPortalLinkService = {
+        getCurrentSupporterPortalLink: vi.fn(async () => null),
+        issueSupporterPortalLink:
+          method === "issueSupporterPortalLink"
+            ? operation
+            : vi.fn(async () => {
+                throw new Error("not used");
+              }),
+        reissueSupporterPortalLink:
+          method === "reissueSupporterPortalLink"
+            ? operation
+            : vi.fn(async () => {
+                throw new Error("not used");
+              }),
+        provisionCurrentSupporterPortalLink:
+          method === "provisionCurrentSupporterPortalLink"
+            ? operation
+            : vi.fn(async () => {
+                throw new Error("not used");
+              }),
+        prepareSupporterPortalLink: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      };
+      const portalServer = createAdminServer(
+        sampleSupporterListService,
+        portalService,
+      );
+      const portalPort = await listenOnEphemeralPort(portalServer);
+
+      try {
+        const response = await requestOnPort(
+          portalPort,
+          "POST",
+          path,
+          JSON.stringify({ supporterId: "internal-supporter-id" }),
+        );
+
+        expect(response.statusCode).toBe(409);
+        expect(response.body).toBe('{"error":"portal_state_conflict"}');
+        expect(operation).toHaveBeenCalledWith("internal-supporter-id");
+        expectCommonSecurityHeaders(response.headers);
+      } finally {
+        await closeServer(portalServer);
+      }
+    }
+  });
+
+  it.each([
+    ["/api/portal-link/current", "getCurrentSupporterPortalLink", 500],
+    ["/api/portal-link/issue", "issueSupporterPortalLink", 502],
+    ["/api/portal-link/reissue", "reissueSupporterPortalLink", 502],
+    [
+      "/api/portal-link/provision",
+      "provisionCurrentSupporterPortalLink",
+      502,
+    ],
+  ] as const)("maps unexpected failures on %s to HTTP %s", async (path, method, statusCode) => {
+    const failureMessage =
+      "Worker 500 token synthetic-token hash synthetic-hash /private/admin.sqlite https://portal.example/level#synthetic";
+    const failure = vi.fn(async () => {
+      throw new Error(failureMessage);
+    });
+    const portalService: SupporterPortalLinkService = {
+      getCurrentSupporterPortalLink:
+        method === "getCurrentSupporterPortalLink"
+          ? failure
+          : vi.fn(async () => null),
+      issueSupporterPortalLink:
+        method === "issueSupporterPortalLink"
+          ? failure
+          : vi.fn(async () => {
+              throw new Error("not used");
+            }),
+      reissueSupporterPortalLink:
+        method === "reissueSupporterPortalLink"
+          ? failure
+          : vi.fn(async () => {
+              throw new Error("not used");
+            }),
+      provisionCurrentSupporterPortalLink:
+        method === "provisionCurrentSupporterPortalLink"
+          ? failure
+          : vi.fn(async () => {
+              throw new Error("not used");
+            }),
+      prepareSupporterPortalLink: vi.fn(async () => {
+        throw new Error("not used");
+      }),
+    };
+    const portalServer = createAdminServer(
+      sampleSupporterListService,
+      portalService,
+    );
+    const portalPort = await listenOnEphemeralPort(portalServer);
+
+    try {
+      const response = await requestOnPort(
+        portalPort,
+        "POST",
+        path,
+        JSON.stringify({ supporterId: "internal-supporter-id" }),
+      );
+
+      expect(response.statusCode).toBe(statusCode);
+      expect(response.body).toBe('{"error":"portal_operation_failed"}');
+      expect(response.body).not.toContain(failureMessage);
+      expectCommonSecurityHeaders(response.headers);
+    } finally {
+      await closeServer(portalServer);
+    }
+  });
 });
 
 describe("portal sync route", () => {
@@ -6588,7 +6915,7 @@ describe("admin server configuration", () => {
         return element;
       },
     };
-    const refreshedSupporters: readonly SupporterListItem[] = [
+    const refreshedSupporters: readonly LegacySupporterListItem[] = [
       Object.freeze({
         id: "internal-supporter-id",
         confirmationId: "3630-5118-9AE4-0646",
@@ -6610,7 +6937,7 @@ describe("admin server configuration", () => {
         portalDeliveryState: "not_issued",
       }),
     ];
-    const supporterBodies: (readonly SupporterListItem[])[] = [
+    const supporterBodies: (readonly LegacySupporterListItem[])[] = [
       sampleSupporters,
       refreshedSupporters,
       refreshedSupporters,
