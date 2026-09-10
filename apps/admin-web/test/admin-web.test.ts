@@ -6177,6 +6177,36 @@ describe("admin server configuration", () => {
     expect(ADMIN_STYLES).toContain(":focus-visible");
     expect(ADMIN_STYLES).toContain("flex-wrap: wrap");
     expect(ADMIN_STYLES).toContain("overflow-x: auto");
+    expect(ADMIN_STYLES).toMatch(
+      /#status \{[\s\S]*color: var\(--text\);[\s\S]*background-color: var\(--surface\);/,
+    );
+    expect(ADMIN_STYLES).not.toMatch(
+      /#status \{[\s\S]*color: var\(--muted\);/,
+    );
+    expect(ADMIN_STYLES).toMatch(
+      /\.admin-view \[role="status"\] \{[\s\S]*color: var\(--text\);/,
+    );
+    expect(ADMIN_STYLES).not.toMatch(
+      /\.admin-view \[role="status"\] \{[\s\S]*color: var\(--muted\);/,
+    );
+    expect(ADMIN_STYLES).toMatch(
+      /\.admin-navigation button \{[\s\S]*color: var\(--text\);[\s\S]*background-color: transparent;/,
+    );
+    expect(ADMIN_STYLES).toMatch(
+      /\.portal-recovery-state \{[\s\S]*border-left: 3px solid var\(--gold\);[\s\S]*color: var\(--text\);/,
+    );
+    expect(ADMIN_STYLES).toMatch(
+      /\.danger-button \{[\s\S]*border-color: var\(--love\);[\s\S]*color: var\(--text\);[\s\S]*background-color: var\(--surface\);/,
+    );
+    expect(ADMIN_STYLES).toMatch(
+      /\.danger-button:hover \{[\s\S]*color: var\(--text\);[\s\S]*background-color: var\(--overlay\);/,
+    );
+    expect(ADMIN_STYLES).toMatch(
+      /\.primary-button,[\s\S]*#lottery-result-button \{[\s\S]*color: var\(--base\);[\s\S]*background-color: var\(--pine\);/,
+    );
+    expect(ADMIN_STYLES).toMatch(
+      /\.primary-button:hover,[\s\S]*#lottery-result-button:hover \{[\s\S]*background-color: var\(--pine\);/,
+    );
   });
 
   it("switches views without fetching or reconstructing workflow sections", () => {

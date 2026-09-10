@@ -3488,7 +3488,7 @@ main {
   padding: 0.7rem 0.9rem;
   border: 1px solid var(--border);
   border-radius: 0.5rem;
-  color: var(--muted);
+  color: var(--text);
   background-color: var(--surface);
 }
 
@@ -3510,7 +3510,7 @@ main {
   padding: 0.45rem 0.85rem;
   border: 1px solid transparent;
   border-radius: 0.45rem;
-  color: var(--muted);
+  color: var(--text);
   background-color: transparent;
   font: inherit;
   font-weight: 600;
@@ -3548,7 +3548,7 @@ main {
 }
 
 .admin-view [role="status"] {
-  color: var(--muted);
+  color: var(--text);
 }
 
 button,
@@ -3574,7 +3574,7 @@ button:hover {
 
 button:disabled {
   border-color: var(--border);
-  color: var(--muted);
+  color: var(--text);
   background-color: var(--overlay);
   cursor: not-allowed;
   opacity: 0.58;
@@ -3598,7 +3598,7 @@ button:disabled {
 #month-end-process-button:hover,
 #lottery-result-button:hover {
   border-color: var(--foam);
-  background-color: var(--foam);
+  background-color: var(--pine);
 }
 
 .primary-button:disabled,
@@ -3609,7 +3609,7 @@ button:disabled {
 #lottery-result-button:disabled,
 #list button:disabled {
   border-color: var(--border);
-  color: var(--muted);
+  color: var(--text);
   background-color: var(--overlay);
 }
 
@@ -3621,13 +3621,13 @@ button:disabled {
 
 .danger-button {
   border-color: var(--love);
-  color: var(--love);
+  color: var(--text);
   background-color: var(--surface);
 }
 
 .danger-button:hover {
-  color: var(--base);
-  background-color: var(--love);
+  color: var(--text);
+  background-color: var(--overlay);
 }
 
 input,
@@ -3742,7 +3742,7 @@ summary:focus-visible {
 }
 
 .status-badge.stopped {
-  color: var(--muted);
+  color: var(--text);
 }
 
 .status-badge.portal-delivery-status {
@@ -3754,7 +3754,7 @@ summary:focus-visible {
   margin-top: 0.25rem;
   padding-left: 0.4rem;
   border-left: 3px solid var(--gold);
-  color: var(--gold);
+  color: var(--text);
   font-size: 0.8rem;
 }
 
