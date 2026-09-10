@@ -157,7 +157,11 @@ describe("local database snapshots", () => {
       (state) => state,
     );
     const tokenHash = "a".repeat(64);
-    store.replaceSupporterPortalAccessToken(supporter.id, tokenHash);
+    store.replaceSupporterPortalAccessToken(
+      supporter.id,
+      tokenHash,
+      Uint8Array.from([1, 2, 3]),
+    );
     const provisionedAccess = store.markSupporterPortalAccessProvisioned(
       supporter.id,
       tokenHash,

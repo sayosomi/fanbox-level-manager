@@ -97,6 +97,7 @@ describe("supporter list application service", () => {
       Object.freeze({
         supporterId: id,
         tokenHash: `${id}-token-hash`,
+        encryptedToken: null,
         issuedAt: "2026-09-04T00:00:00.000Z",
         provisionedAt,
         sentAt,

@@ -60,6 +60,7 @@ import {
   createBackupExecutionService,
   type BackupExecutionService,
 } from "./backup-execution.js";
+import { createMacKeychainPortalTokenEncryptionKeyProvider } from "./portal-token-encryption-key.js";
 import {
   ADMIN_CONTENT_SECURITY_POLICY,
   ADMIN_PAGE,
@@ -2103,9 +2104,13 @@ export function startProductionAdminServer(
         const portalOptions = {
           portalOrigin: portalConfiguration.portalOrigin,
           syncApiToken: portalConfiguration.syncApiToken,
+          getEncryptionKey: createMacKeychainPortalTokenEncryptionKeyProvider(),
         };
         supporterPortalLinkService = createPortalLinkService(store, portalOptions);
-        supporterPortalSyncService = createPortalSyncService(store, portalOptions);
+        supporterPortalSyncService = createPortalSyncService(store, {
+          portalOrigin: portalConfiguration.portalOrigin,
+          syncApiToken: portalConfiguration.syncApiToken,
+        });
       } catch {
         throw new Error(INVALID_PORTAL_CONFIGURATION_ERROR);
       }

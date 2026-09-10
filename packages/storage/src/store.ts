@@ -19,6 +19,7 @@ import {
   applyVersionFourMigration,
   applyVersionFiveMigration,
   applyVersionSixMigration,
+  applyVersionSevenMigration,
   configureDatabase,
   configureFileJournalMode,
   CURRENT_SCHEMA_VERSION,
@@ -102,6 +103,7 @@ type MonthlyStateRow = {
 type SupporterPortalAccessRow = {
   supporter_id: string;
   token_hash: string;
+  encrypted_token: Uint8Array | null;
   issued_at: string;
   provisioned_at: string | null;
   sent_at: string | null;
@@ -170,6 +172,10 @@ function toSupporterPortalAccessRecord(
   return Object.freeze({
     supporterId: row.supporter_id,
     tokenHash: row.token_hash,
+    encryptedToken:
+      row.encrypted_token === null
+        ? null
+        : new Uint8Array(row.encrypted_token),
     issuedAt: row.issued_at,
     provisionedAt: row.provisioned_at,
     sentAt: row.sent_at,
@@ -191,6 +197,14 @@ const PORTAL_TOKEN_HASH_PATTERN = /^[0-9a-f]{64}$/;
 function assertValidPortalTokenHash(value: unknown, fieldName: string): asserts value is string {
   if (typeof value !== "string" || !PORTAL_TOKEN_HASH_PATTERN.test(value)) {
     throw new TypeError(`${fieldName} must be a lowercase SHA-256 hex string`);
+  }
+}
+
+function assertValidPortalTokenCiphertext(
+  value: unknown,
+): asserts value is Uint8Array {
+  if (!(value instanceof Uint8Array) || value.byteLength === 0) {
+    throw new TypeError("encryptedToken must be a non-empty Uint8Array");
   }
 }
 
@@ -758,6 +772,7 @@ class LocalStoreImplementation implements LocalStore {
       .prepare(
         `SELECT supporter_id,
                 token_hash,
+                encrypted_token,
                 issued_at,
                 provisioned_at,
                 sent_at
@@ -772,9 +787,11 @@ class LocalStoreImplementation implements LocalStore {
   replaceSupporterPortalAccessToken(
     supporterId: string,
     tokenHash: string,
+    encryptedToken: Uint8Array,
   ): SupporterPortalAccessRecord {
     assertValidSupporterId(supporterId);
     assertValidPortalTokenHash(tokenHash, "tokenHash");
+    assertValidPortalTokenCiphertext(encryptedToken);
 
     const replace = this.database.transaction((): SupporterPortalAccessRecord => {
       if (this.getSupporterById(supporterId) === null) {
@@ -798,17 +815,19 @@ class LocalStoreImplementation implements LocalStore {
           `INSERT INTO supporter_portal_access (
              supporter_id,
              token_hash,
+             encrypted_token,
              issued_at,
              provisioned_at,
              sent_at
-           ) VALUES (?, ?, ?, NULL, NULL)
+           ) VALUES (?, ?, ?, ?, NULL, NULL)
            ON CONFLICT(supporter_id) DO UPDATE SET
              token_hash = excluded.token_hash,
+             encrypted_token = excluded.encrypted_token,
              issued_at = excluded.issued_at,
              provisioned_at = NULL,
              sent_at = NULL`,
         )
-        .run(supporterId, tokenHash, timestamp);
+        .run(supporterId, tokenHash, Buffer.from(encryptedToken), timestamp);
 
       const row = this.getSupporterPortalAccessRow(supporterId);
       if (row === undefined) {
@@ -1064,6 +1083,7 @@ class LocalStoreImplementation implements LocalStore {
       .prepare(
         `SELECT supporter_id,
                 token_hash,
+                encrypted_token,
                 issued_at,
                 provisioned_at,
                 sent_at
@@ -1391,26 +1411,34 @@ export function openLocalStore(
       applyVersionFourMigration(database);
       applyVersionFiveMigration(database);
       applyVersionSixMigration(database);
+      applyVersionSevenMigration(database);
     } else if (userVersion === 1) {
       applyVersionTwoMigration(database);
       applyVersionThreeMigration(database);
       applyVersionFourMigration(database);
       applyVersionFiveMigration(database);
       applyVersionSixMigration(database);
+      applyVersionSevenMigration(database);
     } else if (userVersion === 2) {
       applyVersionThreeMigration(database);
       applyVersionFourMigration(database);
       applyVersionFiveMigration(database);
       applyVersionSixMigration(database);
+      applyVersionSevenMigration(database);
     } else if (userVersion === 3) {
       applyVersionFourMigration(database);
       applyVersionFiveMigration(database);
       applyVersionSixMigration(database);
+      applyVersionSevenMigration(database);
     } else if (userVersion === 4) {
       applyVersionFiveMigration(database);
       applyVersionSixMigration(database);
+      applyVersionSevenMigration(database);
     } else if (userVersion === 5) {
       applyVersionSixMigration(database);
+      applyVersionSevenMigration(database);
+    } else if (userVersion === 6) {
+      applyVersionSevenMigration(database);
     }
 
     return new LocalStoreImplementation(database, clock);

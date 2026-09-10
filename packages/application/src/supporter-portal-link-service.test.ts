@@ -2,10 +2,15 @@ import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import { openLocalStore, type LocalStore } from "@sayosomi/storage";
 import {
-  createSupporterPortalAccessService,
+  createSupporterPortalAccessService as createRawSupporterPortalAccessService,
   createSupporterPortalLinkService,
+  PortalAccessAlreadyIssuedError,
+  SupporterPortalTokenRecoveryError,
 } from "./index.js";
-import type { PortalAdminFetch } from "./index.js";
+import type {
+  CreateSupporterPortalAccessServiceOptions,
+  PortalAdminFetch,
+} from "./index.js";
 
 const PORTAL_ORIGIN = "https://portal.example";
 const SYNC_API_TOKEN = "sync-secret-value";
@@ -13,6 +18,9 @@ const VERIFIED_AT = "2026-09-05T12:34:56.789Z";
 const RAW_TOKEN = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const TOKEN_HASH =
   "0f007385b6f9d4b7eeb2748605afe1a984a0a3bfa3f014d09e2a784ce9e5cd1a";
+const TEST_KEY = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
+const getEncryptionKey = async (): Promise<Uint8Array> =>
+  new Uint8Array(TEST_KEY);
 
 type RecordedRequest = Readonly<{
   input: string | URL;
@@ -35,6 +43,16 @@ function createSupporter(store: LocalStore): ReturnType<LocalStore["createSuppor
     fanboxRelationshipId: "relationship-id",
     displayName: "Supporter",
     supporting: true,
+  });
+}
+
+function createSupporterPortalAccessService(
+  store: LocalStore,
+  options: Omit<CreateSupporterPortalAccessServiceOptions, "getEncryptionKey"> = {},
+): ReturnType<typeof createRawSupporterPortalAccessService> {
+  return createRawSupporterPortalAccessService(store, {
+    getEncryptionKey,
+    ...options,
   });
 }
 
@@ -87,6 +105,7 @@ describe("supporter portal link application service", () => {
       portalOrigin: PORTAL_ORIGIN,
       syncApiToken: SYNC_API_TOKEN,
       fetch: fakeFetch,
+      getEncryptionKey,
       generateTokenBytes: () => {
         events.push("issue token");
         return new Uint8Array(32);
@@ -124,14 +143,14 @@ describe("supporter portal link application service", () => {
     expect(JSON.stringify(persisted)).not.toContain(result.portalUrl);
   });
 
-  it("does not issue or provision local access when synchronization fails", async () => {
+  it("refuses first issuance when access already exists without synchronization or rotation", async () => {
     const store = track(openLocalStore(":memory:", { clock: fixedClock }));
     const supporter = createSupporter(store);
     const existingAccessService = createSupporterPortalAccessService(store, {
       generateTokenBytes: () => new Uint8Array(32).fill(1),
     });
-    const existing = existingAccessService.issueSupporterPortalAccess(
-      supporter.id,
+    const existing = (
+      await existingAccessService.issueSupporterPortalAccess(supporter.id)
     ).access;
     const requests: RecordedRequest[] = [];
     const fakeFetch: PortalAdminFetch = async (input, init = {}) => {
@@ -143,6 +162,7 @@ describe("supporter portal link application service", () => {
       portalOrigin: PORTAL_ORIGIN,
       syncApiToken: SYNC_API_TOKEN,
       fetch: fakeFetch,
+      getEncryptionKey,
       generateTokenBytes: () => {
         generatorCalls += 1;
         return new Uint8Array(32);
@@ -154,10 +174,7 @@ describe("supporter portal link application service", () => {
     ).rejects.toThrow();
 
     expect(generatorCalls).toBe(0);
-    expect(requests).toHaveLength(1);
-    expect(new URL(requests[0]!.input).pathname).toBe(
-      "/api/admin/sync-supporter",
-    );
+    expect(requests).toHaveLength(0);
     expect(store.getSupporterPortalAccess(supporter.id)).toEqual(existing);
   });
 
@@ -173,6 +190,7 @@ describe("supporter portal link application service", () => {
       portalOrigin: PORTAL_ORIGIN,
       syncApiToken: SYNC_API_TOKEN,
       fetch: fakeFetch,
+      getEncryptionKey,
       generateTokenBytes: () => new Uint8Array(31),
     });
 
@@ -205,6 +223,7 @@ describe("supporter portal link application service", () => {
       portalOrigin: PORTAL_ORIGIN,
       syncApiToken: SYNC_API_TOKEN,
       fetch: fakeFetch,
+      getEncryptionKey,
       generateTokenBytes: () => {
         generatorCalls += 1;
         return new Uint8Array(32);
@@ -222,5 +241,187 @@ describe("supporter portal link application service", () => {
       provisionedAt: null,
       sentAt: null,
     });
+  });
+
+  it("reads a provisioned current link without HTTP or local mutation", async () => {
+    let now = "2026-09-05T12:00:00.000Z";
+    const store = track(
+      openLocalStore(":memory:", { clock: () => new Date(now) }),
+    );
+    const supporter = createSupporter(store);
+    const requests: RecordedRequest[] = [];
+    const service = createSupporterPortalLinkService(store, {
+      portalOrigin: PORTAL_ORIGIN,
+      syncApiToken: SYNC_API_TOKEN,
+      getEncryptionKey,
+      fetch: async (input, init = {}) => {
+        requests.push({ input, init });
+        return new Response(
+          new URL(input).pathname === "/api/admin/sync-supporter"
+            ? JSON.stringify({ verifiedAt: VERIFIED_AT })
+            : JSON.stringify({ status: "ok" }),
+          { status: 200 },
+        );
+      },
+      generateTokenBytes: () => new Uint8Array(32),
+    });
+
+    await service.issueSupporterPortalLink(supporter.id);
+    const before = store.getSupporterPortalAccess(supporter.id);
+    now = "2026-09-05T13:00:00.000Z";
+    const current = await service.getCurrentSupporterPortalLink(supporter.id);
+
+    expect(current).toEqual({ portalUrl: `https://portal.example/level#${RAW_TOKEN}` });
+    expect(requests).toHaveLength(2);
+    expect(store.getSupporterPortalAccess(supporter.id)).toEqual(before);
+  });
+
+  it("does not rotate an existing credential during first issuance", async () => {
+    const store = track(openLocalStore(":memory:", { clock: fixedClock }));
+    const supporter = createSupporter(store);
+    const first = createSupporterPortalAccessService(store, {
+      generateTokenBytes: () => new Uint8Array(32),
+    });
+    const issued = await first.issueSupporterPortalAccess(supporter.id);
+    let generatorCalls = 0;
+    const service = createSupporterPortalLinkService(store, {
+      portalOrigin: PORTAL_ORIGIN,
+      syncApiToken: SYNC_API_TOKEN,
+      getEncryptionKey,
+      generateTokenBytes: () => {
+        generatorCalls += 1;
+        return new Uint8Array(32).fill(1);
+      },
+      fetch: async () => {
+        throw new Error("sync should not be called");
+      },
+    });
+
+    await expect(service.issueSupporterPortalLink(supporter.id)).rejects.toBeInstanceOf(
+      PortalAccessAlreadyIssuedError,
+    );
+    expect(generatorCalls).toBe(0);
+    expect(store.getSupporterPortalAccess(supporter.id)).toEqual(issued.access);
+  });
+
+  it("reissues exactly once, resets delivery timestamps, and returns the new link", async () => {
+    let fill = 0;
+    let requestCount = 0;
+    const store = track(openLocalStore(":memory:", { clock: fixedClock }));
+    const supporter = createSupporter(store);
+    const service = createSupporterPortalLinkService(store, {
+      portalOrigin: PORTAL_ORIGIN,
+      syncApiToken: SYNC_API_TOKEN,
+      getEncryptionKey,
+      generateTokenBytes: () => new Uint8Array(32).fill(fill),
+      fetch: async (input) => {
+        requestCount += 1;
+        return new Response(
+          new URL(input).pathname === "/api/admin/sync-supporter"
+            ? JSON.stringify({ verifiedAt: VERIFIED_AT })
+            : JSON.stringify({ status: "ok" }),
+          { status: 200 },
+        );
+      },
+    });
+
+    const first = await service.issueSupporterPortalLink(supporter.id);
+    const firstAccess = store.getSupporterPortalAccess(supporter.id);
+    if (firstAccess === null) {
+      throw new Error("expected first access");
+    }
+    store.markSupporterPortalAccessSent(supporter.id, firstAccess.tokenHash);
+    fill = 1;
+    const replacement = await service.reissueSupporterPortalLink(supporter.id);
+    const replacementAccess = store.getSupporterPortalAccess(supporter.id);
+
+    expect(replacement.portalUrl).not.toBe(first.portalUrl);
+    expect(replacement.verifiedAt).toBe(VERIFIED_AT);
+    expect(replacementAccess?.tokenHash).not.toBe(firstAccess.tokenHash);
+    expect(replacementAccess?.provisionedAt).not.toBeNull();
+    expect(replacementAccess?.sentAt).toBeNull();
+    expect(requestCount).toBe(4);
+  });
+
+  it("retries provisioning with the persisted candidate without generating another token", async () => {
+    let requestCount = 0;
+    let generatorCalls = 0;
+    const store = track(openLocalStore(":memory:", { clock: fixedClock }));
+    const supporter = createSupporter(store);
+    const service = createSupporterPortalLinkService(store, {
+      portalOrigin: PORTAL_ORIGIN,
+      syncApiToken: SYNC_API_TOKEN,
+      getEncryptionKey,
+      generateTokenBytes: () => {
+        generatorCalls += 1;
+        return new Uint8Array(32);
+      },
+      fetch: async (input) => {
+        requestCount += 1;
+        if (requestCount === 2) {
+          return new Response(JSON.stringify({ error: "internal_error" }), {
+            status: 500,
+          });
+        }
+        return new Response(
+          new URL(input).pathname === "/api/admin/sync-supporter"
+            ? JSON.stringify({ verifiedAt: VERIFIED_AT })
+            : JSON.stringify({ status: "ok" }),
+          { status: 200 },
+        );
+      },
+    });
+
+    await expect(service.issueSupporterPortalLink(supporter.id)).rejects.toThrow();
+    const candidate = store.getSupporterPortalAccess(supporter.id);
+    if (candidate === null) {
+      throw new Error("expected persisted candidate");
+    }
+    const retry = await service.provisionCurrentSupporterPortalLink(supporter.id);
+    const current = store.getSupporterPortalAccess(supporter.id);
+
+    expect(generatorCalls).toBe(1);
+    expect(retry.portalUrl).toBe(`https://portal.example/level#${RAW_TOKEN}`);
+    expect(current?.tokenHash).toBe(candidate.tokenHash);
+    expect(current?.encryptedToken).toEqual(candidate.encryptedToken);
+    expect(current?.provisionedAt).not.toBeNull();
+    expect(requestCount).toBe(4);
+  });
+
+  it("does not expose or provision a legacy row whose raw token is unrecoverable", async () => {
+    const store = track(openLocalStore(":memory:", { clock: fixedClock }));
+    const supporter = createSupporter(store);
+    const accessService = createSupporterPortalAccessService(store, {
+      generateTokenBytes: () => new Uint8Array(32),
+    });
+    const issued = await accessService.issueSupporterPortalAccess(supporter.id);
+    accessService.markSupporterPortalAccessProvisioned(
+      supporter.id,
+      issued.tokenHash,
+    );
+    const database = (store as unknown as {
+      database: { prepare(source: string): { run(...parameters: unknown[]): unknown } };
+    }).database;
+    database
+      .prepare("UPDATE supporter_portal_access SET encrypted_token = NULL WHERE supporter_id = ?")
+      .run(supporter.id);
+    const requests: RecordedRequest[] = [];
+    const service = createSupporterPortalLinkService(store, {
+      portalOrigin: PORTAL_ORIGIN,
+      syncApiToken: SYNC_API_TOKEN,
+      getEncryptionKey,
+      fetch: async (input, init = {}) => {
+        requests.push({ input, init });
+        return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+      },
+    });
+
+    await expect(
+      service.getCurrentSupporterPortalLink(supporter.id),
+    ).rejects.toBeInstanceOf(SupporterPortalTokenRecoveryError);
+    expect(requests).toHaveLength(0);
+    expect(store.getSupporterPortalAccess(supporter.id)?.tokenHash).toBe(
+      issued.tokenHash,
+    );
   });
 });

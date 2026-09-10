@@ -461,6 +461,11 @@ function createPortalSyncService(
 ): SupporterPortalSyncService {
   return {
     syncSupporter: vi.fn(implementation),
+    provisionCurrentSupporterPortalAccess: vi.fn(
+      async () => {
+        throw new Error("not used");
+      },
+    ),
     provisionSupporterPortalAccess: vi.fn(
       async () => {
         throw new Error("not used");
@@ -4575,6 +4580,10 @@ describe("portal link route", () => {
     });
     const supporterIds: string[] = [];
     const portalService: SupporterPortalLinkService = {
+      getCurrentSupporterPortalLink: async () => null,
+      issueSupporterPortalLink: async () => result,
+      reissueSupporterPortalLink: async () => result,
+      provisionCurrentSupporterPortalLink: async () => result,
       prepareSupporterPortalLink: async (supporterId) => {
         supporterIds.push(supporterId);
         return result;
@@ -4660,6 +4669,16 @@ describe("portal link route", () => {
     const failureMessage =
       "Worker 500 token AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA hash 0f007385b6f9d4b7eeb2748605afe1a984a0a3bfa3f014d09e2a784ce9e5cd1a /private/admin.sqlite";
     const portalService: SupporterPortalLinkService = {
+      getCurrentSupporterPortalLink: async () => null,
+      issueSupporterPortalLink: async () => {
+        throw new Error(failureMessage);
+      },
+      reissueSupporterPortalLink: async () => {
+        throw new Error(failureMessage);
+      },
+      provisionCurrentSupporterPortalLink: async () => {
+        throw new Error(failureMessage);
+      },
       prepareSupporterPortalLink: async () => {
         throw new Error(failureMessage);
       },
@@ -4701,6 +4720,9 @@ describe("portal sync route", () => {
       syncSupporter: async (supporterId) => {
         supporterIds.push(supporterId);
         return { verifiedAt };
+      },
+      provisionCurrentSupporterPortalAccess: async () => {
+        throw new Error("not used");
       },
       provisionSupporterPortalAccess: async () => {
         throw new Error("not used");
@@ -4795,6 +4817,9 @@ describe("portal sync route", () => {
     const syncService: SupporterPortalSyncService = {
       syncSupporter: async () => {
         throw new Error(failureMessage);
+      },
+      provisionCurrentSupporterPortalAccess: async () => {
+        throw new Error("not used");
       },
       provisionSupporterPortalAccess: async () => {
         throw new Error("not used");
@@ -5360,6 +5385,16 @@ describe("admin server configuration", () => {
     const syncApiToken = "sync-secret-value";
     const store = { close: vi.fn() } as unknown as LocalStore;
     const portalService: SupporterPortalLinkService = {
+      getCurrentSupporterPortalLink: async () => null,
+      issueSupporterPortalLink: async () => {
+        throw new Error("not used");
+      },
+      reissueSupporterPortalLink: async () => {
+        throw new Error("not used");
+      },
+      provisionCurrentSupporterPortalLink: async () => {
+        throw new Error("not used");
+      },
       prepareSupporterPortalLink: async () => ({
         portalUrl:
           "https://portal.example/level#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -5372,12 +5407,17 @@ describe("admin server configuration", () => {
         options: CreateSupporterPortalLinkServiceOptions,
       ) => {
         expect(suppliedStore).toBe(store);
-        expect(options).toEqual({ portalOrigin, syncApiToken });
+        expect(options.portalOrigin).toBe(portalOrigin);
+        expect(options.syncApiToken).toBe(syncApiToken);
+        expect(options.getEncryptionKey).toEqual(expect.any(Function));
         return portalService;
       },
     );
     const syncService: SupporterPortalSyncService = {
       syncSupporter: async () => ({ verifiedAt: "2026-09-05T12:34:56.789Z" }),
+      provisionCurrentSupporterPortalAccess: async () => {
+        throw new Error("not used");
+      },
       provisionSupporterPortalAccess: async () => {
         throw new Error("not used");
       },
