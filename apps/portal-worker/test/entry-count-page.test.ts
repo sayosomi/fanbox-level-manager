@@ -30,6 +30,7 @@ async function assetAt(path: string): Promise<string> {
 class FakeHTMLElement {
   readonly tagName: string;
   className = "";
+  hidden = false;
   textContent = "";
   readonly children: FakeHTMLElement[] = [];
 
@@ -91,19 +92,27 @@ describe("supporter entry-count page", () => {
     );
     expect(html).toContain('<html lang="ja">');
     expect(html).toContain("<title>抽選口数の確認</title>");
-    expect(html).toContain("<h1>抽選口数の確認</h1>");
-    expect(html).toContain(
-      "<p class=\"page-intro\">次回の抽選で使われる口数と、これまでの履歴を確認できます。</p>",
+    expect(html).toContain("<h1>支援者情報</h1>");
+    expect(html).not.toContain(
+      "次回の抽選で使われる口数と、これまでの履歴を確認できます。",
     );
-    expect(html).toContain('id="status"');
+    expect(html).not.toContain('class="page-intro"');
+    expect(html).toContain(
+      '<p id="status" class="status" role="status" aria-live="polite">読み込み中です。</p>',
+    );
     expect((html.match(/id="entry-count"/g) ?? []).length).toBe(1);
     expect(html).toContain(
       '<section class="current-count-hero" aria-labelledby="current-count-label">',
     );
-    expect(html).toContain('<p id="current-count-label" class="hero-label">次回抽選</p>');
+    expect(html).toContain('<p id="current-count-label" class="hero-label">抽選口数</p>');
+    expect(html).not.toContain("確認情報");
+    expect(html).not.toContain('aria-labelledby="summary-heading"');
+    expect(html).toContain('<dl class="summary-list">');
     expect(html).toContain('<dt>確認ID</dt>');
     expect(html).toContain('id="confirmation-id"');
     expect(html).toContain('id="verified-at"');
+    expect(html).toContain('<h2 id="history-heading">履歴</h2>');
+    expect(html).not.toContain("口数履歴");
     expect(html).toContain('id="history"');
     const heroIndex = html.indexOf('<section class="current-count-hero"');
     const confirmationIdIndex = html.indexOf('id="confirmation-id"');
@@ -212,6 +221,8 @@ describe("supporter entry-count page", () => {
     expect(script).toContain("抽選結果による口数増加");
     expect(script).toContain("抽選不参加による口数増加");
     expect(script).toContain("旧管理方式による履歴");
+    expect(script).toContain("旧管理方式から移行");
+    expect(script).not.toContain("情報を確認しました。");
     expect(script).toContain("Number.isFinite");
     expect(script).toContain("Number.isInteger");
     expect(script).toContain("toISOString() === value");
@@ -297,8 +308,60 @@ describe("supporter entry-count page", () => {
       row.children[2]?.textContent,
     ])).toEqual([
       ["2026-07", "当選", "9口"],
-      ["2026-08", "旧管理方式による履歴", "11口"],
+      ["2026-08", "旧管理方式から移行", "11口"],
     ]);
+    expect(elements.get("status")?.hidden).toBe(true);
+  });
+
+  it("keeps the loading status visible for invalid links and temporary failures", async () => {
+    const script = await assetAt("/level/app.js");
+
+    const executeScript = new Function(
+      "document",
+      "HTMLElement",
+      "window",
+      "fetch",
+      script,
+    ) as (
+      document: ReturnType<typeof createFakeDocument>["document"],
+      HTMLElement: typeof FakeHTMLElement,
+      window: { location: { hash: string } },
+      fetch: () => Promise<{ status: number; json: () => Promise<unknown> }>,
+    ) => void;
+
+    const invalid = createFakeDocument();
+    invalid.elements.get("status")!.hidden = true;
+    executeScript(
+      invalid.document,
+      FakeHTMLElement,
+      { location: { hash: "#invalid" } },
+      () => Promise.reject(new Error("fetch should not be called")),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(invalid.elements.get("status")?.hidden).toBe(false);
+    expect(invalid.elements.get("status")?.textContent).toBe(
+      "リンクが無効です。発行元にご確認ください。",
+    );
+
+    const failure = createFakeDocument();
+    failure.elements.get("status")!.hidden = true;
+    executeScript(
+      failure.document,
+      FakeHTMLElement,
+      { location: { hash: `#${RAW_TOKEN}` } },
+      () =>
+        Promise.resolve({
+          status: 503,
+          json: () => Promise.resolve(null),
+        }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(failure.elements.get("status")?.hidden).toBe(false);
+    expect(failure.elements.get("status")?.textContent).toBe(
+      "一時的に情報を読み込めません。時間をおいて再度お試しください。",
+    );
   });
 
   it("uses the settled Rosé Pine Dawn palette and responsive accessible surfaces", async () => {
