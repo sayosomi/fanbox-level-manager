@@ -22,7 +22,7 @@ const ENTRY_COUNT_PAGE_HTML = `<!doctype html>
       <header class="page-header">
         <h1>支援者情報</h1>
       </header>
-      <p id="status" class="status" role="status" aria-live="polite">読み込み中です。</p>
+      <p id="status" class="status" role="status" aria-live="polite" hidden></p>
 
       <section class="current-count-hero" aria-labelledby="current-count-label">
         <p id="current-count-label" class="hero-label">抽選口数</p>
@@ -390,6 +390,10 @@ h2 {
   border-radius: 0.5rem;
   background-color: var(--overlay);
   color: var(--text);
+}
+
+.status[hidden] {
+  display: none;
 }
 
 .current-count-hero,
